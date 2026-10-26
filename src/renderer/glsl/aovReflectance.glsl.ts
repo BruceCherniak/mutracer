@@ -1,5 +1,7 @@
+import proposals from './aovReflectanceSamples.glsl.js';
+
 // GLSL mirror of the shared 256-proposal, fused OpenPBR reflection quadrature.
-export default /* glsl */ `
+export default proposals + /* glsl */ `
 void aovReflectance(OpenPbrPreparedBsdf prepared, bool wantDiffuse, bool wantSpecular, out vec3 diffuse, out vec3 specular) {
   diffuse=vec3(0.0); specular=vec3(0.0);
   vec3 view = prepared.viewLocal;
@@ -14,14 +16,24 @@ void aovReflectance(OpenPbrPreparedBsdf prepared, bool wantDiffuse, bool wantSpe
   if (wantSpecular && prepared.dielectricMsProbability > 0.0) {
     dielectricAverageLoss = max(openpbr_ideal_dielectric_average_loss(prepared.refractionEtaTOverEtaI, prepared.specularAlpha), 1e-12);
   }
+  vec3 sphericalView = normalize(vec3(alpha, 1.0) * view);
+  float viewZ = min(sphericalView.z, 1.0);
+  float capSpan = 1.0 + viewZ;
   uint count = 256u;
   for (uint i = 0u; i < uint(NO_UNROLL(256)); i++) {
     uint pair = i / 2u;
     vec2 u = vec2((float(pair) + 0.5) / float(count / 2u),
       fract(float(reverseBits(pair)) * 2.3283064365386963e-10 + 0.37));
-    vec3 light = sampling_cosine_hemisphere(u);
+    vec4 proposal = mtReflectanceProposals[pair];
+    // Same near-delta runtime fallback as WGSL.
+    bool runtimeProposal = prepared.specularAlpha < 0.001;
+    vec3 light = vec3(proposal.xy, sqrt(max(0.0, 1.0 - dot(proposal.xy, proposal.xy))));
+    if (runtimeProposal) { light = sampling_cosine_hemisphere(u); }
     if ((i & 1u) != 0u) {
-      vec3 halfVector = sampling_ggx_visible_normal(view, alpha, u);
+      float normalZ = (1.0 - u.y) * capSpan;
+      float radial = sqrt(max(0.0, (normalZ + (1.0 - viewZ)) * (u.y * capSpan)));
+      vec3 halfVector = normalize(vec3(alpha, 1.0) * vec3(sphericalView.xy + radial * proposal.zw, normalZ));
+      if (runtimeProposal) { halfVector = sampling_ggx_visible_normal(view, alpha, u); }
       light = reflect(-view, halfVector);
     }
     // Rejected VNDF proposals retain their weight in the denominator.

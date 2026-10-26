@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Dialog, Heading, Modal, ModalOverlay } from 'react-aria-components';
 import { Download, X } from 'lucide-react';
-import { setSettings, setUi, useViewer, showToast } from '../store';
+import { VIEWER_AOVS, setSettings, setUi, useViewer, showToast } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
 import { Field, Scrub, Segmented, Switch } from './ui/controls';
 
@@ -12,6 +12,7 @@ export function ExportDialog() {
   const progress = useViewer((s) => s.export);
   const stats = useViewer((s) => s.stats);
   const maxSamples = useViewer((s) => s.settings.maxSamples);
+  const output = useViewer((s) => s.settings.output);
   const denoise = useViewer((s) => s.settings.denoise);
   const background = useViewer((s) => s.settings.background);
   const [size, setSize] = useState<SizePreset>('viewport');
@@ -42,7 +43,7 @@ export function ExportDialog() {
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dims = size === '1080p' ? [1920, 1080] : size === '2k' ? [2560, 1440] : size === '4k' ? [3840, 2160] : size === 'square' ? [2048, 2048] : [stats.width, stats.height];
-  const estimate = stats.msPerSample > 0 ? (stats.msPerSample * samples * (dims[0] * dims[1])) / Math.max(1, stats.width * stats.height) / 1000 : 0;
+  const estimate = !VIEWER_AOVS.some(kind => kind === output) && stats.msPerSample > 0 ? (stats.msPerSample * samples * (dims[0] * dims[1])) / Math.max(1, stats.width * stats.height) / 1000 : 0;
   const busy = progress !== null || downloading;
   const close = () => {
     if (progress) getEngine()?.cancelExport();

@@ -1342,7 +1342,7 @@ export class ViewerEngine {
   async downloadViewportImage() {
     if (this.exporting) return;
     try {
-      const samples = (this.displayed ?? this.final).samples;
+      const samples = this.displaySamples(this.displayed ?? this.final);
       if (samples === 0) throw new Error('The viewport has not rendered an image yet');
       const blob = await this.captureImage();
       this.downloadImage(blob, samples, 'viewport');
@@ -1507,7 +1507,7 @@ export class ViewerEngine {
     const phase = this.loop.tick();
     this.publishLens(this.activeCamera());
     const shown = phase === 'previewing' ? this.preview : this.final;
-    if (shown.samples > 0) this.displayed = shown;
+    if (this.displaySamples(shown) > 0) this.displayed = shown;
     // Query only after the renderer uploads the current animation pose and
     // camera. Readback runs alongside subsequent frames.
     if (phase !== 'preparing' && phase !== 'compiling' && phase !== 'error') {
@@ -1517,8 +1517,12 @@ export class ViewerEngine {
     this.updateSelectionRect();
   };
 
+  private displaySamples(render: Render): number {
+    return VIEWER_AOVS.some(kind => kind === this.settings.output) ? render.aovSamplesRendered : render.samples;
+  }
+
   private publishStats(phase: RenderPhase, now: number, force: boolean) {
-    const samples = phase === 'previewing' ? 0 : this.final.samples;
+    const samples = phase === 'previewing' ? 0 : this.displaySamples(this.final);
     // Restarted accumulation (an edit, a camera move or an animation frame).
     if (samples < this.lastSamples || samples <= 1) this.sampleStart = now;
     // Time stops at the last added sample, so it freezes once rendering finishes.
@@ -1529,7 +1533,7 @@ export class ViewerEngine {
       // Preparation keeps the previous scene's accumulation alive. Only a
       // rendering phase can confirm that the newly loaded model has a sample.
       const hasNewSample = (samples > 0 && (phase === 'converging' || phase === 'denoising' || phase === 'finished')) ||
-        (phase === 'previewing' && (this.displayed?.samples ?? 0) > 0);
+        (phase === 'previewing' && (this.displayed ? this.displaySamples(this.displayed) : 0) > 0);
       if (hasNewSample || phase === 'error') {
         this.awaitingFirstSample = false;
         set({ loading: null });

@@ -177,6 +177,14 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
 
   function drawPostProcess(_forceNeedsDenoise = false, resolve = false) {
     if (resolve) { resolvedSamples = sampleCount; resolvedHasShadowCatcher = rayTracePass.hasShadowCatcher(); }
+    const aovKind = displayAovKind(output);
+    if (aovKind && sampleCount === 0) {
+      if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
+      if (!aov.samples) return;
+      presentationTexture = copy.copy(aov.visualize(aovKind,aovDisplayOptions), renderWidth, renderHeight, presentationTexture);
+      presentationDenoised = false;
+      return;
+    }
     if (resolvedSamples === 0) return;
     if (resolve) {
       rayTraceOutputPass.setSampleCount(sampleCount);
@@ -241,10 +249,9 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
 
     let displayTexture =
       (output === 'final' && denoiseValid && denoisedTexture) || composePass.getOutput('color');
-    const aovKind=displayAovKind(output);
-    if(aovKind){
-      if(!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
-      displayTexture=aov.visualize(aovKind,aovDisplayOptions);
+    if (aovKind) {
+      if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
+      displayTexture = aov.visualize(aovKind,aovDisplayOptions);
     } else if (output === 'normal' || output === 'albedo') {
       displayTexture = rayTraceOutputPass.getOutput(output);
     } else if (output === 'shadowCatcher') {
@@ -330,7 +337,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
         if (tile.isLastTile) sampleCount++;
       }
       if(sampleCount!==frameSampleCount){
-      if(execution?.aovs?.length) rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
+      if(execution?.aovs?.length) rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,Math.max(sampleCount,aov.samples),execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
       }
       if (sampleCount !== frameSampleCount && (!deferPostProcess || sampleCount >= maxSamples)) {
         drawPostProcess(sampleCount >= maxSamples, true);
@@ -444,6 +451,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     },
     isFirstFrame: () => isFirstFrame,
     restartSamples(_preserveTemporalHistory = false) {
+      aov.reset();
       tileRender.reset();
       isFirstFrame = true;
       sampleCount = 0;
@@ -567,15 +575,16 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       return { width, height, data: readRgbaPixels(renderer.gl, width, height, presentationTexture.isByteEncoded) };
     },
     aovReady(kind) { return !!execution?.aovs?.includes(kind) && aov.samples > 0; },
-    refineAovs(camera) {
-      if (sampleCount < 1 || !execution?.aovs?.length) return true;
-      rayTracePass.setCamera(camera);
-      return rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
+    getAovSamples() { return aov.samples; },
+    refineAovs(camera, samples = sampleCount) {
+      if (samples < 1 || !execution?.aovs?.length) return true;
+      rayTracePass.setCamera(camera); aovCamera = camera;
+      return rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,samples,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
     },
     async readAov(kind) {
-      if(!execution?.aovs?.includes(kind) || !aovCamera || sampleCount<1) throw new Error('AOV output is not ready');
+      if(!execution?.aovs?.includes(kind) || !aovCamera || (sampleCount<1 && aov.samples<1)) throw new Error('AOV output is not ready');
       rayTracePass.setCamera(aovCamera);
-      while (!rayTracePass.renderAovs(aov,aovCamera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset)) {
+      while (!rayTracePass.renderAovs(aov,aovCamera,renderWidth,renderHeight,Math.max(sampleCount,aov.samples),execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset)) {
         if (disposed || renderer.gl.isContextLost()) throw new Error('AOV compilation was interrupted');
         await new Promise<void>(resolve => scheduleFrame(() => resolve()));
       }

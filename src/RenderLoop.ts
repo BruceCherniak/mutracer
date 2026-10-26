@@ -4,7 +4,7 @@ import type Display from './Display.js';
 import Render, { type RenderOptions, type RenderStatus, type ConvergeOptions, type ConvergeResult, type SampleEvent } from './Render.js';
 import type Sync from './Sync.js';
 import { Events } from './util/events.js';
-import { updateProgressiveState, loopImageState, type ProgressiveState } from './renderer/progressiveScheduler.js';
+import { aovChannel, updateProgressiveState, loopImageState, type ProgressiveState } from './renderer/progressiveScheduler.js';
 
 /** Presentation state; preview images never count as final completion. */
 export type RenderLoopStatus = RenderStatus | 'previewing';
@@ -77,7 +77,7 @@ export default class RenderLoop {
   private _checkEngine(engine: Engine): void { if (engine !== this.engine) throw new Error('RenderLoop renders and syncs must belong to the same engine.'); }
   private _assertAlive(): void { if (this._disposed) throw new Error('RenderLoop is disposed.'); }
   /** Whether an explicit integration or consecutive edits indicate motion. Default false. */ get changing(): boolean { return this._changing; }
-  /** Complete final samples; preview sampling is excluded. Default 0. */ get samples(): number { return this.status === 'previewing' ? 0 : this.final.samples; }
+  /** Complete final beauty samples; preview and AOV-only sampling are excluded. Default 0. */ get samples(): number { return this.status === 'previewing' ? 0 : this.final.samples; }
   /** Current presented/execution state. Default preparing. */ get status(): RenderLoopStatus { return this._status; }
   /** Subscribes to status transitions or complete final samples; returns unsubscribe. */
   on<K extends keyof LoopEvents>(event: K, listener: (value: LoopEvents[K]) => void): () => void { return this._events.on(event, listener); }
@@ -102,10 +102,13 @@ export default class RenderLoop {
   private _tick(): RenderLoopStatus {
     if (this._busy || (typeof document !== 'undefined' && document.hidden)) return this.status;
     for (const sync of this._syncs) sync.update();
+    const aov = aovChannel(this.display.channel);
+    const refine = (render: Render) => render.refine(aov);
+    const samples = (render: Render) => aov ? render.aovSamplesRendered : render.samples;
     const owner = this._previewFrameOwner;
-    const pendingPreview = !!owner && (owner === this.preview || !owner._complete);
-    const tracingPreview = pendingPreview && this.preview?.status === 'converging' && this.preview.samples === 0;
-    const holding = tracingPreview || (this.coalesceSceneUpdates && pendingPreview && !!this.preview?.denoising);
+    const pendingPreview = !!owner && (owner === this.preview || !owner._completeFor(this.display.channel));
+    const tracingPreview = pendingPreview && this.preview?.status === 'converging' && samples(this.preview) === 0;
+    const holding = tracingPreview || (!aov && this.coalesceSceneUpdates && pendingPreview && !!this.preview?.denoising);
     // Inference belongs to a presentation, not merely to a background render.
     // A fallback result must never replace an already available final image.
     if (pendingPreview && !holding && this.preview) this._present(this.preview);
@@ -119,7 +122,7 @@ export default class RenderLoop {
       // Finish this image against its committed camera while syncs collect the
       // latest input. Restarting its first tile on every edit starves presentation.
       if (tracingPreview) {
-        const status = this.preview.refine();
+        const status = refine(this.preview);
         if (status === 'error') { this._previewFrameOwner = undefined; return this._setStatus('error'); }
         if ((!this.coalesceSceneUpdates || !this.preview.denoising) && this._present(this.preview)) this._previewFrameOwner = undefined;
       }
@@ -130,16 +133,16 @@ export default class RenderLoop {
     if (!changed && !this.changing && current === this.final && this.status === 'finished' && this.final.status === 'finished' && imageState === this._finishedImage) return this.status;
     // Invalidate a completed filter before refinement when display settings changed.
     if (this.status === 'finished' && imageState !== this._finishedImage && this.final.samples > 0) this._present(this.final);
-    const status = current.refine();
+    const status = refine(current);
     // Keep the canvas on the last completed image while filtering the next
     // preview; presenting its raw sample here would overwrite the denoise above.
-    const waitingForPreview = !!this.preview && ((current === this.preview && status === 'converging' && current.samples === 0) || (this.coalesceSceneUpdates && this.preview.denoising)) &&
-      (current === this.preview || (!current._complete && current.fallback === this.preview));
+    const waitingForPreview = !!this.preview && ((current === this.preview && status === 'converging' && samples(current) === 0) || (!aov && this.coalesceSceneUpdates && this.preview.denoising)) &&
+      (current === this.preview || (!current._completeFor(this.display.channel) && current.fallback === this.preview));
     if (waitingForPreview) this._previewFrameOwner = current;
     else this._present(current);
     // Execution may already be tracing final tiles while the canvas still shows
     // preview. Only a successful presentation transfers ownership of the image.
-    const previewing = waitingForPreview || (current === this.preview && current.denoising) || (!!this.preview && this._presented === this.preview);
+    const previewing = waitingForPreview || (!aov && current === this.preview && current.denoising) || (!!this.preview && this._presented === this.preview);
     const next = status === 'error' ? 'error' : previewing ? 'previewing' : status;
     this._finishedImage = next === 'finished' ? loopImageState(this.final, this.display) : undefined;
     return this._setStatus(next);

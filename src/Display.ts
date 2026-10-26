@@ -112,8 +112,9 @@ export default class Display {
   private compose(render: Render) {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
     const target = render._output;
-    if (!target?.presentationComplete) return;
+    if (!target) return;
     const kind = displayAovKind(this.channel);
+    if (!kind && !target.presentationComplete) return;
     if (kind && !render.aovs.includes(kind)) throw new Error(`AOV ${kind} is not enabled on the selected render`);
     if (kind && target.aovReady && !target.aovReady(kind)) return;
     this._configure(render);
@@ -126,9 +127,9 @@ export default class Display {
   /** Presents a complete image or fallback. Keeps fallback visible until the first intermediate filter finishes. Does not trace. */
   present(render: Render): Render | undefined {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
-    const ready = this.channel === 'final' && render.fallback ? render._presentable : render._complete;
+    const ready = this.channel === 'final' && render.fallback ? render._presentable : render._completeFor(this.channel);
     const fallback = render.fallback;
-    const selected = ready ? render : fallback && (this.channel === 'final' ? fallback._presentable : fallback._complete) ? fallback : undefined;
+    const selected = ready ? render : fallback && (this.channel === 'final' ? fallback._presentable : fallback._completeFor(this.channel)) ? fallback : undefined;
     if (!selected) return;
     const target = this.compose(selected);
     if (!target) return;

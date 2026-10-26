@@ -47,6 +47,7 @@ describe('AOV display channels', () => {
     const target = targets[0];
     let ready = false;
     target.aovReady = kind => ready && !!vi.mocked(target.configure).mock.calls.at(-1)?.[0].aovs?.includes(kind);
+    target.getAovSamples = () => ready ? 1 : 0;
     target.refineAovs = vi.fn().mockReturnValueOnce(false).mockImplementation(() => { ready = true; return true; });
     loop.final.aovs = ['depth']; engine.display.channel = 'depth';
     const draws = vi.mocked(target.drawPostProcess).mock.calls.length;
@@ -64,6 +65,58 @@ describe('AOV display channels', () => {
     expect(vi.mocked(target.present).mock.calls.length).toBeGreaterThan(present);
     expect(target.trace).toHaveBeenCalledOnce();
     loop.dispose(); engine.dispose();
+  });
+  it.each(AOV_KINDS)('traces only surface outputs while viewing %s and resumes beauty on Final', async channel => {
+    const {engine, targets, camera} = renderFixture();
+    const loop = new RenderLoop(engine, {preview: false, final: {aovs: [channel], maxSamples: 4, aovSamples: 2, denoiser: {type: 'jnlm'}}});
+    await new Promise(resolve => setTimeout(resolve, 0));
+    engine.display.channel = channel;
+    expect(loop.tick()).toBe(channel === 'id' || channel === 'motion' ? 'finished' : 'converging');
+    for (let i = 0; i < 3; i++) loop.tick();
+    const target = targets[0];
+    expect(loop.status).toBe('finished'); expect(loop.samples).toBe(0);
+    expect(loop.final.samples).toBe(0); expect(loop.final.converged).toBe(false);
+    expect(target.trace).not.toHaveBeenCalled(); expect(target.performDenoise).not.toHaveBeenCalled();
+    expect(target.present).toHaveBeenCalled(); expect(target.isFirstFrame()).toBe(true);
+    expect(loop.final.aovSamplesRendered).toBe(channel === 'id' || channel === 'motion' ? 1 : 2);
+    expect((await loop.final.readPixels('hdr')).data).toHaveLength(0);
+    camera.position = [1, 0, 0]; engine.update(); loop.tick();
+    expect(loop.final.samples).toBe(0); expect(target.trace).not.toHaveBeenCalled();
+    expect(vi.mocked(target.refineAovs!).mock.calls.at(-1)?.[0].position).toEqual(camera.position);
+    engine.display.channel = 'final'; loop.tick();
+    expect(target.trace).toHaveBeenCalledOnce(); expect(loop.final.samples).toBe(1);
+    loop.dispose(); engine.dispose();
+  });
+  it('keeps preview selection responsive without invoking beauty or filtering', () => {
+    const {engine, targets, camera} = renderFixture();
+    const loop = new RenderLoop(engine, {coalesceSceneUpdates: true, preview: {aovs: ['depth']}, final: {aovs: ['depth'], aovSamples: 1}});
+    engine.display.channel = 'depth'; loop.select = () => 'preview';
+    loop.tick(); camera.position = [1,0,0]; loop.tick();
+    expect(loop.status).toBe('previewing');
+    expect(targets.every(t => !vi.mocked(t.trace).mock.calls.length)).toBe(true);
+    expect(loop.preview!._completeFor('depth')).toBe(true);
+    loop.select = () => 'final'; loop.tick(); expect(loop.status).toBe('finished');
+    expect(loop.final.samples).toBe(0);
+    loop.dispose(); engine.dispose();
+  });
+  it('adapts preview resolution from surface-only frames without adding beauty samples', () => {
+    const {engine} = renderFixture();
+    let frame!: FrameRequestCallback;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {frame = callback; return 1;});
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+    const render = new Render(engine, {aovs: ['depth'], adaptiveResolution: {targetFrameMs: 10, minScale: .25}});
+    try {
+      render.refine('depth'); const width = render.width;
+      now.mockReturnValue(90); frame(90); render.refine('depth');
+      expect(render.width).toBeLessThan(width); expect(render.samples).toBe(0);
+    } finally {engine.dispose(); now.mockRestore(); vi.unstubAllGlobals();}
+  });
+  it('keeps direct refine/converge on the beauty path with an AOV display selected', async () => {
+    const {engine, targets} = renderFixture(); const render = new Render(engine, {aovs: ['depth'], maxSamples: 2});
+    engine.display.channel = 'depth'; render.refine(); expect(render.samples).toBe(1);
+    await render.converge({samples: 2});
+    expect(render.samples).toBe(2); expect(targets[0].trace).toHaveBeenCalled(); engine.dispose();
   });
   it('validates mappings and packs integer lanes separately from float32 ranges', () => {
     const words = packAovDisplay(48, 32, 4, 'id', { ...DEFAULT_AOV_DISPLAY, idComponent: 'primitive' }, false), f = new Float32Array(words.buffer);

@@ -286,6 +286,8 @@ export interface ViewerState {
   paused: boolean;
   ui: {
     tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean;
+    /** Viewport debug overlay expanded. */
+    debug: boolean;
     exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean;
     examplesPinned: boolean; examplesOpen: boolean; examplesCollection: 'models' | 'research' | null;
     mobileTab: InspectorTab | 'scene';
@@ -348,6 +350,7 @@ function validateSettings(settings: Settings): Settings {
   };
   return {
     ...settings,
+    output: settings.output === 'shadow' ? 'final' : settings.output,
     lighting: settings.lighting === 'studio' ? 'studio' : 'environment',
     studioPreset: STUDIO_PRESETS.some((p) => p.id === settings.studioPreset) ? settings.studioPreset : DEFAULT_SETTINGS.studioPreset,
     studioIntensity: number('studioIntensity', 0, 20),
@@ -404,6 +407,7 @@ export const useViewer = create<ViewerState>(() => ({
     right: storedUi.right ?? true,
     hidden: false,
     focusFrame: storedUi.focusFrame !== false,
+    debug: storedUi.debug === true,
     exportOpen: false,
     codeOpen: false,
     helpOpen: false,
@@ -499,8 +503,8 @@ export function showToast(message: string, tone: 'info' | 'error' = 'info', acti
 
 useViewer.subscribe((state, prev) => {
   if (state.ui !== prev.ui) {
-    const { tab, left, right, focusFrame, examplesPinned } = state.ui;
-    writeStorage(UI_KEY, { tab, left, right, focusFrame, examplesPinned });
+    const { tab, left, right, focusFrame, debug, examplesPinned } = state.ui;
+    writeStorage(UI_KEY, { tab, left, right, focusFrame, debug, examplesPinned });
   }
   if (state.settings !== prev.settings) {
     writeStorage(RENDER_KEY, Object.fromEntries(RENDER_FIELDS.map((key) => [key, state.settings[key]])));

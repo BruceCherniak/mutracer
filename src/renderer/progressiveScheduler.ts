@@ -1,3 +1,4 @@
+export {displayAovKind as aovChannel} from './aovDisplay.js';
 import type Render from '../Render.js';
 import type Display from '../Display.js';
 

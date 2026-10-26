@@ -27,21 +27,34 @@ async function captureAovs() {
     check(diffuse.data.every(Number.isFinite)&&specular.data.every(Number.isFinite),'Nonfinite reflectance');
     check(diffuse.data[3]===1&&specular.data[3]===1&&diffuse.data[0]>0&&specular.data[0]>0,'Invalid reflectance coverage');
     const initialMotion=await render.readPixels('motion');check(initialMotion.data.every(v=>v===0),'First motion must be invalid');
-    let customCalls=0;
+    let customCalls=0; let capturedMotion: Float32Array | undefined;
     if(engine.backend==='webgpu'){
-      await render.setDenoiser({type:'custom',aovs:['depth','id'],denoiser:{async denoise(input){
-        check(!!input.aovs?.depth&&!!input.aovs.id,'Requested GPU AOV missing');
+      const expectedAovs = {depth, position, roughness, diffuseAlbedo: diffuse, specularAlbedo: specular, id: ids, motion: initialMotion};
+      const requested = Object.keys(expectedAovs) as (keyof typeof expectedAovs)[];
+      await render.setDenoiser({type:'custom',aovs:requested,denoiser:{async denoise(input){
         const bytes=input.width*input.height*16;
-        const staging=input.device.createBuffer({size:bytes*2,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
-        const encoder=input.device.createCommandEncoder();encoder.copyBufferToBuffer(input.color,0,input.output,0,bytes);
-        encoder.copyBufferToBuffer(input.aovs!.depth!,0,staging,0,bytes);encoder.copyBufferToBuffer(input.aovs!.id!,0,staging,bytes,bytes);input.device.queue.submit([encoder.finish()]);
-        await staging.mapAsync(GPUMapMode.READ);const mapped=staging.getMappedRange();
-        const actualDepth=new Float32Array(mapped,0,bytes/4),actualId=new Uint32Array(mapped,bytes,bytes/4);
-        check(actualDepth.every((v,i)=>Math.abs(v-depth.data[i])<.00001),'Custom depth differs from readback');
-        check(actualId.every((v,i)=>v===ids.data[i]),'Custom ID differs from readback');
-        staging.unmap();staging.destroy();customCalls++;
+        const staging=input.device.createBuffer({size:bytes*requested.length,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
+        try {
+          const encoder=input.device.createCommandEncoder();encoder.copyBufferToBuffer(input.color,0,input.output,0,bytes);
+          requested.forEach((kind,index)=>{
+            check(!!input.aovs?.[kind],`Requested GPU AOV missing: ${kind}`);
+            encoder.copyBufferToBuffer(input.aovs![kind]!,0,staging,bytes*index,bytes);
+          });
+          input.device.queue.submit([encoder.finish()]);
+          await staging.mapAsync(GPUMapMode.READ);const mapped=staging.getMappedRange();
+          requested.forEach((kind,index)=>{
+            const actual=kind==='id'?new Uint32Array(mapped,bytes*index,bytes/4):new Float32Array(mapped,bytes*index,bytes/4);
+            const expected=expectedAovs[kind].data;
+            if(kind==='motion') capturedMotion=Float32Array.from(actual);
+            else check(actual.every((v,i)=>kind==='id'?v===expected[i]:Math.abs(v-expected[i])<.00001),`Custom ${kind} differs from readback`);
+          });
+          customCalls++;
+        } finally {if(staging.mapState==='mapped')staging.unmap();staging.destroy();}
       }}});
-      await render.converge({samples:4});check(customCalls>0,'Custom filter was not called');await render.setDenoiser(null);
+      await render.converge({samples:4});check(customCalls>0,'Custom filter was not called');
+      const currentMotion=await render.readPixels('motion');
+      check(!!capturedMotion&&capturedMotion.every((v,i)=>Math.abs(v-currentMotion.data[i])<.00001),'Custom motion differs from readback');
+      await render.setDenoiser(null);
     }
     camera.position.x=.25;camera.updateMatrixWorld();engine.camera=fromTHREECamera(camera);engine.update();
     await render.converge({samples:4});const cameraMotion=await render.readPixels('motion');

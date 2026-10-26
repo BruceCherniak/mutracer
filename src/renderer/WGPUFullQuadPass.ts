@@ -192,6 +192,7 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
   }
 
   setOutputParams(outputParams: Record<O, WGPUFullQuadPassOutput>) {
+    const wasScreen = !!this._renderToScreen;
     this._renderToScreen = undefined;
     const outputsChanged = Object.keys(outputParams).some(
       (key) =>
@@ -201,8 +202,8 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
         )
     );
     this._needsUpdateOutputTextures ||= outputsChanged;
-    this._needsUpdatePipeline ||= outputsChanged;
-    if (outputsChanged) this._fsCode = '';
+    this._needsUpdatePipeline ||= outputsChanged || wasScreen;
+    if (outputsChanged || wasScreen) this._fsCode = '';
     this._outputParams = outputParams;
   }
 
@@ -211,7 +212,7 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
     presentationFormat: GPUTextureFormat
   ) {
     if (
-      this._renderToScreen &&
+      !this._renderToScreen ||
       this._renderToScreen.presentationFormat !== presentationFormat
     ) {
       this._needsUpdatePipeline = true;

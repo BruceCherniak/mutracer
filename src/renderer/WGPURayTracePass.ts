@@ -1118,8 +1118,9 @@ class WGPURayTracePass {
     const target = Math.min(samples, cap);
     if (state.centerReady && state.samples >= target) return true;
     if (!state.frame) {
-      const packed = packAovScene(this._preparedMeshData, this._tlas, camera, this._width, this._height, state.history, this._aovPrimitiveCache.get(this._preparedMeshData, this._tlas));
-      state.frame = packed.frame; state.setScene(packed.words);
+      const primitiveIds = this._aovPrimitiveCache.get(this._preparedMeshData, this._tlas);
+      const packed = packAovScene(this._preparedMeshData, this._tlas, camera, this._width, this._height, state.history, primitiveIds, false);
+      state.frame = packed.frame; state.setScene(packed.words, primitiveIds);
     }
     this._device.queue.writeBuffer(this._uniforms.rtUniform, 0, this._rtUniform.buffer);
     this._device.queue.writeBuffer(this._uniforms.cameraUniform, 0, packCameraUniform(this._viewProjInv, this._cameraWorld, this._apertureRadius, this._focusDistance));

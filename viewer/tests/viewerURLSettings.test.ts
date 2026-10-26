@@ -44,6 +44,17 @@ describe('viewer URL settings', () => {
     expect(readURLSettings('?aovPositionScale=0&aovMotionScale=Infinity&aovIdComponent=bad', '')).toEqual({});
   });
 
+  it('maps the retired Shadow output to Final in links and restored settings', async () => {
+    expect(readURLSettings('?output=shadow', '#output=id')).toEqual({output: 'final'});
+    expect(readURLSettings('', '#output=shadow')).toEqual({output: 'final'});
+    expect(readURLSettings('?output=id', '#output=shadow')).toEqual({output: 'id'});
+    localStorage.setItem('mutracer-viewer:render:v6', JSON.stringify({output: 'shadow'}));
+    const {useViewer, setSettings} = await import('../src/store');
+    expect(useViewer.getState().settings.output).toBe('final');
+    setSettings({output: 'shadow'}, {record: false});
+    expect(useViewer.getState().settings.output).toBe('final');
+  });
+
   it('gives valid query values priority over the hash', () => {
     expect(readURLSettings('?hdrOutputEnabled=1&toneMapping=aces', '#hdrOutputEnabled=false&toneMapping=linear'))
       .toEqual({ hdrOutputEnabled: true, toneMapping: 'aces' });

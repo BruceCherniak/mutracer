@@ -1,4 +1,5 @@
-import {aovInstanceOrder} from '../../src/renderer/aovScene.js';
+import Camera from '../../src/scene/Camera.js';
+import {aovInstanceOrder, packAovScene} from '../../src/renderer/aovScene.js';
 import {CommittedScene} from '../../src/renderer/committedScene.js';
 import {SceneChangeDetector} from '../../src/renderer/sceneChangeDetector.js';
 import {describe, expect, it} from 'vitest';
@@ -19,6 +20,23 @@ describe('AOV contract', () => {
   });
   it('keeps linear hardware instances in source order without a software TLAS', () => {
     expect(Array.from(aovInstanceOrder({buffer:new ArrayBuffer(0),maxDepth:0,instancesBuffer:new ArrayBuffer(3*160)}))).toEqual([0,1,2]);
+  });
+  it('packs a resident-tail prefix with the same identities, offsets and camera history as a full scene', () => {
+    const material = new OpenPBRMaterial({aovId: 0x800001ff}), camera = new Camera({projection: 'perspective'});
+    const source = {instances: [], instanceBindings: [], materials: [material], geometries: [], blases: []};
+    const tlas = {buffer: new ArrayBuffer(0), maxDepth: 0};
+    const history = new AovHistory(), primitives = new Uint32Array([0xffffffff, 19, 7]);
+    for (let frame = 0; frame < 2; frame++) {
+      const full = packAovScene(source, tlas, camera, 48, 32, history, primitives);
+      const prefix = packAovScene(source, tlas, camera, 48, 32, history, primitives, false);
+      expect(prefix.words.length).toBe(full.words[17]);
+      expect(prefix.words).toEqual(full.words.slice(0, prefix.words.length));
+      expect(prefix.frame).toEqual(full.frame);
+      const joined = new Uint32Array(prefix.words.length + primitives.length);
+      joined.set(prefix.words); joined.set(primitives, prefix.words.length);
+      expect(joined).toEqual(full.words);
+      history.accept(full.frame); camera.transform[12] += .25;
+    }
   });
   it('allocates distinct IDs across meshes and materials and accepts explicit zero', () => {
     const m = new OpenPBRMaterial();

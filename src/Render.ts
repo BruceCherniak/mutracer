@@ -1,5 +1,7 @@
 import type {AovKind} from './renderer/aov.js';
 import {aovMask} from './renderer/aov.js';
+import {displayAovKind} from './renderer/aovDisplay.js';
+import type {DisplayChannel} from './renderer/RenderingPipeline.js';
 import { Events } from './util/events.js';
 import type Engine from './Engine.js';
 import type Camera from './scene/Camera.js';
@@ -315,9 +317,9 @@ export default class Render {
   }
   /** Actual target width; before allocation uses the requested dimensions. */ get width() { return this._target?.getMemory().width || this._size().width; }
   /** Actual target height; before allocation uses the requested dimensions. */ get height() { return this._target?.getMemory().height || this._size().height; }
-  /** Complete samples since the last restart; stale engine inputs report 0. Default 0. */
+  /** Complete beauty samples since the last restart; stale engine inputs report 0. Default 0. */
   get samples() { return this._current ? this._target?.getTotalSamplesRendered() ?? 0 : 0; }
-  /** Whether complete samples reached maxSamples. Default false. */ get converged() { return this.samples >= this.maxSamples; }
+  /** Whether complete beauty samples reached maxSamples. Default false. */ get converged() { return this.samples >= this.maxSamples; }
   /** Current execution state. Default preparing. */ get status(): RenderStatus {
     if (!this._current && this._status !== 'error') return this._engine._ready ? 'converging' : 'preparing';
     return this._status;
@@ -326,6 +328,38 @@ export default class Render {
   /** @internal */ get _complete() { return this._current && !!this._target?.presentationComplete && !this._target.isFirstFrame() && this.samples > 0; }
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
+  /** Complete surface-output samples since restart; stale inputs report 0. Independent of beauty samples. Default 0. */
+  get aovSamplesRendered(): number { return this._current ? this._target?.getAovSamples?.() ?? 0 : 0; }
+  /** @internal */
+  _completeFor(channel: DisplayChannel): boolean {
+    const kind = displayAovKind(channel);
+    return kind && this.aovs.includes(kind) && this._target?.aovReady
+      ? this._current && this._target.aovReady(kind) : this._complete;
+  }
+  private _refineAov(kind: AovKind): RenderStatus {
+    if (this._engine._initializationError) throw this._engine._initializationError;
+    if (!this.aovs.includes(kind)) throw new Error(`AOV ${kind} is not enabled`);
+    if (!this._engine._ready) {
+      const generation = this._engine._deviceGeneration;
+      void this._engine.init().catch(error => {
+        if (this._disposed || generation !== this._engine._deviceGeneration) return;
+        this._status = 'error'; this._engine._notifyError(error);
+      });
+      return this._status = 'preparing';
+    }
+    const started = performance.now();
+    const target = this._synchronize();
+    if (!target) return this._status = 'preparing';
+    const before = target.getAovSamples?.() ?? 0;
+    const limit = kind === 'id' || kind === 'motion' ? 1 : Math.min(this.maxSamples, this.aovSamples);
+    if (!target.refineAovs?.(this._engine._inputs.value!, Math.min(limit, (target.getAovSamples?.() ?? 0) + 1))) return this._status = 'compiling';
+    if ((target.getAovSamples?.() ?? 0) > before) {
+      this._frameTime = Math.max(.001, performance.now() - started);
+      this._frameStart = started; this._frameScale = this._adaptiveScale;
+      this._adaptResolution(true);
+    }
+    return this._status = (target.getAovSamples?.() ?? 0) >= limit ? 'finished' : 'converging';
+  }
   private _validate() {
     aovMask(this.aovs);
     if (!Number.isInteger(this.aovSamples) || this.aovSamples < 1) throw new Error('aovSamples must be a positive integer.');
@@ -376,8 +410,8 @@ export default class Render {
     if (compiling) this._sampleStart = undefined;
     return compiling;
   }
-  private _adaptResolution() {
-    if (!this._busy && this.adaptiveResolution && this._frameTime > 0 && this.samples > 0) {
+  private _adaptResolution(surfaceOnly = false) {
+    if (!this._busy && this.adaptiveResolution && this._frameTime > 0 && (surfaceOnly ? this.aovSamplesRendered > 0 : this.samples > 0)) {
       const {targetFrameMs, minScale} = this.adaptiveResolution;
       const start = this._frameStart, time = this._frameTime, scale = this._frameScale, maxScale = this._resolutionScale;
       const {width, height} = this._engine.display.canvas;
@@ -404,12 +438,12 @@ export default class Render {
     for (const cancel of this._adaptiveFrames) cancel();
     this._adaptiveFrames.clear(); this._adaptiveFastFrames = 0;
   }
-  /** Accumulates within this frame's budget. Rejects calls during converge or after disposal. */
-  refine(): RenderStatus {
+  /** Accumulates within this frame's budget. Default undefined traces beauty and requested AOVs. Pass an enabled AOV kind to refine surface outputs only, without beauty or denoising; progress is aovSamplesRendered. Rejects calls during converge or after disposal. */
+  refine(channel?: AovKind): RenderStatus {
     if (this._busy) throw new Error('Cannot refine a render while converge is running.');
     if (this._disposed) throw new Error('Render is disposed.');
     this._engine._setRenderError();
-    try { return this._refine(); }
+    try { return channel === undefined ? this._refine() : this._refineAov(channel); }
     catch (error) { this._engine._setRenderError(this._engine._notifyError(error)); return this._status = 'error'; }
     finally { this._engine._reportShaderProgress(); }
   }
@@ -549,7 +583,7 @@ export default class Render {
       }
     });
   }
-  /** Reads native RGBA, top row first; id uses uint32, other kinds float32. Default hdr. AOV reads require explicit aovs enablement. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
+  /** Reads native RGBA, top row first; id uses uint32, other kinds float32. Default hdr. Beauty/guide reads are empty until a beauty sample completes. AOV reads require explicit aovs enablement. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
   readPixels(kind: 'id'): Promise<{width: number; height: number; data: Uint32Array}>;
   readPixels(kind?: 'hdr' | 'denoised' | 'albedo' | 'normal' | Exclude<AovKind, 'id'>): Promise<{width: number; height: number; data: Float32Array}>;
   readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' | AovKind): Promise<{width: number; height: number; data: Float32Array | Uint32Array}>;
@@ -563,7 +597,7 @@ export default class Render {
       if (!target?.readAov) throw new Error('AOV output is not ready');
       target.activate(); return target.readAov(aov);
     }
-    if (!target) return {width: 0, height: 0, data: new Float32Array(0)};
+    if (!target || this.samples === 0) return {width: 0, height: 0, data: new Float32Array(0)};
     if (kind === 'denoised' && this._denoisedSamples === 0) {
       if (!this._warnedDenoisedReadback) { this._warnedDenoisedReadback = true; console.warn('Denoised output is not ready; reading HDR samples instead.'); }
       kind = 'hdr';
@@ -572,7 +606,7 @@ export default class Render {
   }
   /** Borrows a read-only WebGPU texture; undefined on WebGL or before a complete sample. Kind is required. HDR is native resolved linear ray color before denoising/display composition, with DenoiseInput.color normalization and coverage. Display is the latest compose, including filters and display passes. Valid only until this render's next refine/converge, display present/setSize, restart/dispose or device loss; never retain, write or destroy it. */
   getOutputTexture(kind: 'hdr' | 'display'): GPUTexture | undefined {
-    if (!this._complete || this._engine.backend !== 'webgpu') return;
+    if (this._engine.backend !== 'webgpu' || (kind === 'hdr' ? !this._complete : !this._current || !this._target?.presentationComplete || (!this._complete && !this._target.getAovSamples?.()))) return;
     return this._target?.getOutputTexture?.(kind);
   }
   /** Discards only this render's accumulation and pending denoising. */

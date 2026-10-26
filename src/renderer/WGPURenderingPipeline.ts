@@ -674,6 +674,13 @@ output.color = color;
     }
     composePass.setUniform('flatBackgroundColor', resolvedFlatBackground);
     rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);
+    const aovKind = displayAovKind(output);
+    if (aovKind && sampleCount === 0) {
+      if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
+      if (!aov.samples) return;
+      finishPresentation(encoder, aov.visualize(aovKind, aovDisplayOptions, hdrOutputActive));
+      return;
+    }
     if (resolvedSamples < 1) return;
     prepareComposition();
     if (denoiseValid) denoisedTexture = prepareDenoisedTexture(
@@ -749,11 +756,14 @@ output.color = color;
       (denoiseValid && denoisedBuffer ? (denoisedHDR ? composePass.getOutput('color') : denoisedDisplayLinear
         ? compositeDenoiseDisplayPass.getOutput('color') : denoisedTexture) : undefined) ||
       composePass.getOutput('color');
-    const aovKind = displayAovKind(output);
     if (aovKind) {
       if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
       displayTexture = aov.visualize(aovKind, aovDisplayOptions, hdrOutputActive);
     }
+    finishPresentation(encoder, displayTexture);
+  }
+
+  function finishPresentation(encoder: GPUCommandEncoder, displayTexture: GPUTexture) {
     const activeHDRPeakMeter = hdrOutputActive
       ? (hdrPeakMeter ??= scratch.get('hdrPeak', () => new WGPUHDRPeakMeter(device)))
       : undefined;
@@ -1179,7 +1189,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       const output = scratch.get('Custom output', () => new WGPUScratchBuffer(device)).get(width * height * 16, true);
       const aovs=requestedAovs.length?aov.snapshot(requestedAovs):undefined;
       try {await denoiser.denoise({device, width, height, color, albedo, normal, output, aovs}, {signal: controller.signal, schedule});}
-      finally {if(aovs)void device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>Object.values(aovs).forEach(buffer=>buffer?.destroy()));}
+      finally {if(aovs)void device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>aov.releaseSnapshot(aovs));}
       if (controller.signal.aborted || disposed || generation !== denoiseGeneration) return false;
       const coverage = scratch.get('custom coverage', () => new WGPUComputePass('Custom coverage', device, {
         inputs: ['filtered', 'original'], outputs: ['color'], uniforms: auxiliaryPassUniforms,
@@ -1544,8 +1554,7 @@ width: renderWidth, height: renderHeight,
     },
 
     getOutputTexture(kind) {
-      if (resolvedSamples < 1) return;
-      if (kind === 'hdr') return getFrameInput('color');
+      if (kind === 'hdr') return resolvedSamples > 0 ? getFrameInput('color') : undefined;
       return displayPostProcess.output ?? presentationTexture;
     },
     applyPostProcesses(passes, render) {
@@ -1582,17 +1591,18 @@ width: renderWidth, height: renderHeight,
       } finally { buffer.unmap(); buffer.destroy(); }
     },
     aovReady(kind) { return !!execution?.aovs?.includes(kind) && aov.samples > 0; },
-    refineAovs(camera) {
-      if (sampleCount > 0 && execution?.aovs?.length) {
-        rayTracePass.setCamera(camera);
-        return rayTracePass.renderAovs(aov, camera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
-      }
-      return true;
+    getAovSamples() { return aov.samples; },
+    refineAovs(camera, samples = sampleCount) {
+      if (samples < 1 || !execution?.aovs?.length) return true;
+      rayTracePass.setCamera(camera); aovCamera = camera;
+      rayTracePass.updatePipeline();
+      if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return false;
+      return rayTracePass.renderAovs(aov, camera, samples, execution.aovSamples ?? 16, execution.aovs);
     },
     async readAov(kind) {
-      if (!execution?.aovs?.includes(kind) || !aovCamera || sampleCount < 1) throw new Error('AOV output is not ready');
+      if (!execution?.aovs?.includes(kind) || !aovCamera || (sampleCount < 1 && aov.samples < 1)) throw new Error('AOV output is not ready');
       rayTracePass.setCamera(aovCamera);
-      while (!rayTracePass.renderAovs(aov, aovCamera, sampleCount, execution.aovSamples ?? 16, execution.aovs)) {
+      while (!rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), execution.aovSamples ?? 16, execution.aovs)) {
         if (disposed) throw new Error('AOV compilation was interrupted');
         await new Promise<void>(resolve => scheduleFrame(() => resolve()));
       }

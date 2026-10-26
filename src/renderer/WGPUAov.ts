@@ -1,7 +1,7 @@
 import {aovDisplayShader} from './wgsl/aovDisplay.wgsl.js';
 import {packAovDisplay, type AovDisplayOptions} from './aovDisplay.js';
-import resolveWGSL from './wgsl/aovResolve.wgsl.js';
-import {AovHistory, AOV_KINDS, AOV_LAYOUT, type AovKind, type AovFrameSnapshot} from './aov.js';
+import {aovSnapshotShader, aovSnapshotBinding, AOV_SNAPSHOT_BATCH_SIZE} from './wgsl/aovSnapshot.wgsl.js';
+import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovMask, type AovKind, type AovFrameSnapshot} from './aov.js';
 /** One target's optional AOV allocations and accepted frame history. */
 export class WGPUAov {
   readonly history = new AovHistory();
@@ -10,7 +10,13 @@ export class WGPUAov {
   frame?: AovFrameSnapshot;
   private displayPipeline?: GPUComputePipeline;
   private displayTexture?: GPUTexture;
-  private resolvePipeline?: GPUComputePipeline;
+  private readonly resolvePipelines = new Map<string, GPUComputePipeline>();
+  private scenePrimitives?: Uint32Array;
+  private scenePrimitiveOffset = 0;
+  private snapshotGeneration = 0;
+  private readonly snapshotPool = new Map<AovKind, GPUBuffer>();
+  private readonly snapshotLeases = new WeakMap<GPUBuffer, {kind: AovKind; generation: number}>();
+  private readonly snapshotBuffers = new Set<GPUBuffer>();
   constructor(readonly device: GPUDevice) {}
   reset() {
     if (this.centerReady && this.center && this.previousCenter) {
@@ -26,29 +32,89 @@ export class WGPUAov {
     this.previousCenter = this.device.createBuffer({label: 'Previous AOV center', size: width*height*AOV_LAYOUT.centerBytes, usage});
     this.center = this.device.createBuffer({label: 'AOV center', size: width * height * AOV_LAYOUT.centerBytes, usage});
   }
-  setScene(words: Uint32Array) {
-    if(words.byteLength>this.device.limits.maxStorageBufferBindingSize) throw new RangeError('AOV scene metadata exceeds device storage binding limit');
-    if (!this.scene || this.scene.size < words.byteLength) {
+  setScene(words: Uint32Array, primitiveIds?: Uint32Array) {
+    const bytes = words.byteLength + (primitiveIds?.byteLength ?? 0);
+    if (bytes > this.device.limits.maxStorageBufferBindingSize) throw new RangeError('AOV scene metadata exceeds device storage binding limit');
+    let replaced = false;
+    if (!this.scene || this.scene.size < bytes) {
       this.scene?.destroy();
-      this.scene = this.device.createBuffer({label: 'AOV identities/history', size: Math.max(16, words.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
+      this.scene = this.device.createBuffer({label: 'AOV identities/history', size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
+      replaced = true;
     }
     this.device.queue.writeBuffer(this.scene, 0, words);
+    // Primitive-cache arrays are immutable. Camera, material and rigid edits
+    // update only the prefix; topology/storage replacements change the tail's
+    // identity, and instance/material counts can move its byte offset.
+    if (primitiveIds && (replaced || this.scenePrimitives !== primitiveIds || this.scenePrimitiveOffset !== words.byteLength)) {
+      this.device.queue.writeBuffer(this.scene, words.byteLength, primitiveIds);
+    }
+    this.scenePrimitives = primitiveIds; this.scenePrimitiveOffset = words.byteLength;
   }
-  get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0) + (this.displayTexture ? this.width*this.height*8 : 0); }
+  get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0) + (this.displayTexture ? this.width*this.height*8 : 0) + [...this.snapshotBuffers].reduce((bytes, buffer) => bytes + buffer.size, 0); }
   snapshot(kinds: readonly AovKind[]): Partial<Record<AovKind,GPUBuffer>> {
     if(!this.accumulation || !this.center || !this.samples) throw new Error('AOV output is not ready');
-    const device=this.device;
-    this.resolvePipeline??=device.createComputePipeline({label:'AOV resolve',layout:'auto',compute:{module:device.createShaderModule({code:resolveWGSL}),entryPoint:'main'}});
-    const buffers: Partial<Record<AovKind,GPUBuffer>>={};
-    for(const kind of kinds){
-      if(buffers[kind])continue;
-      const output=device.createBuffer({label:`Custom ${kind} input`,size:this.width*this.height*16,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST});
-      const parameters=device.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM,mappedAtCreation:true});
-      new Uint32Array(parameters.getMappedRange()).set([this.width,this.height,this.samples,AOV_KINDS.indexOf(kind)|256]);parameters.unmap();
-      const group=device.createBindGroup({layout:this.resolvePipeline.getBindGroupLayout(0),entries:[this.accumulation,this.center,output,parameters].map((buffer,binding)=>({binding,resource:{buffer}}))});
-      const encoder=device.createCommandEncoder(),pass=encoder.beginComputePass();pass.setPipeline(this.resolvePipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();device.queue.submit([encoder.finish()]);parameters.destroy();buffers[kind]=output;
+    const device = this.device;
+    aovMask(kinds);
+    const unique = AOV_KINDS.filter(kind => kinds.includes(kind));
+    const batches: {kinds: AovKind[]; pipeline: GPUComputePipeline}[] = [];
+    for (let offset = 0; offset < unique.length; offset += AOV_SNAPSHOT_BATCH_SIZE) {
+      const batch = unique.slice(offset, offset + AOV_SNAPSHOT_BATCH_SIZE), key = batch.join(',');
+      let pipeline = this.resolvePipelines.get(key);
+      if (!pipeline) {
+        pipeline = device.createComputePipeline({label: 'AOV snapshot', layout: 'auto',
+          compute: {module: device.createShaderModule({code: aovSnapshotShader(batch)}), entryPoint: 'main'}});
+        this.resolvePipelines.set(key, pipeline);
+      }
+      batches.push({kinds: batch, pipeline});
     }
-    return buffers;
+    const buffers: Partial<Record<AovKind, GPUBuffer>> = {};
+    if (!batches.length) return buffers;
+    const parameters = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM, mappedAtCreation: true});
+    new Uint32Array(parameters.getMappedRange()).set([this.width, this.height, this.samples, 0]); parameters.unmap();
+    try {
+      const encoder = device.createCommandEncoder({label: 'AOV snapshot'}), pass = encoder.beginComputePass();
+      for (const {kinds: batch, pipeline} of batches) {
+        const entries: GPUBindGroupEntry[] = [
+          {binding: 0, resource: {buffer: this.accumulation}},
+          {binding: 1, resource: {buffer: this.center}},
+          {binding: 3, resource: {buffer: parameters}}
+        ];
+        batch.forEach((kind, index) => {
+          const buffer = this.snapshotPool.get(kind) ?? device.createBuffer({label: `Custom ${kind} input`, size: this.width * this.height * 16,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
+          this.snapshotPool.delete(kind);
+          this.snapshotLeases.set(buffer, {kind, generation: this.snapshotGeneration});
+          this.snapshotBuffers.add(buffer);
+          buffers[kind] = buffer;
+          entries.push({binding: aovSnapshotBinding(index), resource: {buffer}});
+        });
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries}));
+        pass.dispatchWorkgroups(Math.ceil(this.width / 8), Math.ceil(this.height / 8));
+      }
+      pass.end(); device.queue.submit([encoder.finish()]);
+      return buffers;
+    } catch (error) {
+      // Nothing was submitted, so these unfinished outputs can be retired now.
+      Object.values(buffers).forEach(buffer => {
+        if (buffer) {this.snapshotLeases.delete(buffer); this.snapshotBuffers.delete(buffer); buffer.destroy();}
+      });
+      throw error;
+    } finally { parameters.destroy(); }
+  }
+  // Call only after the consumer and its queued GPU work have finished. Each
+  // in-flight denoiser owns separate outputs, including cancelled jobs whose
+  // callbacks have not settled. Keep at most one reusable buffer per kind.
+  releaseSnapshot(buffers: Partial<Record<AovKind, GPUBuffer>>) {
+    for (const buffer of Object.values(buffers)) {
+      if (!buffer) continue;
+      const lease = this.snapshotLeases.get(buffer);
+      if (!lease) continue;
+      this.snapshotLeases.delete(buffer);
+      if (lease.generation === this.snapshotGeneration && !this.snapshotPool.has(lease.kind)) {
+        this.snapshotPool.set(lease.kind, buffer);
+      } else { this.snapshotBuffers.delete(buffer); buffer.destroy(); }
+    }
   }
   visualize(kind: AovKind, options: AovDisplayOptions, linear: boolean): GPUTexture {
     if(!this.accumulation || !this.center || !this.samples) throw new Error('AOV output is not ready');
@@ -94,7 +160,11 @@ export class WGPUAov {
   }
   dispose() {
     const texture=this.displayTexture;this.displayTexture=undefined;
-    const buffers=[this.accumulation,this.center,this.scene,this.previousCenter];
+    this.scenePrimitives = undefined; this.scenePrimitiveOffset = 0;
+    this.snapshotGeneration++;
+    const pooled = [...this.snapshotPool.values()]; this.snapshotPool.clear();
+    pooled.forEach(buffer => this.snapshotBuffers.delete(buffer));
+    const buffers=[this.accumulation,this.center,this.scene,this.previousCenter,...pooled];
     this.accumulation=this.center=this.scene=this.previousCenter=undefined;
     void this.device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>{texture?.destroy();buffers.forEach(buffer=>buffer?.destroy());});
   }

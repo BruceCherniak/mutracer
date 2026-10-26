@@ -261,7 +261,8 @@ export interface RenderPasses {
   dispose(): void;
   aovReady?(kind: import('./aov.js').AovKind): boolean;
   /** Updates optional surface outputs without tracing beauty; false while compiling. */
-  refineAovs?(camera: Camera): boolean;
+  refineAovs?(camera: Camera, samples?: number): boolean;
+  getAovSamples?(): number;
   readAov?(kind: import('./aov.js').AovKind): Promise<{width: number; height: number; data: Float32Array | Uint32Array}>;
   readOutput(kind: 'hdr' | 'denoised' | 'albedo' | 'normal'): Promise<{
     data: Float32Array;

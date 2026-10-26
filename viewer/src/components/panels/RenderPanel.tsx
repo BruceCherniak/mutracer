@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
-import { Aperture, Bug, Palette, RotateCcw, Sparkles, Sun } from 'lucide-react';
-import type { OIDNModel, EngineDiagnostics } from '@meimu/mutracer';
-import { VIEWER_AOVS, DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../../store';
-import { getEngine } from '../../engine/ViewerEngine';
+import { useState } from 'react';
+import { Aperture, Palette, RotateCcw, Sparkles, Sun } from 'lucide-react';
+import type { OIDNModel } from '@meimu/mutracer';
+import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../../store';
 import { Field, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 
 
@@ -12,7 +11,7 @@ export function RenderPanel() {
   const bvhBusy = useViewer((state) => state.stats.phase === 'preparing' || state.loading !== null || state.export !== null);
   const webgl = backend === 'WebGL 2';
   const jnlm = webgl || s.denoiseModel === 'jnlm';
-  const [open, setOpen] = useState({ effects: false, debug: false, jnlm: false });
+  const [open, setOpen] = useState({ effects: false, jnlm: false });
   const update = (patch: Partial<Settings>) => setSettings(patch);
 
   return (
@@ -156,57 +155,6 @@ export function RenderPanel() {
         <Scrub label="Vignette" value={s.vignette} min={0} max={1} onChange={(v) => update({ vignette: v })} />
       </Section>
 
-      <Section title="Debug" icon={<Bug size={14} />} open={open.debug} onOpenChange={(v) => setOpen((o) => ({ ...o, debug: v }))}>
-        <Field label="Output">
-          <Select
-            label="Output"
-            value={s.output}
-            options={[
-              { value: 'final', label: 'Final' }, { value: 'albedo', label: 'Albedo' },
-              { value: 'normal', label: 'Normal' }, { value: 'shadow', label: 'Shadow' },
-              ...VIEWER_AOVS.map(value => ({value, label: ({depth: 'Depth', position: 'Position', roughness: 'Roughness', diffuseAlbedo: 'Diffuse reflectance', specularAlbedo: 'Specular reflectance', id: 'ID', motion: 'Motion'})[value]}))
-            ]}
-            onChange={(v) => update({ output: v })}
-          />
-        </Field>
-        {s.output === 'depth' && <Scrub label="Depth range" value={s.aovDepthFar} min={0.01} max={10000} log onChange={(v) => update({aovDepthFar: v})} />}
-        {s.output === 'position' && <Scrub label="Position scale" value={s.aovPositionScale} min={0.001} max={10000} log onChange={(v) => update({aovPositionScale: v})} />}
-        {s.output === 'motion' && <Scrub label="Motion scale" value={s.aovMotionScale} min={0.01} max={1000} log onChange={(v) => update({aovMotionScale: v})} />}
-        {s.output === 'id' && <Field label="ID component"><Select label="ID component" value={s.aovIdComponent} options={(['object', 'instance', 'material', 'primitive'] as const).map(value => ({value, label: value}))} onChange={(v) => update({aovIdComponent: v})} /></Field>}
-        <Switch label="Interactive preview" checked={s.previewEnabled} onChange={(v) => update({ previewEnabled: v })}>
-          <span className="field-label">Interactive preview</span>
-        </Switch>
-        {s.previewEnabled && (
-          <Scrub label="Max preview scale" title="Preview scale relative to the full viewport, independent of final resolution" value={s.previewMaxResolutionScale} min={0.25} max={1} onChange={(v) => update({ previewMaxResolutionScale: v })} />
-        )}
-        {s.denoise && s.denoiseWhileConverging && <Hint>Live denoise also runs while interacting{jnlm ? '.' : ', using the small preview model.'}</Hint>}
-        {open.debug && <Diagnostics />}
-      </Section>
     </>
-  );
-}
-
-function Diagnostics() {
-  const [diagnostics, setDiagnostics] = useState<EngineDiagnostics | undefined>();
-  useEffect(() => {
-    const read = () => setDiagnostics(getEngine()?.engine.getDiagnostics());
-    read();
-    const timer = setInterval(read, 1000);
-    return () => clearInterval(timer);
-  }, []);
-  if (!diagnostics) return null;
-  const shader = diagnostics.shaderCompilation;
-  const rows: [string, string][] = [
-    ['Backend', `${diagnostics.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2'} · ${diagnostics.adapterName || 'unknown'}`],
-    ['Drawing buffer', `${diagnostics.width} × ${diagnostics.height}`],
-    ['Shader compile', shader ? `${Math.round(shader.totalTimeMs ?? 0)} ms · ${shader.sourceLines ?? '?'} lines` : '–'],
-    ['Trace time', diagnostics.gpuTraceTiming ? `${diagnostics.gpuTraceTiming.estimatedFullFrameTimeMs?.toFixed(1)} ms / frame` : '–'],
-    ['Texture atlas', diagnostics.textureAtlas ? `${diagnostics.textureAtlas.textureCount} textures · ${(diagnostics.textureAtlas.estimatedBytes / 2 ** 20).toFixed(1)} MiB` : '–'],
-    ['Emissive triangles', String(diagnostics.lightSampling?.emissiveTriangles ?? 0)]
-  ];
-  return (
-    <dl className="diagnostics">
-      {rows.map(([k, v]) => (<div key={k}><dt>{k}</dt><dd className="mono">{v}</dd></div>))}
-    </dl>
   );
 }

@@ -36,7 +36,7 @@ export function aovInstanceOrder(tlas: FlattendBVH): Uint32Array {
   return order;
 }
 export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: Camera,
-  width: number, height: number, history: AovHistory, primitiveIds?: Uint32Array): {words: Uint32Array; frame: AovFrameSnapshot} {
+  width: number, height: number, history: AovHistory, primitiveIds?: Uint32Array, includePrimitives = true): {words: Uint32Array; frame: AovFrameSnapshot} {
   const order = aovInstanceOrder(tlas);
   const instances = source.instances;
   const frame: AovFrameSnapshot = {width, height,
@@ -61,7 +61,9 @@ export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: 
   const materialOffset = 52 + order.length * 24;
   const primitiveOffset = materialOffset + source.materials.length;
   const primitiveCount = primitiveIds?.length ?? tlas.buffer.byteLength / 16 + source.blases.reduce((n, b) => n + b.bvh.buffer.byteLength / 16, 0);
-  const words = new Uint32Array(primitiveOffset + primitiveCount), floats = new Float32Array(words.buffer);
+  // Web targets keep the primitive tail resident; only pack the small
+  // camera/instance/material prefix when their cached primitive map is supplied.
+  const words = new Uint32Array(primitiveOffset + (includePrimitives ? primitiveCount : 0)), floats = new Float32Array(words.buffer);
   const previous = history.previous(frame);
   if (previous) floats.set(previous.viewProjection);
   words[16] = materialOffset; words[17] = primitiveOffset;
@@ -93,6 +95,7 @@ export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: 
     if (materialIds.has(id)) throw new Error('AOV material IDs must be unique');
     materialIds.add(id); words[materialOffset + index] = id;
   });
+  if (!includePrimitives) return {words, frame};
   words.fill(0xffffffff, primitiveOffset);
   if(primitiveIds){words.set(primitiveIds,primitiveOffset);return {words,frame};}
   let base = tlas.buffer.byteLength / 16;

@@ -215,7 +215,7 @@ otherwise. Worker visibility and control forwarding are described in
 | `coalesceSceneUpdates` | false | Defer commits during preview inference, then commit latest camera/scene |
 
 `engine`, `display`, `preview` (possibly undefined) and `final` are read-only.
-`changing` defaults false; `samples` counts final only and reports 0 during preview; `status` starts preparing.
+`changing` defaults false; `samples` counts final beauty samples and reports 0 during preview; `status` starts preparing.
 `select({changing})` defaults to changing ? preview : final. `addSync`/`removeSync`
 manage integrations without disposing them. `tick` executes a manual frame;
 `start`/`stop` manage animation frames. `converge` accepts the same options as
@@ -370,7 +370,8 @@ Reading a kind absent from `render.aovs` rejects. A custom denoiser can request
 its own [AOV inputs](./denoising.md#custom-denoisers). With neither request there
 are no AOV allocations or passes. Enabling any kind costs about 128 GPU bytes
 per pixel on WebGPU or 192 on WebGL, plus scene identity/history data; each
-custom denoiser AOV snapshot adds 16 bytes per pixel. Readback adds a CPU copy.
+custom denoiser AOV snapshot adds 16 bytes per pixel. A render may retain one
+reusable snapshot per kind between denoising calls. Readback adds a CPU copy.
 WebGPU dimensions remain subject to device buffer limits. A full-frame AOV
 sample runs independently of tile/adaptive sampling and may exceed the render's
 time budget at large resolutions. WebGL requires `EXT_color_buffer_float`.
@@ -401,9 +402,16 @@ motion are transparent; accumulated outputs use their coverage as alpha. Zero va
 is opaque black. The first frame's invalid motion is transparent.
 Selecting a kind absent from `render.aovs` rejects, even if a custom denoiser
 requests it. An enabled output awaiting sampling keeps the current canvas;
-export rejects until that output is ready. Selection does not enable tracing.
+export rejects until that output is ready. Display selection alone does not enable tracing.
 Changing the channel or mapping preserves beauty samples, raw AOV values and completed denoising.
-The existing `normal` and `albedo` channels keep their OIDN-guide meaning.
+With `RenderLoop`, selecting an enabled AOV traces surface outputs without
+advancing beauty or running a denoiser, including after camera or scene edits.
+ID and motion need one center sample; other AOVs stop at the smaller of
+`maxSamples` and `aovSamples`. Loop status can be `finished` while beauty
+`samples` remains zero. Switching back to Final resumes beauty for the current
+view. Direct `render.refine()` and `converge()` still trace beauty and requested
+AOVs together. Use `render.refine(kind)` for a surface-only step and
+`render.aovSamplesRendered` for its progress. The existing `normal` and `albedo` channels keep their OIDN-guide meaning.
 
 These mappings also apply to PNG export. Raw `render.readPixels(kind)` retains
 the [surface formats](#surface-outputs) above. WebGPU HDR presentation decodes

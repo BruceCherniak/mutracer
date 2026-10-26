@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Engine, Render, THREESync, fromTHREECamera, type AovKind } from '../../src/main.js';
+import { Engine, Render, RenderLoop, THREESync, fromTHREECamera, type AovKind } from '../../src/main.js';
 async function capture() {
   const mark = (stage: string) => { document.querySelector('#result')!.textContent = `Running: ${stage}`; };
   const engine = new Engine({ canvas: document.createElement('canvas'), backend: location.search.includes('webgl') ? 'webgl' : 'webgpu' });
@@ -197,8 +197,56 @@ async function capture() {
       }
       check((await render._output!.readPresentation()).data.every(Number.isFinite), 'Reduced AOV preview was not finite');
     }
+    mark('standalone AOV loop');
+    engine.display.hdrOutputEnabled = false;
+    const loop = new RenderLoop(engine, {preview: false, final: {width: 48, height: 32, bounces: 1, maxSamples: 2, aovSamples: 2,
+      samplingPattern: 'sobol', aovs: ['depth','position','roughness','diffuseAlbedo','specularAlbedo','id','motion']}});
+    const reference = new Render(engine, {width: 48, height: 32, bounces: 1, maxSamples: 2, samplingPattern: 'sobol', aovs: loop.final.aovs});
+    const createTarget = engine._createTarget.bind(engine);
+    let beautyCalls = 0;
+    engine._createTarget = () => {
+      const target = createTarget();
+      if (target) {const trace = target.trace.bind(target); target.trace = (...args) => {if (target === loop.final._output) beautyCalls++; return trace(...args);};}
+      return target;
+    };
+    const finish = async () => {
+      const start = performance.now();
+      while (loop.tick() !== 'finished') {
+        check(loop.status !== 'error', errors.join('\n'));
+        check(performance.now() - start < 30000, 'Standalone AOV loop timed out');
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      }
+    };
+    try {
+      for (const kind of loop.final.aovs) {
+        engine.display.channel = kind; await finish();
+        check(loop.final.samples === 0 && beautyCalls === 0, 'AOV view traced beauty');
+        check(!!engine.display.present(loop.final), 'Standalone AOV did not present');
+        const actual = await loop.final.readPixels(kind);
+        check(actual.data.every(Number.isFinite), 'Standalone AOV not finite');
+        await reference.converge({samples: loop.final.aovSamplesRendered});
+        if (kind !== 'motion') {
+          const expected = await reference.readPixels(kind);
+          check(actual.data.every((v,i) => kind === 'id' ? v === expected.data[i] : Math.abs(v-expected.data[i]) < 1e-5), `Standalone ${kind} differs from beauty path`);
+        }
+      }
+      engine.display.channel = 'depth';
+      check((await engine.display.toBlob(loop.final)).size > 0, 'Standalone AOV PNG failed');
+      check((await loop.final.readPixels('hdr')).data.length === 0, 'AOV-only HDR must be unavailable');
+      camera.position.x += .25; camera.updateMatrixWorld(); engine.camera = fromTHREECamera(camera); engine.update();
+      engine.display.channel = 'motion'; await finish();
+      await reference.converge({samples: 1});
+      const actual = (await loop.final.readPixels('motion')).data, expected = (await reference.readPixels('motion')).data;
+      check(actual.every((v,i) => Math.abs(v-expected[i]) < 1e-5), `Standalone motion history mismatch: ${JSON.stringify(Array.from(actual).map((v,i)=>({i,a:v,b:expected[i]})).filter(x=>Math.abs(x.a-x.b)>1e-5).slice(0,8))}`);
+      check(beautyCalls === 0 && loop.final.samples === 0, 'Moving AOV view traced beauty');
+      engine.display.channel = 'final'; await finish();
+      check(beautyCalls > 0 && loop.final.samples === 2, 'Final did not resume beauty');
+      await reference.converge({samples: 2});
+      const resumed = (await loop.final.readPixels('hdr')).data, expectedHdr = (await reference.readPixels('hdr')).data;
+      check(resumed.every((v,i) => Object.is(v,expectedHdr[i])), 'Resuming Final changed beauty');
+    } finally {engine._createTarget = createTarget; loop.dispose(); reference.dispose();}
     check(errors.length === 0, errors.join('\n'));
-    return { backend: engine.backend, hdr: Array.from(hdr.data), shown, primitiveColors: colors.size, missingRejected: missing, samplesUnchanged: true, png: true, reducedAovPreview: true, partialCoverage: partial, transparentPixels: background };
+    return { backend: engine.backend, hdr: Array.from(hdr.data), shown, primitiveColors: colors.size, missingRejected: missing, samplesUnchanged: true, png: true, reducedAovPreview: true, partialCoverage: partial, transparentPixels: background, standaloneAovLoop: true };
   }
   finally {
     render.dispose();

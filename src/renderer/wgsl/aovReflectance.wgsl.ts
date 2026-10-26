@@ -1,8 +1,10 @@
+import proposals from './aovReflectanceSamples.wgsl.js';
+
 // Directional-hemispherical quadrature of the supported unlayered OpenPBR
 // reflection lobes. Keep the original 256 cosine/VNDF proposals and weights;
 // evaluate diffuse and reflection together without traversing the full layered
 // BSDF twice. Callers reject coat, fuzz, anisotropy, SSS and thin film first.
-export default /* wgsl */ `
+export default proposals + /* wgsl */ `
 struct MtReflectance {
   diffuse: vec3f,
   specular: vec3f,
@@ -21,14 +23,25 @@ fn mtFrameReflectanceComponents(prepared: OpenPbrPreparedBsdf, wantDiffuse: bool
   if (wantSpecular && prepared.dielectricMsProbability > 0.0) {
     dielectricAverageLoss = max(openpbr_ideal_dielectric_average_loss(prepared.refractionEtaTOverEtaI, prepared.specularAlpha), 1e-12);
   }
+  let sphericalView = normalize(vec3f(alpha, 1.0) * view);
+  let viewZ = min(sphericalView.z, 1.0);
+  let capSpan = 1.0 + viewZ;
   let count = 256u * min(rtUniform.loopUnrollGuard, 4u) / 4u;
   for (var i = 0u; i < count; i++) {
     let pair = i / 2u;
     let u = vec2f((f32(pair) + 0.5) / f32(count / 2u),
       fract(f32(reverseBits(pair)) * 2.3283064365386963e-10 + 0.37));
-    var light = sampling_cosine_hemisphere(u);
+    let proposal = mtReflectanceProposals[pair];
+    // Retain runtime proposals near delta lobes: tiny device-specific sin/cos
+    // rounding differences can otherwise be magnified by their narrow PDFs.
+    let runtimeProposal = prepared.specularAlpha < 0.001 || count != 256u;
+    var light = vec3f(proposal.xy, sqrt(max(0.0, 1.0 - dot(proposal.xy, proposal.xy))));
+    if (runtimeProposal) { light = sampling_cosine_hemisphere(u); }
     if ((i & 1u) != 0u) {
-      let half = sampling_ggx_visible_normal(view, alpha, u);
+      let normalZ = (1.0 - u.y) * capSpan;
+      let radial = sqrt(max(0.0, (normalZ + (1.0 - viewZ)) * (u.y * capSpan)));
+      var half = normalize(vec3f(alpha, 1.0) * vec3f(sphericalView.xy + radial * proposal.zw, normalZ));
+      if (runtimeProposal) { half = sampling_ggx_visible_normal(view, alpha, u); }
       light = reflect(-view, half);
     }
     // Rejected VNDF proposals retain their weight in the denominator.
