@@ -30,7 +30,15 @@ people and coding agents changing the library. For using it, read
 
 ## Checks
 
-Run before committing:
+While iterating, run the affected test files and the typecheck for the area being
+changed. `npm run test:related -- src/path.ts` selects library tests through static
+imports; `npm run test:viewer:related -- viewer/src/path.ts` does the same for the
+viewer. See [test selection and its limits](tests/README.md). Use explicit test
+files for generators, file-based fixtures and other dependencies outside that graph.
+
+Run the full checks below once the change is ready to commit. After a passing
+check, rerun it only if its code, tests, dependencies or configuration change;
+documentation-only edits do not require repeating code checks.
 
 ```bash
 npm run typecheck
@@ -43,6 +51,9 @@ npm test
 `npm test` runs only library tests. For viewer changes, also run
 `npm run test:viewer` (the independent suite in `viewer/tests/`, using source aliases
 without requiring a prior library build).
+
+For native iteration, use the [focused native checks](native/CONTRIBUTING.md#iteration)
+before the final native validation.
 
 `npm run build` checks the bundled distribution; `npm run build:lib` builds
 `lib/` (the npm entry points) and copies the WebAssembly module.

@@ -85,11 +85,35 @@ need `xvfb-run`.
 | `npm run native:check` | No | Compiler capability probe; reports the incomplete browser API port and exits with status 1 |
 
 - The host commands build on `native:scene`, and `native:engine` chains the
-  other four. Each rebuilds and rerenders its whole chain, so run them
-  separately only when iterating on one host.
-- Before stage review, run both Rust suites, the root typechecks, library and
-  viewer tests, `native:modules:verify`, `native:storage:verify` and
-  `npm run build`. Compilation does not validate GPU output.
+  other four. Each rebuilds and rerenders its whole chain; prefer the focused
+  checks below during local iteration.
+- Before final native review, run the root typechecks, library and viewer tests,
+  `npm run build` and the applicable native CI gate below. `native:ci` already
+  runs both Rust CPU suites, `native:modules:verify` and `native:storage:verify`;
+  do not repeat those separately on unchanged inputs. Compilation does not
+  validate GPU output.
+
+### Iteration
+
+With `MUTRACER_AOT_ARCHIVE` set to a current built archive and separate persistent
+host/viewer Cargo targets, run the affected Rust tests directly:
+
+```sh
+cargo test --locked --manifest-path native/host/Cargo.toml --lib TEST_FILTER
+cargo test --locked --manifest-path native/viewer/Cargo.toml TEST_FILTER
+```
+
+Set `CARGO_TARGET_DIR` to the appropriate target before each command. Reuse it
+across edits instead of creating a fresh target for each check. A changed AOT
+input requires rebuilding the archive before testing its consumers. For a
+compile-only check use `cargo check`; a subsequent `cargo test` already checks
+compilation, so running both on unchanged inputs is unnecessary.
+
+Run an affected GPU test directly with `-- --ignored --nocapture` while iterating
+on rendering. Keep GPU work sequential. Run the applicable full `native:ci`,
+`native:ci:gpu` or `native:ci:hosts` gate for the completed change; repeat it after
+changes to inputs it validates, rather than after every intermediate edit.
+Filtered Rust tests do not replace the final AOT, C consumer or GPU validation.
 
 ### Environment variables
 

@@ -1,14 +1,26 @@
 # Tests
 
 ```bash
-npm test                                   # all tests
-npm test -- tests/unit/geometry.test.ts    # one file
+npm test                                          # full library suite
+npm test -- tests/unit/geometry.test.ts             # one file
+npm run test:related -- src/scene/Geometry.ts        # static import dependents
+npm run test:watch -- tests/unit/geometry.test.ts    # keep the test runner open
+npm run test:viewer:related -- viewer/src/engine/fetchWithProgress.ts
 ```
 
 - `unit/`: scene primitives, geometry helpers, BVH construction, light and
   material packing, sampling, shader-cache keys, WGSL validity of generated
   shaders, renderer lifecycle and denoiser setup.
-- `integration/`: loaders run on small in-memory fixtures.
+- `integration/`: bundled-library behavior and standalone assets.
+
+Use focused checks during iteration and the full suites before committing
+(see [required checks](../AGENTS.md#checks)). Related-test selection follows
+static imports. It cannot discover dependencies read from disk or evaluated by
+custom loaders, including the shader formatting fixtures; run
+`npm test -- shaderSourceFormatting shaderFormattingBuild shaderIdentifiers`
+when changing shader generation or its build transforms. Changes to test
+configuration or shared build tooling require the full suite. A related run
+with no matching tests fails so it cannot be mistaken for validation.
 
 Tests run in Node without a GPU. They check behavior and contracts, not image
 quality. Check GPU output separately by rendering the examples, or a fixed

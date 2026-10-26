@@ -11,7 +11,8 @@ import {writeRawAtlasPlacement} from '../../src/renderer/textureAtlasPixels.js';
 function fixture(source: string, action: (directory: string) => void) {
   const directory = mkdtempSync(join(tmpdir(), 'mutracer-storage-'));
   try {
-    writeFileSync(join(directory, 'tsconfig.json'), JSON.stringify({compilerOptions:{target:'ES2022',module:'ESNext',strict:true}}));
+    // These numeric fixtures need typed arrays, not the DOM or ambient packages.
+    writeFileSync(join(directory, 'tsconfig.json'), JSON.stringify({compilerOptions:{target:'ES2022',module:'ESNext',strict:true,lib:['ES2022'],types:[]}}));
     writeFileSync(join(directory, 'entry.ts'), source);
     action(directory);
   } finally { rmSync(directory, {recursive:true, force:true}); }
@@ -57,7 +58,7 @@ describe('checker-driven numeric monomorphization', () => {
       const output=readFileSync(join(directory,'entry.ts'),'utf8');
       expect(output).toContain('value');
       expect(output).toContain('export { value }');
-      const program=ts.createProgram([join(directory,'entry.ts')],{noEmit:true,target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,noUnusedLocals:true});
+      const program=ts.createProgram([join(directory,'entry.ts')],{noEmit:true,target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,noUnusedLocals:true,lib:['lib.es2022.d.ts'],types:[]});
       expect(ts.getPreEmitDiagnostics(program).filter(d=>d.file?.fileName.startsWith(directory))).toEqual([]);
     });
   });
