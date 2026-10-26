@@ -261,7 +261,32 @@ impl Viewer {
         });
         controls::section(ui, "Denoiser", |ui| {
             controls::toggle(ui, "Denoise", &mut self.denoise);
+            controls::select(ui, "Method", self.denoiser_choice.label(), |ui| {
+                ui.selectable_value(
+                    &mut self.denoiser_choice,
+                    crate::denoiser::Choice::Oidn,
+                    "OIDN",
+                );
+                let response = ui
+                    .add_enabled_ui(self.custom_denoiser.is_some(), |ui| {
+                        ui.selectable_value(
+                            &mut self.denoiser_choice,
+                            crate::denoiser::Choice::Dlss,
+                            "DLSS RR",
+                        )
+                    })
+                    .inner;
+                if let Some(reason) = &self.dlss_unavailable {
+                    response.on_disabled_hover_text(reason);
+                }
+            });
             if self.denoise {
+                if self.denoiser_choice == crate::denoiser::Choice::Dlss
+                    && self.camera.f_stop > 0.
+                    && !self.camera.orthographic
+                {
+                    ui.weak("Depth of field uses OIDN");
+                }
                 ui.weak(&self.denoise_status);
             }
         });

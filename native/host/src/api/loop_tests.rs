@@ -7,6 +7,106 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[test]
+#[ignore = "requires real GPU"]
+fn coalesced_preview_collects_async_denoising_before_committing_motion() {
+    struct HeldFilter {
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+        first: std::sync::atomic::AtomicBool,
+    }
+    impl CustomDenoiser for HeldFilter {
+        fn input_mode(&self) -> DenoiseInputMode {
+            DenoiseInputMode::ResidentGpu
+        }
+        fn denoise(
+            &self,
+            mut input: DenoiseInput,
+            _: CancelToken,
+        ) -> std::result::Result<DenoiseOutput, String> {
+            if self.first.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                self.entered.send(()).unwrap();
+                self.release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(30))
+                    .map_err(|e| e.to_string())?;
+            }
+            let frame = input.resident.take().unwrap();
+            let output = frame.buffers.color.clone();
+            frame.submit([], output).map(DenoiseOutput::Resident)
+        }
+    }
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = super::aov_tests::aov_engine(Backend::Software);
+    engine.display().set_size(16, 12).unwrap();
+    let scene = lit_scene();
+    engine.set_scene(&scene).unwrap();
+    let (entered, observed) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let mut render_loop = RenderLoop::new(
+        &engine,
+        RenderLoopOptions {
+            preview: Some(LoopRender::Settings(RenderSettings {
+                max_samples: 1,
+                ..RenderLoop::preview_settings()
+            })),
+            final_render: LoopRender::Settings(RenderSettings {
+                max_samples: 1,
+                ..Default::default()
+            }),
+            coalesce_scene_updates: true,
+            select: Some(Box::new(|_| Selection::Preview)),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render_loop
+        .preview()
+        .unwrap()
+        .set_custom_denoiser(
+            Some(Arc::new(HeldFilter {
+                entered,
+                release: Mutex::new(released),
+                first: std::sync::atomic::AtomicBool::new(true),
+            })),
+            DenoiseSchedule::EverySample,
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        render_loop.tick().unwrap();
+        if observed.try_recv().is_ok() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Preview filter did not start");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let before = render_loop.presentations();
+    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    camera.world_matrix[12] += 0.1;
+    engine.set_camera(Some(camera)).unwrap();
+    for _ in 0..3 {
+        render_loop.tick().unwrap();
+    }
+    assert!(
+        engine.inputs_pending(),
+        "Committed motion while preview inference was pending"
+    );
+    release.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while render_loop.presentations() == before || engine.inputs_pending() {
+        render_loop.tick().unwrap();
+        assert!(
+            Instant::now() < deadline,
+            "Preview inference completed but the loop never resumed motion/presentation"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(render_loop.last_presented().is_some());
+    assert!(!render_loop.preview().unwrap().denoising());
+}
+
+#[test]
 fn progressive_state_starts_final_for_isolated_edits() {
     let t0 = Instant::now();
     let ms = |v: u64| t0 + Duration::from_millis(v);

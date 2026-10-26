@@ -7,8 +7,9 @@ texts are in [LICENSES/](./LICENSES).
 
 ## oidn-webgpu denoising
 
-The viewer links the native library's oidn-webgpu Rust runtime and embeds its default
-OIDN model; see the [runtime and model notices](../THIRD_PARTY_NOTICES.md#oidn-webgpu-native-runtime).
+The viewer links the native library's oidn-webgpu Rust runtime, embeds its standard
+OIDN model and bundles `rt_hdr_alb_nrm_small.tza` for live previews; see the
+[runtime and model notices](../THIRD_PARTY_NOTICES.md#oidn-webgpu-native-runtime).
 The viewer does not bundle the Open Image Denoise SDK or device modules.
 
 ## Optional NVIDIA DLSS Ray Reconstruction

@@ -679,11 +679,17 @@ impl RenderLoop {
                         self.preview_frame_owner = None;
                         return Ok(self.set_status(RenderLoopStatus::Error));
                     }
-                    if (!self.coalesce_scene_updates || !preview.denoising())
-                        && self.present(&preview)?.is_some()
-                    {
-                        self.preview_frame_owner = None;
-                    }
+                } else {
+                    // Native filter completion is collected by the ticking
+                    // thread. Merely polling the device leaves `denoising`
+                    // true forever, holding both presentation and new inputs.
+                    // Collect without tracing another stale-camera sample.
+                    preview.denoise_current()?;
+                }
+                if (!self.coalesce_scene_updates || !preview.denoising())
+                    && self.present(&preview)?.is_some()
+                {
+                    self.preview_frame_owner = None;
                 }
                 return Ok(self.set_status(RenderLoopStatus::Previewing));
             }

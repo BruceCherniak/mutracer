@@ -14,6 +14,7 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
         mutracer_native_probe::api::OIDN_WEBGPU_AVAILABLE,
         "Missing native denoiser"
     );
+    crate::denoiser::preview_oidn_options()?;
     let gpu = std::env::var("MUTRACER_NATIVE_GPU_VALIDATION").is_ok_and(|value| value == "1");
     if gpu {
         let (denoised, _) = denoise_model(&model, size, 4)?;
@@ -65,6 +66,8 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
             "Packaged accumulation reset differs"
         );
         crate::renderer::save(&out.join("render.png"), &pixels, size, 0.0)?;
+        let engine = mutracer_native_probe::api::Engine::new(Default::default())?;
+        crate::live_denoise_smoke::run(&engine, &model, None, None, &out.join("live"))?;
     }
     let summary = serde_json::json!({"passed":true,"gpu":gpu,"gpuValidation":if gpu {"passed"} else {"not-run (CPU-only)"},"denoiser":"oidn-webgpu","denoisingValidation":if gpu {"passed"} else {"not-run (CPU-only)"},"model":model_path});
     std::fs::write(

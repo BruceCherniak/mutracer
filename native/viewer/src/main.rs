@@ -1,6 +1,7 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
 mod animation;
 mod controls;
+mod denoiser;
 #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
 mod dlss;
 mod dock;
@@ -9,6 +10,7 @@ mod focus;
 mod focus_smoke;
 mod geometry_smoke;
 mod input;
+mod live_denoise_smoke;
 mod material_presets;
 mod metrics;
 mod package_smoke;
@@ -101,6 +103,7 @@ impl Target {
         let render_loop = api::RenderLoop::new(
             &engine,
             api::RenderLoopOptions {
+                preview: Some(api::LoopRender::Settings(denoiser::preview_settings())),
                 final_render: api::LoopRender::Settings(settings),
                 syncs: vec![activity.clone()],
                 ..Default::default()
@@ -305,6 +308,8 @@ struct Viewer {
     generation: u64,
     denoise: bool,
     custom_denoiser: Option<Arc<dyn api::CustomDenoiser>>,
+    denoiser_choice: denoiser::Choice,
+    dlss_unavailable: Option<String>,
     denoise_status: String,
     /// Whether the last published commit prepared the scene again.
     last_commit_full: bool,
@@ -412,6 +417,8 @@ impl Viewer {
             generation: 1,
             denoise: true,
             custom_denoiser: None,
+            denoiser_choice: denoiser::Choice::default(),
+            dlss_unavailable: Some("This build does not include DLSS RR".into()),
             denoise_status: String::new(),
             texture: None,
             checker: None,
@@ -574,7 +581,7 @@ impl Viewer {
                 seed: self.settings.seed,
                 clamping: self.settings.clamping,
                 transmissive_output_alpha_min: self.settings.transmissive_output_alpha_min,
-                ..api::RenderLoop::preview_settings()
+                ..denoiser::preview_settings()
             })?;
         target.engine.display().set_size(size[0], size[1])?;
         target.engine.set_scene_shared(bytes)?;
@@ -588,7 +595,7 @@ impl Viewer {
         if self.texture_browser.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        // Playback renders like held input: one sample per frame and no denoising.
+        // Playback uses the same one-sample live-denoising policy as held input.
         let playing = self.running && self.model.0.animation.as_ref().is_some_and(|a| a.playing);
         // Display controls recompose only; they must not select the preview or
         // suspend the completed final denoiser while their pointer is held.
@@ -710,7 +717,17 @@ impl Viewer {
             if self.running && self.replacement.is_none() && self.target.pushed {
                 let render = self.target.collecting_render();
                 let preview = !std::ptr::eq(render, self.final_render());
-                if render.collect()? {
+                let complete = render.collect()?;
+                // Live preview owns its camera until the filtered image is ready.
+                // This host-side batch collection must also collect inference;
+                // RenderLoop cannot poll it while `holding` skips its tick.
+                let filtered = !self.denoise
+                    || !preview
+                    || !complete
+                    || render.samples() == 0
+                    || render.denoise_current()?
+                    || render.denoise_report().is_some_and(|r| r.error.is_some());
+                if complete && filtered {
                     if let Some(presented) = self.target.engine.display().present(render)? {
                         self.present_frame(ctx, presented, preview || presented.fallback)?;
                     }
@@ -761,52 +778,28 @@ impl Viewer {
             }
             self.change = Change::None;
         }
-        // Keep the final denoiser across channel changes. OIDN pauses during
-        // held input; temporal filtering also runs on interactive previews.
+        // Keep denoising active during interaction for both OIDN and RR.
         // Temporal guides require pinhole rays. Depth of field uses OIDN and
         // returns to RR automatically when the lens is disabled.
-        let temporal = self.custom_denoiser.is_some()
-            && (self.camera.orthographic || self.camera.f_stop == 0.);
-        let denoise = self.denoise && (!held || temporal);
+        let temporal = self.denoiser_choice.temporal(
+            self.custom_denoiser.is_some(),
+            self.camera.orthographic || self.camera.f_stop == 0.,
+        );
+        let denoise = self.denoise;
         if self.applied_denoise != Some((denoise, temporal)) {
-            if let Some(filter) = self.custom_denoiser.as_ref().filter(|_| temporal) {
-                for target in [Some(&mut self.target), self.replacement.as_mut()]
-                    .into_iter()
-                    .flatten()
-                {
-                    target.render_loop.coalesce_scene_updates = true;
-                    for render in [
-                        Some(target.render_loop.final_render()),
-                        target.render_loop.preview(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
-                        render.set_custom_denoiser(
-                            denoise.then(|| filter.clone()),
-                            api::DenoiseSchedule::EverySample,
-                        )?;
-                    }
-                }
-            } else {
-                for target in [Some(&mut self.target), self.replacement.as_mut()]
-                    .into_iter()
-                    .flatten()
-                {
-                    target.render_loop.coalesce_scene_updates = false;
-                    if let Some(preview) = target.render_loop.preview() {
-                        preview.set_custom_denoiser(None, api::DenoiseSchedule::EverySample)?;
-                    }
-                }
-                self.final_render()
-                    .set_denoiser(denoise.then(|| api::DenoiserOptions {
-                        max_tile_size: 512,
-                        backend: api::DENOISE_OIDN_WEBGPU,
-                        schedule: api::DenoiseSchedule::Progressive,
-                        ..Default::default()
-                    }))?;
+            for target in [Some(&mut self.target), self.replacement.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                denoiser::configure(
+                    &mut target.render_loop,
+                    denoise,
+                    temporal,
+                    self.custom_denoiser.as_ref(),
+                )?;
             }
             self.applied_denoise = Some((denoise, temporal));
+            self.denoise_status.clear();
         }
         let mut display = display_settings(&self.display_settings);
         display.aov = self.aov_display;
@@ -905,7 +898,13 @@ impl Viewer {
             self.last_commit_full =
                 self.final_render().last_commit()? == Some(api::CommitKind::Full);
         }
-        if let Some(report) = self.final_render().denoise_report() {
+        let shown = self
+            .target
+            .render_loop
+            .presented_render()
+            .map(|render| render.as_ref())
+            .unwrap_or(self.final_render());
+        if let Some(report) = shown.denoise_report() {
             self.denoise_status = match report.error {
                 Some(error) => error,
                 // GPU callbacks return after submission; their CPU wall time
@@ -1216,16 +1215,22 @@ fn dropped_file(path: PathBuf) -> egui::DroppedFileHandle {
     std::sync::Arc::new(File(path))
 }
 fn default_model() -> PathBuf {
+    bundled_asset(
+        "sample.glb",
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb"),
+    )
+}
+fn bundled_asset(name: &str, fallback: PathBuf) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for path in [dir.join("../Resources/sample.glb"), dir.join("sample.glb")] {
+            for path in [dir.join("../Resources").join(name), dir.join(name)] {
                 if path.exists() {
                     return path;
                 }
             }
         }
     }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb")
+    fallback
 }
 fn smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
@@ -2697,6 +2702,28 @@ fn main() -> Result<()> {
         return smoke(&model, &out);
     }
 
+    // All UI choices must share the NGX-capable device. The optional app probes
+    // availability once at interactive startup; a failed probe keeps OIDN usable.
+    #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+    let (dlss, dlss_unavailable) = if let Some(filter) = dlss {
+        (Some(filter), None)
+    } else {
+        let directory = std::env::current_exe()?
+            .parent()
+            .context("Missing application directory")?
+            .to_owned();
+        if directory.join("mutracer_ngx.dll").is_file()
+            && directory.join("nvngx_dlssd.dll").is_file()
+        {
+            match dlss::Dlss::new(&directory, dlss_preset) {
+                Ok(filter) => (Some(filter), None),
+                Err(error) => (None, Some(format!("DLSS RR unavailable: {error:#}"))),
+            }
+        } else {
+            (None, Some("DLSS RR runtime files are missing".into()))
+        }
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_decorations(false)
@@ -2743,8 +2770,12 @@ fn main() -> Result<()> {
             theme::install(&cc.egui_ctx);
             let mut viewer = Viewer::new_on_device(&model, cc.wgpu_render_state.clone())?;
             #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
-            if let Some(filter) = dlss {
-                viewer.custom_denoiser = Some(filter);
+            {
+                viewer.custom_denoiser = dlss.map(|filter| filter as Arc<dyn api::CustomDenoiser>);
+                viewer.dlss_unavailable = dlss_unavailable;
+                if use_dlss {
+                    viewer.denoiser_choice = denoiser::Choice::Dlss;
+                }
             }
             if let Some(path) = startup_out {
                 viewer.size = [64, 48];

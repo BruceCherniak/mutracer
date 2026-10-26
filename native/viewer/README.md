@@ -43,9 +43,12 @@ denoising download or OIDN SDK at runtime.
 
 ### Optional DLSS Ray Reconstruction (Windows)
 
-The optional DLSS build includes `MuTracer-DLSS.cmd`. Open it to use RR on an
-NVIDIA RTX GPU with Vulkan. Opening `mutracer-viewer.exe` directly uses OIDN.
-Keep the supplied DLLs and licenses beside the executable.
+In the optional DLSS build, open `mutracer-viewer.exe` and choose **Render →
+Denoiser → Method → OIDN / DLSS RR**. OIDN is selected by default. DLSS RR needs
+an NVIDIA RTX GPU with Vulkan; an unavailable option shows the reason on hover.
+Keep the supplied DLLs and licenses beside the executable. The optional build
+uses an RR-capable Vulkan device when available so switching needs no restart.
+`MuTracer-DLSS.cmd` opens the same app with RR selected initially.
 
 RR runs at the selected render resolution (DLAA), including interactive previews.
 The **Denoise** switch enables or disables it. Depth of field uses OIDN;
@@ -168,10 +171,11 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   maximum samples, **Res** and denoise controls; its settings button opens
   **Render**. **Space** pauses or resumes models without animation; **D**
   toggles denoising.
-- Interaction renders a lower-resolution preview. When input stops, the image
-  converges at the selected resolution and settings. Sample counts, denoising
-  and export use that final image; export is available after one complete
-  sample. Pausing keeps the last image.
+- Interaction renders a lower-resolution, one-sample preview. With **Denoise**
+  enabled, OIDN and DLSS RR both filter these moving previews. OIDN uses its small
+  preview model and its standard model for final convergence. When input stops,
+  the image converges at the selected resolution and settings; export uses that
+  final image and is available after one complete sample. Pausing keeps the last image.
 - **Res**: 25%, 50% (default), 75% or 100% of the viewport's pixel size,
   including display scaling up to 2×, updated after resizing settles; or a
   fixed 720p, 1080p, 2K or 4K. The menu shows the output size, which PNG export
@@ -183,10 +187,10 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   exposure (1 is unchanged), contrast, saturation, temperature and tint, for
   both preview and export. **Output** selects Final, Normal or Albedo; guide
   channels skip color controls and denoising.
-- **Denoise** is on by default. It denoises final samples after
-  interaction pauses, using [oidn-webgpu](../docs/denoising.md#oidn-webgpu)
-  on the rendering GPU. Toggle it to compare;
-  export uses the latest denoised result when there is one.
+- **Denoise** is on by default for moving previews and final samples. OIDN uses
+  [oidn-webgpu](../docs/denoising.md#oidn-webgpu) on the rendering GPU; the optional
+  Windows build also offers DLSS RR in **Method**. Toggle it to compare; export
+  uses the latest denoised result when there is one.
 - **Ray tracing**: **HWRT** (default) or **Software**. The panel shows the path
   in use, any fallback reason and how many geometries use a software BVH.
 
@@ -199,8 +203,9 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   0.5×, 1× and 2×. Without looping, playback stops at the end and playing again
   restarts the clip.
 - Pausing rendering also pauses playback; playing a clip resumes rendering.
-  Each new pose restarts accumulation, so pause the animation to let the image
-  converge and denoise. Deforming large meshes can slow playback.
+  Each new pose restarts accumulation; live denoising also runs during playback.
+  Pause the animation to converge at the final settings. Deforming large meshes
+  can slow playback.
 
 ### Responsiveness
 
@@ -214,8 +219,8 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   while the previous image stays visible.
 - Color controls, the output channel and denoising change only the displayed
   image.
-- During continuous edits, new input waits for the current frame and any scene
-  preparation, then applies the latest state. CPU or GPU contention can still
+- During continuous edits, new input waits for the current frame, its preview
+  denoising and any scene preparation, then applies the latest state. CPU or GPU contention can still
   slow interaction; a lower resolution helps, and no frame rate is guaranteed.
 - The first denoise can be slower than later ones. A result for an older scene,
   camera or sample count never replaces the current preview.

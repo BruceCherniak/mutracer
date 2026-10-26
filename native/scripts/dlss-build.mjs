@@ -34,6 +34,8 @@ copyFileSync(resolve(sdk,'LICENSE.txt'),resolve(notices,'LICENSE.txt'));
 writeFileSync(resolve(app,'MuTracer-DLSS.cmd'),'@echo off\r\n"%~dp0mutracer-viewer.exe" --dlss-rr %*\r\nif errorlevel 1 pause\r\n');
 const binaries=['mutracer-viewer.exe','mutracer_ngx.dll','nvngx_dlssd.dll'];
 const sources=['native/host/src/api/temporal.rs','native/viewer/src/main.rs','native/viewer/src/dlss/mod.rs',
+  'native/viewer/src/ui.rs','native/viewer/src/denoiser.rs','native/viewer/src/dlss/smoke.rs',
+  'native/host/src/api/render_loop.rs','native/viewer/src/live_denoise_smoke.rs',
   'native/viewer/src/dlss/ffi.rs','native/viewer/src/dlss/gpu.rs','native/viewer/src/dlss/ngx.cpp',
   'native/viewer/src/dlss/prepare.wgsl','native/viewer/src/dlss/resolve.wgsl','native/scripts/dlss-build.mjs'];
 writeFileSync(resolve(app,'dlss-build.json'),JSON.stringify({sdk:'310.9.16',

@@ -130,6 +130,28 @@ pub fn run(dlss: &Arc<Dlss>, model_path: &Path, out: &Path) -> Result<()> {
         validate(&render.read_pixels(api::PixelKind::Denoised)?.data)?;
     }
     check_cancel_and_replace(dlss, &engine)?;
+    check_denoiser_selection(dlss, &engine)?;
+    let live_gate = Arc::new(mutracer_native_probe::submission::SubmissionGate::default());
+    let live_engine = api::Engine::on_device(
+        &gpu.adapter,
+        &gpu.device,
+        &gpu.queue,
+        api::EngineOptions::default(),
+        Some(live_gate.clone()),
+    );
+    let before_live = dlss.counts();
+    crate::live_denoise_smoke::run(
+        &live_engine,
+        &model,
+        Some(dlss.clone()),
+        Some(&live_gate),
+        &out.join("live"),
+    )?;
+    let after_live = dlss.counts();
+    ensure!(
+        after_live.0 >= before_live.0 + 13 && after_live.1 == before_live.1 + 2,
+        "Moving RR must reuse preview history, with only preview/final first-use resets: {before_live:?} -> {after_live:?}"
+    );
     if std::env::var_os("MUTRACER_DLSS_SMOKE_LARGE").is_some() {
         let size = [1920, 1080];
         engine.set_camera(None)?;
@@ -165,6 +187,71 @@ pub fn run(dlss: &Arc<Dlss>, model_path: &Path, out: &Path) -> Result<()> {
         serde_json::to_vec_pretty(&summary)?,
     )?;
     println!("{summary}");
+    Ok(())
+}
+fn check_denoiser_selection(dlss: &Arc<Dlss>, engine: &api::Engine) -> Result<()> {
+    let mut render_loop = api::RenderLoop::new(
+        engine,
+        api::RenderLoopOptions {
+            preview: Some(api::LoopRender::Settings(
+                crate::denoiser::preview_settings(),
+            )),
+            final_render: api::LoopRender::Settings(api::RenderSettings {
+                max_samples: 2,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )?;
+    let filter: Arc<dyn CustomDenoiser> = dlss.clone();
+    crate::denoiser::configure(&mut render_loop, true, true, Some(&filter))?;
+    finish(render_loop.final_render(), 2)?;
+    ensure!(
+        render_loop.final_render().denoise_report().unwrap().backend == "custom",
+        "RR selection did not install the custom filter"
+    );
+    ensure!(
+        render_loop.preview().unwrap().denoise_schedule()
+            == Some(api::DenoiseSchedule::EverySample),
+        "RR preview not enabled"
+    );
+    let raw = render_loop
+        .final_render()
+        .read_pixels(api::PixelKind::Hdr)?
+        .data;
+    for temporal in [false, true, false] {
+        crate::denoiser::configure(&mut render_loop, true, temporal, Some(&filter))?;
+        finish(render_loop.final_render(), 2)?;
+        let expected = if temporal { "custom" } else { "oidn-webgpu" };
+        ensure!(
+            render_loop.final_render().denoise_report().unwrap().backend == expected,
+            "Wrong backend after UI selection"
+        );
+        ensure!(
+            render_loop
+                .final_render()
+                .read_pixels(api::PixelKind::Hdr)?
+                .data
+                == raw,
+            "Denoiser selection changed accumulation"
+        );
+        ensure!(
+            render_loop.coalesce_scene_updates,
+            "Wrong preview scheduling after switch"
+        );
+        if !temporal {
+            ensure!(
+                render_loop.preview().unwrap().denoise_schedule()
+                    == Some(api::DenoiseSchedule::EverySample),
+                "OIDN live preview is not enabled"
+            );
+        }
+    }
+    crate::denoiser::configure(&mut render_loop, false, false, Some(&filter))?;
+    ensure!(
+        render_loop.final_render().denoise_schedule().is_none(),
+        "Denoise switch did not disable filtering"
+    );
     Ok(())
 }
 fn check_cancel_and_replace(dlss: &Arc<Dlss>, engine: &api::Engine) -> Result<()> {
