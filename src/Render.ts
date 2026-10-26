@@ -433,6 +433,8 @@ export default class Render {
     const limit = this._nextSampleTarget();
     if (this.samples < limit) {
       if (this._trace(target, limit)) return this._status = 'compiling';
+    } else if (target.refineAovs && !target.refineAovs(this._engine._inputs.value!)) {
+      return this._status = 'compiling';
     }
     this._maybeDenoise(false, limit);
     if (this._denoisePending) return this._status = this.converged ? 'denoising' : 'converging';

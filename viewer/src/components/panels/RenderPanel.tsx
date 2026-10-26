@@ -157,10 +157,6 @@ export function RenderPanel() {
       </Section>
 
       <Section title="Debug" icon={<Bug size={14} />} open={open.debug} onOpenChange={(v) => setOpen((o) => ({ ...o, debug: v }))}>
-        <Switch label="AOV channels" checked={s.aovsEnabled} onChange={(v) => update({ aovsEnabled: v, ...(!v && VIEWER_AOVS.includes(s.output as typeof VIEWER_AOVS[number]) ? {output: 'final' as const} : {}) })}>
-          <span className="field-label">AOV channels</span>
-        </Switch>
-        {s.aovsEnabled && <Hint>Adds surface tracing and GPU memory.</Hint>}
         <Field label="Output">
           <Select
             label="Output"
@@ -168,15 +164,15 @@ export function RenderPanel() {
             options={[
               { value: 'final', label: 'Final' }, { value: 'albedo', label: 'Albedo' },
               { value: 'normal', label: 'Normal' }, { value: 'shadow', label: 'Shadow' },
-              ...(s.aovsEnabled ? VIEWER_AOVS.map(value => ({value, label: ({depth: 'Depth', position: 'Position', roughness: 'Roughness', diffuseAlbedo: 'Diffuse reflectance', specularAlbedo: 'Specular reflectance', id: 'ID', motion: 'Motion'})[value]})) : [])
+              ...VIEWER_AOVS.map(value => ({value, label: ({depth: 'Depth', position: 'Position', roughness: 'Roughness', diffuseAlbedo: 'Diffuse reflectance', specularAlbedo: 'Specular reflectance', id: 'ID', motion: 'Motion'})[value]}))
             ]}
             onChange={(v) => update({ output: v })}
           />
         </Field>
-        {s.aovsEnabled && s.output === 'depth' && <Scrub label="Depth range" value={s.aovDepthFar} min={0.01} max={10000} log onChange={(v) => update({aovDepthFar: v})} />}
-        {s.aovsEnabled && s.output === 'position' && <Scrub label="Position scale" value={s.aovPositionScale} min={0.001} max={10000} log onChange={(v) => update({aovPositionScale: v})} />}
-        {s.aovsEnabled && s.output === 'motion' && <Scrub label="Motion scale" value={s.aovMotionScale} min={0.01} max={1000} log onChange={(v) => update({aovMotionScale: v})} />}
-        {s.aovsEnabled && s.output === 'id' && <Field label="ID component"><Select label="ID component" value={s.aovIdComponent} options={(['object', 'instance', 'material', 'primitive'] as const).map(value => ({value, label: value}))} onChange={(v) => update({aovIdComponent: v})} /></Field>}
+        {s.output === 'depth' && <Scrub label="Depth range" value={s.aovDepthFar} min={0.01} max={10000} log onChange={(v) => update({aovDepthFar: v})} />}
+        {s.output === 'position' && <Scrub label="Position scale" value={s.aovPositionScale} min={0.001} max={10000} log onChange={(v) => update({aovPositionScale: v})} />}
+        {s.output === 'motion' && <Scrub label="Motion scale" value={s.aovMotionScale} min={0.01} max={1000} log onChange={(v) => update({aovMotionScale: v})} />}
+        {s.output === 'id' && <Field label="ID component"><Select label="ID component" value={s.aovIdComponent} options={(['object', 'instance', 'material', 'primitive'] as const).map(value => ({value, label: value}))} onChange={(v) => update({aovIdComponent: v})} /></Field>}
         <Switch label="Interactive preview" checked={s.previewEnabled} onChange={(v) => update({ previewEnabled: v })}>
           <span className="field-label">Interactive preview</span>
         </Switch>

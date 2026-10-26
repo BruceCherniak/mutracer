@@ -38,9 +38,9 @@ describe('viewer URL settings', () => {
     expect(useViewer.getState().settings.hdrOutputEnabled).toBe(false);
   });
 
-  it('preserves explicit AOV opt-in and mapping settings in links', () => {
+  it('preserves AOV output and mappings while ignoring the retired opt-in flag', () => {
     expect(readURLSettings('?aovsEnabled=true&output=depth&aovDepthFar=20&aovIdComponent=primitive', ''))
-      .toEqual({aovsEnabled: true, output: 'depth', aovDepthFar: 20, aovIdComponent: 'primitive'});
+      .toEqual({output: 'depth', aovDepthFar: 20, aovIdComponent: 'primitive'});
     expect(readURLSettings('?aovPositionScale=0&aovMotionScale=Infinity&aovIdComponent=bad', '')).toEqual({});
   });
 

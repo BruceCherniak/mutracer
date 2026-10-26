@@ -20,7 +20,7 @@ vi.mock('../src/engine/environment', async (importOriginal) => ({
 }));
 import { ViewerEngine } from '../src/engine/ViewerEngine';
 import { Environment, loadHDR, type EquirectData } from '../src/engine/environment';
-import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../src/store';
+import { DEFAULT_SETTINGS, VIEWER_AOVS, setSettings, useViewer, type Settings } from '../src/store';
 
 // Exercise the real load/setModel/resetView path; replace GPU synchronization
 // and persistence with inert boundaries so these tests run without a device.
@@ -60,6 +60,21 @@ function model(count: number): LoadedModel {
 
 beforeEach(() => {
   useViewer.setState({ settings: { ...DEFAULT_SETTINGS }, toast: null, cameras: [] });
+});
+
+describe('AOV preview settings', () => {
+  it.each(['final', 'normal', 'albedo', 'shadow', 'shadowCatcher', ...VIEWER_AOVS] as const)(
+    'only requests the visible %s channel on both renders', output => {
+      const viewer = engine();
+      const final = { aovs: [] }, preview = { aovs: [] };
+      Object.assign(viewer, { engine: { display: {} }, final, preview });
+      const apply = viewer as unknown as { applySettings(s: Settings, previous: Settings): void };
+      const settings = { ...DEFAULT_SETTINGS, output };
+      apply.applySettings(settings, settings);
+      expect(final.aovs).toEqual(VIEWER_AOVS.filter(kind => kind === output));
+      expect(preview.aovs).toEqual(VIEWER_AOVS.filter(kind => kind === output));
+    }
+  );
 });
 
 describe('imported camera choice', () => {

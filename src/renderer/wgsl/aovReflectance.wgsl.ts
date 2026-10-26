@@ -1,20 +1,26 @@
-// Deterministic directional-hemispherical quadrature for the initial FP32 input
-// baseline. It evaluates the production BSDF, including its lobe weights and
-// energy compensation, without touching the path tracer's random stream.
-// This deliberately expensive opt-in baseline precedes LUT/performance work.
+// Directional-hemispherical quadrature of the supported unlayered OpenPBR
+// reflection lobes. Keep the original 256 cosine/VNDF proposals and weights;
+// evaluate diffuse and reflection together without traversing the full layered
+// BSDF twice. Callers reject coat, fuzz, anisotropy, SSS and thin film first.
 export default /* wgsl */ `
 struct MtReflectance {
   diffuse: vec3f,
   specular: vec3f,
 }
-fn mtFrameReflectance(prepared: OpenPbrPreparedBsdf) -> MtReflectance {
+fn mtFrameReflectanceComponents(prepared: OpenPbrPreparedBsdf, wantDiffuse: bool, wantSpecular: bool) -> MtReflectance {
   var result = MtReflectance();
   let view = prepared.viewLocal;
   if (view.z <= 1e-6) { return result; }
-  let alpha = vec2f(prepared.material.alphaX, prepared.material.alphaY);
-  // Balanced cosine/VNDF proposals cover diffuse, smooth reflection and the
-  // broad multiple-scattering tails. Rejected VNDF proposals contribute zero;
-  // they must not be removed from the denominator.
+  let material = prepared.material;
+  let alpha = vec2f(material.alphaX, material.alphaY);
+  let viewMasking = sampling_ggx_smith_g1(view, alpha);
+  let diffuseWeight = prepared.weights[OPENPBR_LOBE_DIFFUSE];
+  let metalWeight = prepared.weights[OPENPBR_LOBE_METAL];
+  let specularWeight = prepared.weights[OPENPBR_LOBE_SPECULAR];
+  var dielectricAverageLoss = 1.0;
+  if (wantSpecular && prepared.dielectricMsProbability > 0.0) {
+    dielectricAverageLoss = max(openpbr_ideal_dielectric_average_loss(prepared.refractionEtaTOverEtaI, prepared.specularAlpha), 1e-12);
+  }
   let count = 256u * min(rtUniform.loopUnrollGuard, 4u) / 4u;
   for (var i = 0u; i < count; i++) {
     let pair = i / 2u;
@@ -25,26 +31,55 @@ fn mtFrameReflectance(prepared: OpenPbrPreparedBsdf) -> MtReflectance {
       let half = sampling_ggx_visible_normal(view, alpha, u);
       light = reflect(-view, half);
     }
+    // Rejected VNDF proposals retain their weight in the denominator.
     if (light.z <= 0.0) { continue; }
     let half = normalize(view + light);
-    let specularPdf = sampling_ggx_smith_g1(view, alpha)
-      * sampling_ggx_ndf(half, alpha) / (4.0 * view.z);
+    let specularPdf = viewMasking * sampling_ggx_ndf(half, alpha) / (4.0 * view.z);
     let pdf = 0.5 * (light.z * INVPI + specularPdf);
-    let direction = openpbr_to_world(prepared.basis, light);
-    var values: array<vec3f, 2>;
-    // Keep a single evaluation call site instead of duplicating the optical
-    // graph. This loop is dynamic to avoid driver unrolling of that graph.
-    for (var layer = 0u; layer < min(2u, rtUniform.loopUnrollGuard); layer++) {
+    // Preserve the production evaluator's frame round trip, including FP32
+    // rounding near narrow highlights. Proposal PDFs use the original light.
+    let evaluatedLight = openpbr_to_local(prepared.basis, openpbr_to_world(prepared.basis, light));
+    if (evaluatedLight.z <= 0.0) { continue; }
+    let scale = abs(evaluatedLight.z) / (pdf * f32(count));
+    if (wantDiffuse && diffuseWeight > 0.0) {
+      let compensation = prepared.diffuseSpecularEnergyCompensation * openpbr_opaque_energy_complement(
+        prepared.specularEtaTOverEtaI, prepared.specularAlpha, abs(evaluatedLight.z));
       var unusedPdf = 0.0;
-      let lobe = select(OPENPBR_LOBE_DIFFUSE, -1, layer == 1u);
-      values[layer] = openpbr_eval_prepared_lobe(prepared, direction, lobe, &unusedPdf);
+      result.diffuse += diffuseWeight * openpbr_eval_diffuse(material, prepared.diffuseColor,
+        view, evaluatedLight, compensation, &unusedPdf) * scale;
     }
-    // The production evaluator already returns BSDF * abs(N dot L).
-    let scale = 1.0 / (pdf * f32(count));
-    result.diffuse += values[0] * scale;
-    // All reflection, including conductor/dielectric multiple scattering.
-    result.specular += (values[1] - values[0]) * scale;
+    if (wantSpecular) {
+      let evaluatedHalf = normalize(view + evaluatedLight);
+      let viewHalf = abs(dot(view, evaluatedHalf));
+      var fresnel = vec3f(0.0);
+      if (specularWeight > 0.0) {
+        var dielectric = vec3f(openpbr_dielectric_fresnel(viewHalf, material.relativeIor));
+        if (material.thinWalled) { dielectric = openpbr_thin_wall_reflection_coefficient(dielectric, material.transmissionWeight); }
+        fresnel += specularWeight * material.specularColor * dielectric;
+      }
+      if (metalWeight > 0.0) {
+        fresnel += metalWeight * material.specularWeight * openpbr_metal_fresnel(viewHalf,
+          material.baseWeight * material.baseColor, material.specularColor);
+      }
+      let microfacet = sampling_ggx_ndf(evaluatedHalf, alpha) * viewMasking
+        * sampling_ggx_smith_g1(evaluatedLight, alpha) / (4.0 * max(evaluatedLight.z * view.z, 1e-8));
+      var reflection = fresnel * microfacet;
+      if (metalWeight > 0.0 && prepared.metalMsFactor > 0.0) {
+        let factor = min(prepared.metalMsFactor * openpbr_metal_energy_complement(prepared.specularAlpha, evaluatedLight.z), 1.0 / max(evaluatedLight.z, 1e-8));
+        reflection += metalWeight * prepared.metalMsScale * factor * INVPI;
+      }
+      if (prepared.dielectricMsProbability > 0.0) {
+        let factors = prepared.dielectricMsViewLoss * openpbr_ideal_dielectric_loss(
+          prepared.refractionEtaTOverEtaI, prepared.specularAlpha, abs(evaluatedLight.z)) / dielectricAverageLoss;
+        let factor = min(factors * prepared.dielectricMsReflectionRatio, 1.0 / abs(evaluatedLight.z));
+        reflection += prepared.dielectricMsReflectionScale * factor * INVPI;
+      }
+      result.specular += reflection * scale;
+    }
   }
   return result;
+}
+fn mtFrameReflectance(prepared: OpenPbrPreparedBsdf) -> MtReflectance {
+  return mtFrameReflectanceComponents(prepared, true, true);
 }
 `;

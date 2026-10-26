@@ -45,18 +45,24 @@ describe('AOV display channels', () => {
     const loop = new RenderLoop(engine, {preview: false, final: {maxSamples: 1}});
     expect(loop.tick()).toBe('finished');
     const target = targets[0];
-    target.aovReady = kind => !!vi.mocked(target.configure).mock.calls.at(-1)?.[0].aovs?.includes(kind);
+    let ready = false;
+    target.aovReady = kind => ready && !!vi.mocked(target.configure).mock.calls.at(-1)?.[0].aovs?.includes(kind);
+    target.refineAovs = vi.fn().mockReturnValueOnce(false).mockImplementation(() => { ready = true; return true; });
     loop.final.aovs = ['depth']; engine.display.channel = 'depth';
     const draws = vi.mocked(target.drawPostProcess).mock.calls.length;
     expect(engine.display.present(loop.final)).toBeUndefined();
     expect(target.drawPostProcess).toHaveBeenCalledTimes(draws);
+    expect(loop.tick()).toBe('compiling');
     expect(loop.tick()).toBe('finished');
-    expect(target.trace).toHaveBeenCalledTimes(2);
+    expect(target.refineAovs).toHaveBeenCalledTimes(2);
+    expect(loop.final.samples).toBe(1);
+    expect(target.restartSamples).toHaveBeenCalledOnce();
+    expect(target.trace).toHaveBeenCalledOnce();
     const present = vi.mocked(target.present).mock.calls.length;
     engine.display.aovDepthRange = [0, 20];
     expect(loop.tick()).toBe('finished');
     expect(vi.mocked(target.present).mock.calls.length).toBeGreaterThan(present);
-    expect(target.trace).toHaveBeenCalledTimes(2);
+    expect(target.trace).toHaveBeenCalledOnce();
     loop.dispose(); engine.dispose();
   });
   it('validates mappings and packs integer lanes separately from float32 ranges', () => {

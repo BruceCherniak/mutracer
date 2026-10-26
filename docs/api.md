@@ -310,7 +310,7 @@ makes a CPU copy and can be costly; avoid calling it every animation frame.
 
 ### Surface outputs
 
-Enable AOVs on each render before sampling:
+Request only the surface outputs you need on each render:
 
 ```ts
 const render = new Render(engine, {
@@ -320,6 +320,10 @@ await render.converge({samples: 64});
 const depth = await render.readPixels('depth'); // Float32Array, RGBA
 const ids = await render.readPixels('id');      // Uint32Array, RGBA
 ```
+
+You can change `render.aovs` or `render.aovSamples` after sampling. Continue
+calling `refine()` to regenerate AOVs for the current view; beauty samples and
+completed denoising are preserved. AOV accumulation restarts when either changes.
 
 | Kind | RGBA contents |
 | --- | --- |
@@ -355,7 +359,7 @@ topology or vertex positions, and failed visibility correspondence invalidate
 motion. Device recovery also clears history. Deformed vertices have no motion
 estimate; validity 0 must not be treated as a stationary surface.
 
-The new reflectance outputs are separate from the existing OIDN `albedo` guide.
+Reflectance outputs are separate from the existing OIDN `albedo` guide.
 Coat, fuzz, anisotropy, subsurface/volume scattering, bevel, thin film,
 dispersion, partial alpha and nonstandard materials are unsupported by this
 reflectance estimate. Such hits contribute to `roughness.b` and have zero

@@ -1,5 +1,7 @@
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WGPUAov} from './WGPUAov.js';
+import {aovMask} from './aov.js';
+import {scheduleFrame} from '../util/frame.js';
 import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
@@ -832,6 +834,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       sampleCount = 0;
       return true;
     }
+    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs)) return true;
 
     // Keep the last completed denoise visible while a static while-converging batch
     // accumulates, including the incomplete first sample after a scene edit.
@@ -1483,8 +1486,15 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin'] as const;
       if (!execution || timingKeys.some(key => execution![key] !== settings[key])) invalidateTilePrediction();
       if (settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16) < 1)) throw new RangeError('aovSamples must be a positive integer');
-      execution = { ...settings };
-      if (!settings.aovs?.length) { aov.dispose(); aov.history.clear(); aov.width = aov.height = 0; aov.reset(); }
+      const previousMask = aovMask(execution?.aovs ?? []), nextMask = aovMask(settings.aovs ?? []);
+      if (previousMask !== nextMask || execution?.aovSamples !== settings.aovSamples) aov.samples = 0;
+      execution = { ...settings, aovs: [...(settings.aovs ?? [])] };
+      // Presentation may still name the previous preview's AOV. Drop that
+      // selection before tracing with a smaller set; Display validates and
+      // reapplies the current channel when the new image is presented.
+      const displayedAov = displayAovKind(output);
+      if (displayedAov && !settings.aovs?.includes(displayedAov)) output = 'final';
+      if (previousMask && !nextMask) { aov.dispose(); aov.history.clear(); aov.width = aov.height = 0; aov.reset(); }
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
       allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
@@ -1572,10 +1582,20 @@ width: renderWidth, height: renderHeight,
       } finally { buffer.unmap(); buffer.destroy(); }
     },
     aovReady(kind) { return !!execution?.aovs?.includes(kind) && aov.samples > 0; },
+    refineAovs(camera) {
+      if (sampleCount > 0 && execution?.aovs?.length) {
+        rayTracePass.setCamera(camera);
+        return rayTracePass.renderAovs(aov, camera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
+      }
+      return true;
+    },
     async readAov(kind) {
       if (!execution?.aovs?.includes(kind) || !aovCamera || sampleCount < 1) throw new Error('AOV output is not ready');
       rayTracePass.setCamera(aovCamera);
-      rayTracePass.renderAovs(aov, aovCamera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
+      while (!rayTracePass.renderAovs(aov, aovCamera, sampleCount, execution.aovSamples ?? 16, execution.aovs)) {
+        if (disposed) throw new Error('AOV compilation was interrupted');
+        await new Promise<void>(resolve => scheduleFrame(() => resolve()));
+      }
       return aov.read(kind);
     },
     async readOutput(kind) {

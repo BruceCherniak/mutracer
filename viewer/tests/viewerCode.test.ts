@@ -72,14 +72,24 @@ describe('viewer code snippet', () => {
   });
 
   it('declares AOVs on both renders and retains the display mapping', () => {
-    const code = generateCode(snapshot({aovsEnabled: true, output: 'depth', aovDepthFar: 20}));
+    const code = generateCode(snapshot({output: 'depth', aovDepthFar: 20}));
     expect(syntaxErrors(code)).toEqual([]);
     expect(code).toContain("channel: 'depth'");
     expect(code).toMatch(/aovDepthRange: \[0,\s*20\]/);
     expect(code.match(/aovs: \[/g)).toHaveLength(2);
-    const disabled = generateCode(snapshot({aovsEnabled: false, output: 'depth'}));
-    expect(disabled).not.toContain("channel: 'depth'");
-    expect(disabled).not.toContain('aovs:');
+    expect(code).toContain("preview: { aovs: ['depth'],");
+    expect(code).not.toContain("aovs: ['depth',");
+  });
+
+  it('omits preview AOV passes for beauty and only integrates reflectance when displayed', () => {
+    const beauty = generateCode(snapshot({output: 'final'}));
+    expect(syntaxErrors(beauty)).toEqual([]);
+    expect(beauty).not.toContain('aovs:');
+    for (const output of ['diffuseAlbedo', 'specularAlbedo'] as const) {
+      const code = generateCode(snapshot({output}));
+      expect(syntaxErrors(code)).toEqual([]);
+      expect(code).toContain(`preview: { aovs: ['${output}'],`);
+    }
   });
 
   it('uses JNLM on WebGL like the viewer', () => {

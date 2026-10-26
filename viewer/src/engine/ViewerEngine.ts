@@ -633,7 +633,7 @@ export class ViewerEngine {
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
     const r = this.final, display = this.engine.display;
     this.engine.bvhBuilder = s.bvhBuilder;
-    r.aovs = this.preview.aovs = s.aovsEnabled ? VIEWER_AOVS : [];
+    r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
     r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = s.resolutionScale;
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
@@ -648,7 +648,7 @@ export class ViewerEngine {
       contrast: s.contrast, saturation: s.saturation,
       temperature: s.temperature, tint: s.tint,
       bloomIntensity: s.bloomIntensity, bloomThreshold: s.bloomThreshold, bloomRadius: s.bloomRadius,
-      vignette: s.vignette, channel: !s.aovsEnabled && VIEWER_AOVS.includes(s.output as typeof VIEWER_AOVS[number]) ? 'final' : s.output, shadowCatcherAlpha: s.groundOpacity,
+      vignette: s.vignette, channel: s.output, shadowCatcherAlpha: s.groundOpacity,
       aovDepthRange: [0, s.aovDepthFar], aovPositionScale: s.aovPositionScale,
       aovMotionScale: s.aovMotionScale, aovIdComponent: s.aovIdComponent,
     };

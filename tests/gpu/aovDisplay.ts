@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Engine, Render, THREESync, fromTHREECamera, type AovKind } from '../../src/main.js';
 async function capture() {
+  const mark = (stage: string) => { document.querySelector('#result')!.textContent = `Running: ${stage}`; };
   const engine = new Engine({ canvas: document.createElement('canvas'), backend: location.search.includes('webgl') ? 'webgl' : 'webgpu' });
   const render = new Render(engine, { width: 48, height: 32, bounces: 1 });
   const root = new THREE.Scene(), mesh = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshStandardMaterial({ roughness: .4, metalness: .2 }));
@@ -20,8 +21,10 @@ async function capture() {
   const check = (yes: boolean, msg: string) => { if (!yes)
     throw Error(msg); };
   try {
+    mark("initializing");
     await engine.init();
     engine.device?.addEventListener('uncapturederror', e => errors.push((e as GPUUncapturedErrorEvent).error.message));
+    mark(`converging ${engine.display.channel}`);
     await render.converge({ samples: 4 });
     const baseline = await render.readPixels('hdr');
     engine.display.channel = 'depth';
@@ -40,6 +43,7 @@ async function capture() {
     engine.update();
     const kinds: AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'];
     render.aovs = kinds;
+    mark(`converging ${engine.display.channel}`);
     await render.converge({ samples: 4 });
     const hdr = await render.readPixels('hdr');
     check(hdr.data.every((v, i) => Object.is(v, baseline.data[i])), 'Enabling AOV changed HDR');
@@ -49,6 +53,7 @@ async function capture() {
     const shown: Record<string, number[]> = {};
     const sampleCount = render.samples;
     for (const kind of kinds) {
+      mark(`displaying ${kind}`);
       engine.display.channel = kind;
       engine.display.present(render);
       const image = await render._output!.readPresentation();
@@ -100,6 +105,7 @@ async function capture() {
     camera.updateMatrixWorld();
     engine.camera = fromTHREECamera(camera);
     engine.update();
+    mark(`converging ${engine.display.channel}`);
     await render.converge({ samples: 4 });
     engine.display.channel = 'motion';
     engine.display.present(render);
@@ -109,6 +115,7 @@ async function capture() {
     engine.display.channel = 'final';
     source.materials[0].coatWeight = .5;
     engine.update();
+    mark(`converging ${engine.display.channel}`);
     await render.converge({ samples: 4 });
     engine.display.channel = 'diffuseAlbedo';
     engine.display.present(render);
@@ -116,6 +123,7 @@ async function capture() {
     mesh.scale.setScalar(.1);
     sync.update();
     engine.update();
+    mark(`converging ${engine.display.channel}`);
     await render.converge({ samples: 4 });
     engine.display.channel = 'depth';
     engine.display.aovDepthRange = [0, 10];
@@ -155,8 +163,42 @@ async function capture() {
     const hdrExport = (await render._output!.readPresentation()).data;
     for (let o = 0; o < edges.data.length; o += 4)
       check(close(hdrExport[o], edges.data[o + 3] > 0 ? edges.data[o] / 10 : 0), 'HDR/SDR AOV color consistency');
+    // Generate newly selected AOVs without retracing beauty or dropping a
+    // completed filter. Include both reflection components independently.
+    source.materials[0].coatWeight = 0;
+    engine.update();
+    mark("loading JNLM");
+    await render.setDenoiser({type: 'jnlm'});
+    mark("converging JNLM");
+    await render.converge({samples: 4});
+    render.maxSamples = render.samples;
+    const retainedSamples = render.samples;
+    const retainedHdr = (await render.readPixels('hdr')).data;
+    const retainedDenoised = (await render.readPixels('denoised')).data;
+    const combinedDiffuse = (await render.readPixels('diffuseAlbedo')).data;
+    const combinedSpecular = (await render.readPixels('specularAlbedo')).data;
+    for (const channel of ['id', 'final', 'depth', 'diffuseAlbedo', 'specularAlbedo'] as const) {
+      mark(`demand ${channel}`);
+      render.aovs = channel === 'final' ? [] : [channel];
+      engine.display.channel = channel;
+      const start = performance.now();
+      for (;;) {
+        check(render.refine() !== 'error', 'Retired AOV selection broke refinement');
+        if (engine.display.present(render)) break;
+        check(performance.now() - start < 30000, 'Timed out generating selected AOV');
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      }
+      check(render.samples === retainedSamples, 'AOV selection retraced beauty');
+      check((await render.readPixels('hdr')).data.every((v, i) => Object.is(v, retainedHdr[i])), 'AOV selection changed beauty');
+      check((await render.readPixels('denoised')).data.every((v, i) => Object.is(v, retainedDenoised[i])), 'AOV selection changed completed denoising');
+      if (channel === 'diffuseAlbedo' || channel === 'specularAlbedo') {
+        const expected = channel === 'diffuseAlbedo' ? combinedDiffuse : combinedSpecular;
+        check((await render.readPixels(channel)).data.every((v, i) => Math.abs(v - expected[i]) < 1e-5), 'Individual reflectance differs from combined output');
+      }
+      check((await render._output!.readPresentation()).data.every(Number.isFinite), 'Reduced AOV preview was not finite');
+    }
     check(errors.length === 0, errors.join('\n'));
-    return { backend: engine.backend, hdr: Array.from(hdr.data), shown, primitiveColors: colors.size, missingRejected: missing, samplesUnchanged: true, png: true, partialCoverage: partial, transparentPixels: background };
+    return { backend: engine.backend, hdr: Array.from(hdr.data), shown, primitiveColors: colors.size, missingRejected: missing, samplesUnchanged: true, png: true, reducedAovPreview: true, partialCoverage: partial, transparentPixels: background };
   }
   finally {
     render.dispose();

@@ -1,5 +1,6 @@
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WebGLAov} from './WebGLAov.js';
+import {aovMask} from './aov.js';
 import {scheduleFrame} from '../util/frame.js';
 import type {DenoiserHandle} from './denoiser.js';
 import { WebGLScratchCopy } from './WebGLScratchCopy.js';
@@ -406,8 +407,14 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     synchronizeBackground() { },
     configure(settings: TraceSettings) {
       if(settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16)<1)) throw new RangeError('aovSamples must be a positive integer');
-      execution = { ...settings };
-      if(!settings.aovs?.length){aov.dispose();aov.history.clear();aov.width=aov.height=0;aov.reset();}
+      const previousMask = aovMask(execution?.aovs ?? []), nextMask = aovMask(settings.aovs ?? []);
+      if (previousMask !== nextMask || execution?.aovSamples !== settings.aovSamples) aov.samples = 0;
+      execution = { ...settings, aovs: [...(settings.aovs ?? [])] };
+      // A reduced preview set can retire the previously displayed AOV before
+      // Display applies its next channel after tracing.
+      const displayedAov = displayAovKind(output);
+      if (displayedAov && !settings.aovs?.includes(displayedAov)) output = 'final';
+      if(previousMask && !nextMask){aov.dispose();aov.history.clear();aov.width=aov.height=0;aov.reset();}
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
       allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
@@ -560,6 +567,11 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       return { width, height, data: readRgbaPixels(renderer.gl, width, height, presentationTexture.isByteEncoded) };
     },
     aovReady(kind) { return !!execution?.aovs?.includes(kind) && aov.samples > 0; },
+    refineAovs(camera) {
+      if (sampleCount < 1 || !execution?.aovs?.length) return true;
+      rayTracePass.setCamera(camera);
+      return rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
+    },
     async readAov(kind) {
       if(!execution?.aovs?.includes(kind) || !aovCamera || sampleCount<1) throw new Error('AOV output is not ready');
       rayTracePass.setCamera(aovCamera);

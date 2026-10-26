@@ -1,3 +1,4 @@
+import {AovPrimitiveCache} from './AovPrimitiveCache.js';
 import {WGPUAov} from './WGPUAov.js';
 import {packAovScene} from './aovScene.js';
 import {aovMask, type AovKind} from './aov.js';
@@ -173,6 +174,7 @@ export function packAnalyticsLightsToBuffer(lights: AnalyticLight[], texturesInd
 }
 
 class WGPURayTracePass {
+  private _aovPrimitiveCache = new AovPrimitiveCache();
   private _device!: GPUDevice;
   private _rayTracePipeline?: GPUComputePipeline;
   private _targetAspect = 1;
@@ -350,9 +352,9 @@ class WGPURayTracePass {
   private _needsUpdateBindGroups = true;
 
   private _computeShaderModule?: GPUShaderModule;
-  private _aovTrace?: GPUComputePipeline;
-  private _aovCenter?: GPUComputePipeline;
-  private _aovTraceSource?: GPUComputePipeline;
+  private _aovPipelines = new WeakMap<GPUComputePipeline, Map<boolean, {
+    accumulation?: GPUComputePipeline; center?: GPUComputePipeline; error?: unknown;
+  }>>();
   private _depthCompute?: GPUProgrammableStage;
   private _depthTracePipeline?: GPUComputePipeline;
   private _depthPipeline?: Promise<GPUComputePipeline>;
@@ -1067,12 +1069,18 @@ class WGPURayTracePass {
     }
   }
 
-  renderAovs(state: WGPUAov, camera: Camera, samples: number, cap: number, kinds: readonly AovKind[]) {
-    const trace = this._rayTracePipeline, groups = this._rayTraceBindGroups;
-    if (!trace || !groups || !this._depthCompute || !this._tlas || !this._preparedMeshData || !kinds.length) return;
-    state.resize(this._width, this._height);
-    const textures = this._bindless, groupIndex = textures ? 2 : 3;
-    if (this._aovTraceSource !== trace) {
+  private _prepareAovPipelines(kinds: readonly AovKind[]) {
+    const trace = this._rayTracePipeline;
+    if (!trace || !this._depthCompute) return;
+    const reflectance = (aovMask(kinds) & 24) !== 0;
+    let variants = this._aovPipelines.get(trace);
+    if (!variants) { variants = new Map(); this._aovPipelines.set(trace, variants); }
+    let pipelines = variants.get(reflectance);
+    if (!pipelines) {
+      pipelines = {};
+      variants.set(reflectance, pipelines);
+      const pending = pipelines;
+      const textures = this._bindless, groupIndex = textures ? 2 : 3;
       const output = this._device.createBindGroupLayout({entries: [
         {binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}},
         {binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}},
@@ -1082,13 +1090,35 @@ class WGPURayTracePass {
       ]});
       const descriptor = {bindGroupLayouts: Array.from({length: groupIndex}, (_, i) => trace.getBindGroupLayout(i)).concat(output)};
       const layout = this._device.createPipelineLayout(textures ? resourceTableLayout(descriptor) : descriptor);
-      const compute = {...this._depthCompute, constants: {...this._depthCompute.constants, DEPTH_QUERY_MODE: 1}};
-      this._aovTrace = this._device.createComputePipeline({label: 'AOV accumulation', layout, compute: {...compute, entryPoint: 'aovTrace'}});
-      this._aovCenter = this._device.createComputePipeline({label: 'AOV center', layout, compute: {...compute, entryPoint: 'aovTraceCenter'}});
-      this._aovTraceSource = trace;
+      const compute = {...this._depthCompute, constants: {...this._depthCompute.constants, DEPTH_QUERY_MODE: 1, AOV_REFLECTANCE: reflectance ? 1 : 0}};
+      // Keep the UI responsive during first use, and reuse both variants across
+      // preview/final target changes rather than recreating synchronous pipelines.
+      void Promise.all([
+        this._shaderCache.createComputePipelineAsync({label: 'AOV accumulation', layout, compute: {...compute, entryPoint: 'aovTrace'}}),
+        this._shaderCache.createComputePipelineAsync({label: 'AOV center', layout, compute: {...compute, entryPoint: 'aovTraceCenter'}})
+      ]).then(([accumulation, center]) => { pending.accumulation = accumulation; pending.center = center; },
+        error => { pending.error = error; });
     }
+    if (pipelines.error) throw pipelines.error;
+    return pipelines;
+  }
+
+  prepareAovs(kinds: readonly AovKind[]) {
+    const pipelines = this._prepareAovPipelines(kinds);
+    return !!pipelines?.accumulation && !!pipelines.center;
+  }
+
+  renderAovs(state: WGPUAov, camera: Camera, samples: number, cap: number, kinds: readonly AovKind[]) {
+    const groups = this._rayTraceBindGroups;
+    if (!groups || !this._tlas || !this._preparedMeshData || !kinds.length) return false;
+    const pipelines = this._prepareAovPipelines(kinds);
+    if (!pipelines?.accumulation || !pipelines.center) return false;
+    state.resize(this._width, this._height);
+    const textures = this._bindless, groupIndex = textures ? 2 : 3;
+    const target = Math.min(samples, cap);
+    if (state.centerReady && state.samples >= target) return true;
     if (!state.frame) {
-      const packed = packAovScene(this._preparedMeshData, this._tlas, camera, this._width, this._height, state.history);
+      const packed = packAovScene(this._preparedMeshData, this._tlas, camera, this._width, this._height, state.history, this._aovPrimitiveCache.get(this._preparedMeshData, this._tlas));
       state.frame = packed.frame; state.setScene(packed.words);
     }
     this._device.queue.writeBuffer(this._uniforms.rtUniform, 0, this._rtUniform.buffer);
@@ -1108,9 +1138,10 @@ class WGPURayTracePass {
       pass.setBindGroup(groupIndex, output); pass.dispatchWorkgroups(Math.ceil(state.width/8), Math.ceil(state.height/8)); pass.end();
       device.queue.submit([encoder.finish()]); parameters.destroy();
     };
-    if (!state.centerReady) { run(this._aovCenter!, 0); state.centerReady = true; state.history.accept(state.frame); }
-    const target = Math.min(samples, cap);
-    while (state.samples < target) { run(this._aovTrace!, state.samples); state.samples++; }
+    if (!state.centerReady) { run(pipelines.center, 0); state.centerReady = true; state.history.accept(state.frame); }
+    if ((aovMask(kinds) & 31) === 0) state.samples = target;
+    while (state.samples < target) { run(pipelines.accumulation, state.samples); state.samples++; }
+    return true;
   }
 
   async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {

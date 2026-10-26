@@ -35,7 +35,7 @@ const parsers = {
   exposure: number(0), contrast: number(0), saturation: number(0), temperature: number(-1, 1), tint: number(-1, 1),
   bloomIntensity: number(0), bloomThreshold: number(0), bloomRadius: number(0, 1), vignette: number(0, 1),
   output: choice('final', 'albedo', 'normal', 'shadow', 'depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'),
-  aovsEnabled: boolean, aovDepthFar: number(0.01, 10000), aovPositionScale: number(0.001, 10000), aovMotionScale: number(0.01, 1000), aovIdComponent: choice('object', 'instance', 'material', 'primitive'), previewEnabled: boolean, previewMaxResolutionScale: number(Number.MIN_VALUE, 1)
+  aovDepthFar: number(0.01, 10000), aovPositionScale: number(0.001, 10000), aovMotionScale: number(0.01, 1000), aovIdComponent: choice('object', 'instance', 'material', 'primitive'), previewEnabled: boolean, previewMaxResolutionScale: number(Number.MIN_VALUE, 1)
 } satisfies Partial<Record<keyof Settings, Parser>>;
 
 export const URL_SETTINGS_FIELDS = Object.keys(parsers) as (keyof typeof parsers)[];

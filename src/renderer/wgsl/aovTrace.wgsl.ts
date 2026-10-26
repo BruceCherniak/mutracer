@@ -1,6 +1,7 @@
 // These entry points use their own output bindings and never mutate beauty RNG
 // state or accumulation. Storage usage remains four scene + three AOV buffers.
 export default /* wgsl */ `
+override AOV_REFLECTANCE: bool = true;
 struct AovAccumulation {
   depthRoughness: vec4f,
   position: vec4f,
@@ -63,7 +64,7 @@ fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
       (material.bevel > 0.0) | (material.thinFilmWeight > 0.0) |
       (material.transmissionDispersionScale > 0.0);
   aovAccum[index].depthRoughness += vec4f(depth, material.specularRoughness, material.baseMetalness, select(0.0,1.0,unsupported));
-  if ((aovParameters.w & 24u) != 0u && !unsupported) {
+  if (AOV_REFLECTANCE && (aovParameters.w & 24u) != 0u && !unsupported) {
     var normal=si.normal; var face=si.faceNormal;
     var cosine=-dot(normal,ray.d); var faceCosine=-dot(face,ray.d);
     if (material.thinWalled && (material.transmissionWeight>0.0 || material.subsurfaceWeight>0.0)) {
@@ -75,7 +76,7 @@ fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
     material.inside=(cosine<=0.0) && !material.thinWalled;
     material.relativeIor=select(material.specularIor,1.0/material.specularIor,cosine>0.0);
     let prepared=openpbr_prepare(si.tangent,material,-ray.d,normal);
-    let reflectance=mtFrameReflectance(prepared);
+    let reflectance=mtFrameReflectanceComponents(prepared, (aovParameters.w & 8u) != 0u, (aovParameters.w & 16u) != 0u);
     aovAccum[index].diffuse+=vec4f(reflectance.diffuse,1.0);
     aovAccum[index].specular+=vec4f(reflectance.specular,1.0);
   }

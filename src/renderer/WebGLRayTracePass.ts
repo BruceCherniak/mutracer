@@ -1,3 +1,4 @@
+import {AovPrimitiveCache} from './AovPrimitiveCache.js';
 import {aovTraceFragment} from './glsl/aovTrace.frag.js';
 import {WebGLAov} from './WebGLAov.js';
 import {packAovScene} from './aovScene.js';
@@ -131,6 +132,7 @@ function packLightsToTexture(
 // TODO use one method to set all required properties.
 // Ensure necessary properties are set.
 class WebGLRayTracePass {
+  private _aovPrimitiveCache = new AovPrimitiveCache();
   private readonly _renderer: WebGLRenderer;
   private _meshes: Mesh[] = [];
   private _sceneEnvironment = new SceneEnvironmentCache();
@@ -1078,7 +1080,8 @@ class WebGLRayTracePass {
     const gl = this._renderer.gl;
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
     this.prepare(); state.resize(width,height);
-    if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history); state.frame=packed.frame; state.setScene(packed.words); }
+    this._aovPass.setDefines({AOV_REFLECTANCE: (aovMask(kinds) & 24) !== 0});
+    if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history,this._aovPrimitiveCache.get(this._preparedMeshData,this._tlas)); state.frame=packed.frame; state.setScene(packed.words); }
     this._aovCenter.setUniform('aovScene',state.scene); this._aovCenter.setUniform('previousId',state.previousCenter!.id);this._aovCenter.setUniform('previousMotion',state.previousCenter!.motion); this._aovPass.setUniform('aovScene',state.scene);
     this._aovCenter.setSize(width,height); this._aovPass.setSize(width,height);
     const previous=state.accumulation[(state.samples+1)%2];
@@ -1092,6 +1095,7 @@ class WebGLRayTracePass {
     if (!this.prepareAovs(state,camera,width,height,kinds)) return false;
     if (!state.centerReady) {this._aovCenter.createPass({},state.center);state.centerReady=true;state.history.accept(state.frame!);}
     const target=Math.min(samples,cap);
+    if ((aovMask(kinds) & 31) === 0) state.samples = target;
     while(state.samples<target){
       const output=state.accumulation[state.samples%2], previous=state.accumulation[(state.samples+1)%2];
       this._aovPass.setUniform('aovMask',aovMask(kinds));

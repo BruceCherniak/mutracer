@@ -77,7 +77,6 @@ export interface Settings {
   bloomRadius: number;
   vignette: number;
   output: DisplayChannel;
-  aovsEnabled: boolean;
   aovDepthFar: number;
   aovPositionScale: number;
   aovMotionScale: number;
@@ -150,7 +149,6 @@ export const DEFAULT_SETTINGS: Settings = {
   bloomRadius: 0.6,
   vignette: 0,
   output: 'final',
-  aovsEnabled: false,
   aovDepthFar: 10,
   aovPositionScale: 1,
   aovMotionScale: 16,

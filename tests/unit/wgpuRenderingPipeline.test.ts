@@ -39,6 +39,8 @@ const mocks = vi.hoisted(() => {
   class TracePass extends Pass {
     static latest: TracePass;
     constructor() { super(); TracePass.latest = this; }
+    prepareAovs() { return true; }
+    renderAovs() { return true; }
     setSampleSequenceOffset = vi.fn();
     setSampleCount = vi.fn();
     setCamera() {}
@@ -368,6 +370,16 @@ describe('WebGPU denoised presentation transitions', () => {
   });
 });
 
+
+it('retires an AOV presentation selection before tracing with AOVs disabled', () => {
+  const pipeline = createPipeline(false);
+  pipeline.setOutput('depth');
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 2048, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, allowMultipleSamplesPerFrame: false, aovs: []});
+  expect(() => pipeline.trace(new Camera({projection: 'perspective'}), 1)).not.toThrow();
+  pipeline.present();
+  expect(displayedTexture()).toBe(mocks.Pass.instances.get('compose')!.getOutput('color'));
+  pipeline.manager.dispose();
+});
 
 it('falls back to AgX for unknown tone mapping values', () => {
   const pipeline = createPipeline(false);
