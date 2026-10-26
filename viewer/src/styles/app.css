@@ -310,6 +310,29 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .timeline::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: #e4e4e7; }
 .anim .time { color: var(--cv-text-2); font-size: 11px; white-space: nowrap; }
 
+/* Debug card: a small render-time pill that expands into the debug controls. */
+.debug-overlay { --insp-pad: 12px; z-index: 5; top: 12px; left: 12px; flex-direction: column; align-items: stretch; gap: 0; padding: 3px;
+  border-radius: 16px; max-height: calc(100% - 96px); overflow: hidden; background: rgb(26 27 31 / 0.55); }
+.debug-overlay[data-open] { width: 272px; max-width: calc(100% - 24px); }
+.debug-overlay__head { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 9px; border: 0; border-radius: 13px;
+  background: transparent; color: var(--cv-text-3); font-size: 11px; cursor: pointer; }
+.debug-overlay__head:hover { background: rgb(255 255 255 / 0.06); color: var(--cv-text); }
+.debug-overlay__head b { flex: 1; text-align: left; color: var(--cv-text); font-size: 11.5px; font-weight: 600; }
+.frame-graph { display: flex; align-items: center; gap: 6px; }
+.frame-graph .mono { min-width: 46px; color: var(--cv-text-2); font-size: 10.5px; font-variant-numeric: tabular-nums; text-align: right; }
+.frame-graph canvas { display: block; width: 60px; height: 16px; border-radius: 3px; }
+.debug-overlay__head .toggle-chev { display: grid; place-items: center; width: 18px; height: 18px; }
+.debug-overlay__head .toggle-chev svg { transition: transform 180ms ease; transform: rotate(-90deg); }
+.debug-overlay[data-open] .debug-overlay__head .toggle-chev svg { transform: none; }
+.debug-overlay:not([data-open]) .frame-graph canvas { width: 30px; }
+.debug-overlay__body { display: grid; gap: 7px; padding: 6px 9px 9px; overflow: auto; }
+.debug-overlay .select { border: 1px solid var(--cv-control-border); border-radius: var(--cv-radius-compact); background: rgb(0 0 0 / 0.18); }
+.debug-overlay .select:hover, .debug-overlay .select[data-hovered] { border-color: var(--cv-control-border-hover); }
+.debug-overlay .scrub, .debug-overlay .scrub__number { background: rgb(0 0 0 / 0.18); }
+.debug-overlay .diagnostics { background: rgb(255 255 255 / 0.06); }
+.debug-overlay .diagnostics div { background: rgb(18 19 22 / 0.45); }
+.debug-overlay .hint, .debug-overlay .diagnostics dt { color: var(--cv-text-3); }
+
 .credit { position: absolute; left: 14px; bottom: 80px; max-width: calc(100% - 28px); color: rgb(255 255 255 / 0.6); font-size: 10.5px;
   text-shadow: 0 1px 2px rgb(0 0 0 / 0.7); }
 .credit a { color: inherit; text-decoration: none; }
