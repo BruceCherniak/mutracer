@@ -41,6 +41,26 @@ result runs without project files or build tools.
 The app includes the oidn-webgpu runtime and standard model. It needs no
 denoising download or OIDN SDK at runtime.
 
+### Optional DLSS Ray Reconstruction (Windows)
+
+The optional DLSS build includes `MuTracer-DLSS.cmd`. Open it to use RR on an
+NVIDIA RTX GPU with Vulkan. Opening `mutracer-viewer.exe` directly uses OIDN.
+Keep the supplied DLLs and licenses beside the executable.
+
+RR runs at the selected render resolution (DLAA), including interactive previews.
+The **Denoise** switch enables or disables it. Depth of field uses OIDN;
+disabling depth of field restores RR. The default NVIDIA model is selected at
+startup; `MuTracer-DLSS.cmd --dlss-preset D` selects the older model for drivers
+that cannot create the default model.
+
+This integration is experimental: advanced material layers retain their original
+pixels, and glass uses primary-surface guides without optical motion or specular
+hit distance. Temporal records also cost substantial GPU memory, so start at the
+default half viewport resolution. It is not an upscaler.
+
+Source builds require a separately supplied NVIDIA DLSS SDK and runtime; see
+the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
+
 ## Use
 
 ### Files and window

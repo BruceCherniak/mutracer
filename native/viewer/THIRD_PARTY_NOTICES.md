@@ -11,6 +11,16 @@ The viewer links the native library's oidn-webgpu Rust runtime and embeds its de
 OIDN model; see the [runtime and model notices](../THIRD_PARTY_NOTICES.md#oidn-webgpu-native-runtime).
 The viewer does not bundle the Open Image Denoise SDK or device modules.
 
+## Optional NVIDIA DLSS Ray Reconstruction
+
+The optional Windows DLSS build links NVIDIA's NGX loader into
+`mutracer_ngx.dll` and includes `nvngx_dlssd.dll`, supplied separately from the
+[NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS). Copyright NVIDIA Corporation
+and affiliates. These binary components are governed by the NVIDIA RTX SDKs
+license, not MuTracer's MIT license. The optional app includes the supplied
+license at `licenses/NVIDIA-DLSS/LICENSE.txt`. Default builds contain neither
+the NGX shim nor the DLSS runtime.
+
 ## Windows DirectX Shader Compiler
 
 The Windows viewer bundles `dxcompiler.dll` and `dxil.dll` from Microsoft's

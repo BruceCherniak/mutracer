@@ -1,4 +1,86 @@
 use super::*;
+
+#[test]
+#[ignore = "requires real GPU"]
+fn temporal_camera_orbits_with_extreme_clip_ranges_preserve_history() {
+    use std::sync::{Arc, Mutex};
+    struct History(Arc<Mutex<Vec<(Vec<TemporalResetReason>, bool)>>>);
+    impl CustomDenoiser for History {
+        fn input_mode(&self) -> DenoiseInputMode {
+            DenoiseInputMode::TemporalGpu
+        }
+        fn denoise(
+            &self,
+            mut input: DenoiseInput,
+            _: CancelToken,
+        ) -> std::result::Result<DenoiseOutput, String> {
+            let frame = input.resident.take().unwrap();
+            let temporal = frame.temporal.as_ref().unwrap();
+            self.0.lock().unwrap().push((
+                temporal.reset_reasons().to_vec(),
+                temporal.previous_metadata().is_some(),
+            ));
+            let output = frame.buffers.color.clone();
+            frame.submit([], output).map(DenoiseOutput::Resident)
+        }
+    }
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = aov_engine(aov_test_backend());
+    engine.display().set_size(16, 12).unwrap();
+    engine.set_scene(&tests::lit_scene()).unwrap();
+    let frames = Arc::new(Mutex::new(Vec::new()));
+    let render = Render::new(&engine, RenderSettings::default()).unwrap();
+    render
+        .set_custom_denoiser(
+            Some(Arc::new(History(frames.clone()))),
+            DenoiseSchedule::Converged,
+        )
+        .unwrap();
+    for projection in [0, 1] {
+        frames.lock().unwrap().clear();
+        render.reset_temporal_history().unwrap();
+        let mut camera = Camera {
+            projection,
+            near_clip: 0.0001,
+            far_clip: 1000.,
+            ..Default::default()
+        };
+        for yaw in [0.6f32, 0.7, 0.9] {
+            let eye = glam::Vec3::new(yaw.sin(), 0.3, yaw.cos()) * 4.;
+            camera.world_matrix = glam::Mat4::from(
+                glam::Affine3A::look_at_rh(eye, glam::Vec3::ZERO, glam::Vec3::Y).inverse(),
+            )
+            .to_cols_array();
+            engine.set_camera(Some(camera)).unwrap();
+            engine.update().unwrap();
+            render.converge(ConvergeOptions::new(2)).unwrap();
+        }
+        {
+            let observed = frames.lock().unwrap();
+            assert_eq!(observed.len(), 3);
+            assert!(!observed[0].1);
+            for (resets, previous) in &observed[1..] {
+                assert!(resets.is_empty(), "{resets:?}");
+                assert!(*previous);
+            }
+        }
+        if projection == 0 {
+            camera.fov += 5.;
+        } else {
+            camera.zoom = 1.2;
+        }
+        engine.set_camera(Some(camera)).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(2)).unwrap();
+        let observed = frames.lock().unwrap();
+        assert!(
+            observed[3]
+                .0
+                .contains(&TemporalResetReason::ProjectionChanged)
+        );
+        assert!(!observed[3].1);
+    }
+}
 #[test]
 fn aov_options_validate_without_a_device() {
     let defaults = RenderSettings::default();

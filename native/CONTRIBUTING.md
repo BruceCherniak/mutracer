@@ -64,6 +64,41 @@ Linux builds need a C++20 compiler, patchelf for the shared SDK, and the X11/Way
 development libraries installed by the CI workflow. GPU package checks also
 need `xvfb-run`.
 
+### Optional DLSS viewer
+
+The Windows viewer's `dlss-rr` Cargo feature compiles an application adapter over
+the native SDK's public `CustomDenoiser` and `TemporalGpu` APIs. Default builds
+do not load NGX or require NVIDIA files. Use SDK/runtime 310.9.16 from the
+[official DLSS repository](https://github.com/NVIDIA/DLSS); headers, loader and
+runtime must belong to the same SDK version. NVIDIA's SDK license applies to
+the optional binary components separately from MuTracer's MIT source.
+
+In the x64 MSVC developer environment, set the ordinary native build variables
+above, then run:
+
+```powershell
+$env:MUTRACER_DLSS_SDK = 'C:/SDK/DLSS'
+$env:MUTRACER_DLSS_RUNTIME = 'C:/SDK/DLSS/lib/Windows_x86_64/rel'
+$env:MUTRACER_VULKAN_INCLUDE = 'C:/VulkanSDK/Include'
+$env:MUTRACER_NATIVE_OUTPUT = 'C:/build/mutracer-dlss'
+node native/scripts/dlss-build.mjs
+```
+
+`MUTRACER_NGX_LIBRARY` optionally overrides the default
+`lib/Windows_x86_64/x64/nvsdk_ngx_s.lib` loader path. The script builds a separate
+MSVC shim DLL, the feature-enabled viewer and the local app directory, including
+the NVIDIA runtime and its license. It does not download SDK files. The regular
+viewer packaging command does not create DLSS packages.
+
+The build checks the pinned loader/runtime SHA-256 values and writes
+`dlss-build.json` with binary and adapter-source hashes.
+
+Run `mutracer-viewer.exe --dlss-smoke C:/evidence/rr` from the produced app for a
+headless GPU check through the same custom filter, result publication and Display
+path. Add `--dlss-preset D` to test the older model. Set `MUTRACER_DLSS_LOG=1` for
+verbose NGX diagnostics. This check does not establish glass or animation quality;
+inspect fixed-sample images separately.
+
 ## Commands
 
 | Command | GPU | Checks |

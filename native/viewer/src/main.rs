@@ -1,6 +1,8 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
 mod animation;
 mod controls;
+#[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+mod dlss;
 mod dock;
 mod edit_bench;
 mod focus;
@@ -277,7 +279,7 @@ struct Viewer {
     applied_display: Option<api::DisplaySettings>,
     aovs_enabled: bool,
     aov_display: api::AovDisplayOptions,
-    applied_denoise: Option<bool>,
+    applied_denoise: Option<(bool, bool)>,
     selected: usize,
     selected_mesh: Option<usize>,
     texture_browser: textures::Browser,
@@ -302,6 +304,7 @@ struct Viewer {
     frames: u64,
     generation: u64,
     denoise: bool,
+    custom_denoiser: Option<Arc<dyn api::CustomDenoiser>>,
     denoise_status: String,
     /// Whether the last published commit prepared the scene again.
     last_commit_full: bool,
@@ -408,6 +411,7 @@ impl Viewer {
             frames: 0,
             generation: 1,
             denoise: true,
+            custom_denoiser: None,
             denoise_status: String::new(),
             texture: None,
             checker: None,
@@ -602,6 +606,7 @@ impl Viewer {
                 render_settings(&self.settings, self.size, held),
             )?);
             self.change = self.change.max(Change::Scene);
+            self.applied_denoise = None;
         }
         self.gpu_loss.lock().unwrap().watch(
             std::iter::once(self.target.engine.device_loss_notifier()).chain(
@@ -756,18 +761,52 @@ impl Viewer {
             }
             self.change = Change::None;
         }
-        // Keep the final denoiser across channel changes; held input suspends it.
-        // Paused, the current samples are filtered once.
-        let denoise = self.denoise && !held;
-        if self.applied_denoise != Some(denoise) {
-            self.final_render()
-                .set_denoiser(denoise.then(|| api::DenoiserOptions {
-                    max_tile_size: 512,
-                    backend: api::DENOISE_OIDN_WEBGPU,
-                    schedule: api::DenoiseSchedule::Progressive,
-                    ..Default::default()
-                }))?;
-            self.applied_denoise = Some(denoise);
+        // Keep the final denoiser across channel changes. OIDN pauses during
+        // held input; temporal filtering also runs on interactive previews.
+        // Temporal guides require pinhole rays. Depth of field uses OIDN and
+        // returns to RR automatically when the lens is disabled.
+        let temporal = self.custom_denoiser.is_some()
+            && (self.camera.orthographic || self.camera.f_stop == 0.);
+        let denoise = self.denoise && (!held || temporal);
+        if self.applied_denoise != Some((denoise, temporal)) {
+            if let Some(filter) = self.custom_denoiser.as_ref().filter(|_| temporal) {
+                for target in [Some(&mut self.target), self.replacement.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
+                    target.render_loop.coalesce_scene_updates = true;
+                    for render in [
+                        Some(target.render_loop.final_render()),
+                        target.render_loop.preview(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        render.set_custom_denoiser(
+                            denoise.then(|| filter.clone()),
+                            api::DenoiseSchedule::EverySample,
+                        )?;
+                    }
+                }
+            } else {
+                for target in [Some(&mut self.target), self.replacement.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
+                    target.render_loop.coalesce_scene_updates = false;
+                    if let Some(preview) = target.render_loop.preview() {
+                        preview.set_custom_denoiser(None, api::DenoiseSchedule::EverySample)?;
+                    }
+                }
+                self.final_render()
+                    .set_denoiser(denoise.then(|| api::DenoiserOptions {
+                        max_tile_size: 512,
+                        backend: api::DENOISE_OIDN_WEBGPU,
+                        schedule: api::DenoiseSchedule::Progressive,
+                        ..Default::default()
+                    }))?;
+            }
+            self.applied_denoise = Some((denoise, temporal));
         }
         let mut display = display_settings(&self.display_settings);
         display.aov = self.aov_display;
@@ -869,6 +908,11 @@ impl Viewer {
         if let Some(report) = self.final_render().denoise_report() {
             self.denoise_status = match report.error {
                 Some(error) => error,
+                // GPU callbacks return after submission; their CPU wall time
+                // does not measure the duration of RR on the GPU.
+                None if self.applied_denoise.is_some_and(|(_, temporal)| temporal) => {
+                    "DLSS RR".into()
+                }
                 None => format!("{} · {:.0} ms", report.backend, report.milliseconds),
             };
         }
@@ -2435,6 +2479,9 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 fn main() -> Result<()> {
+    let mut use_dlss = false;
+    let mut dlss_preset = 0;
+    let mut dlss_smoke = None;
     let mut model = None;
     let mut smoke_out = None;
     let mut interaction_out = None;
@@ -2456,6 +2503,20 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--dlss-rr" => use_dlss = true,
+            "--dlss-preset" => {
+                dlss_preset = match args.next().as_deref() {
+                    Some("default") => 0,
+                    Some("D") => 4,
+                    _ => anyhow::bail!("--dlss-preset expects default or D"),
+                };
+            }
+            "--dlss-smoke" => {
+                use_dlss = true;
+                dlss_smoke = Some(PathBuf::from(
+                    args.next().context("--dlss-smoke needs a directory")?,
+                ));
+            }
             "--focus-smoke" => {
                 focus_out = Some(PathBuf::from(
                     args.next().context("--focus-smoke needs a directory")?,
@@ -2547,6 +2608,28 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+    let dlss = if use_dlss {
+        let directory = std::env::current_exe()?
+            .parent()
+            .context("Missing application directory")?
+            .to_owned();
+        let filter = dlss::Dlss::new(&directory, dlss_preset)?;
+        if let Some(out) = dlss_smoke {
+            return dlss::smoke(&filter, &model, &out);
+        }
+        Some(filter)
+    } else {
+        None
+    };
+    #[cfg(not(all(target_os = "windows", feature = "dlss-rr")))]
+    {
+        let _ = (dlss_preset, dlss_smoke);
+        ensure!(
+            !use_dlss,
+            "This build has no DLSS RR support; use the optional Windows DLSS build"
+        );
+    }
     if let Some(out) = focus_out {
         return focus_smoke::run(&model, &out);
     }
@@ -2644,6 +2727,14 @@ fn main() -> Result<()> {
         },
         ..Default::default()
     };
+    #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+    let options = {
+        let mut options = options;
+        if let Some(filter) = &dlss {
+            options.wgpu_options.wgpu_setup = filter.setup();
+        }
+        options
+    };
     let startup_report = startup_out.clone();
     eframe::run_native(
         "MuTracer Native Viewer",
@@ -2651,6 +2742,10 @@ fn main() -> Result<()> {
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
             let mut viewer = Viewer::new_on_device(&model, cc.wgpu_render_state.clone())?;
+            #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
+            if let Some(filter) = dlss {
+                viewer.custom_denoiser = Some(filter);
+            }
             if let Some(path) = startup_out {
                 viewer.size = [64, 48];
                 viewer.resolution.scale = None;

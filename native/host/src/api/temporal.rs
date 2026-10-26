@@ -62,6 +62,7 @@ pub(crate) struct State {
     source: String,
     sequence: u32,
     last: Option<Instant>,
+    projection: Option<(Camera, [u32; 2], glam::Mat4)>,
 }
 impl State {
     pub fn new(gpu: &crate::GpuDevice, size: [u32; 2]) -> Self {
@@ -72,6 +73,7 @@ impl State {
             source: String::new(),
             sequence: 0,
             last: None,
+            projection: None,
         }
     }
     pub fn reject(&mut self) {
@@ -118,7 +120,26 @@ impl State {
         let raw = Camera::from_bytes(request.camera).ok_or("Invalid temporal camera")?;
         let world = glam::Mat4::from_cols_slice(&camera_values[16..32]);
         let view = world.inverse();
-        let projection_inverse = view * glam::Mat4::from_cols_slice(&camera_values[..16]);
+        // Removing a translated view from the already rounded FP32 inverse VP
+        // loses precision, especially with small near planes. Pack the same
+        // lens with an identity view through the shared camera implementation.
+        // Cache it across ordinary camera movement; do not duplicate TS math.
+        let mut lens = raw;
+        lens.world_matrix = glam::Mat4::IDENTITY.to_cols_array();
+        if self
+            .projection
+            .as_ref()
+            .is_none_or(|(camera, size, _)| *camera != lens || *size != request.size)
+        {
+            let packed =
+                crate::scene::prepare_camera(&lens.to_bytes(), request.size[0], request.size[1])?;
+            let values: Vec<_> = packed[..64]
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect();
+            self.projection = Some((lens, request.size, glam::Mat4::from_cols_slice(&values)));
+        }
+        let projection_inverse = self.projection.as_ref().unwrap().2;
         let camera = frame::CameraSnapshot {
             view: view.to_cols_array(),
             projection: projection_inverse.inverse().to_cols_array(),

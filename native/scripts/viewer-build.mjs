@@ -26,10 +26,15 @@ if(coverage.error||!summarizeCoverage(JSON.parse(coverage.stdout),coverage.statu
 if(!prebuilt)run(compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',env.MUTRACER_AOT_ARCHIVE]);
 run(process.execPath,['native/scripts/generate-display.mjs','--check']);
 await prepareTinyBvh();
-run('cargo',['build','--release','--locked','--manifest-path','native/viewer/Cargo.toml']);
+run('cargo',['build','--release','--locked','--manifest-path','native/viewer/Cargo.toml',...(process.env.MUTRACER_VIEWER_DLSS==='1'?['--features','dlss-rr']:[])]);
 const app=resolve(out,mac?'MuTracer.app':'MuTracer'),contents=mac?resolve(app,'Contents'):app;
 const bin=mac?resolve(contents,'MacOS'):contents,resources=mac?resolve(contents,'Resources'):contents;
 mkdirSync(bin,{recursive:true});mkdirSync(resources,{recursive:true});
+// Optional NGX components are staged only by dlss-build after this build. A
+// regular build into a previously used directory must not retain those DLLs
+// after replacing their license directory or produce a misleading launcher.
+for(const name of ['mutracer_ngx.dll','nvngx_dlssd.dll','MuTracer-DLSS.cmd','dlss-build.json'])
+  rmSync(resolve(bin,name),{force:true});
 const staged=resolve(bin,'.mutracer-viewer.build');
 copyFileSync(resolve(target,'release',executable('mutracer-viewer')),staged);
 renameSync(staged,resolve(bin,executable('mutracer-viewer')));

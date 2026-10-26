@@ -1881,12 +1881,15 @@ name = "mutracer-viewer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "ash",
  "base64 0.22.1",
  "eframe",
  "glam",
  "gltf",
  "image",
+ "libloading",
  "mutracer-native-probe",
+ "naga",
  "percent-encoding",
  "pollster 0.4.0",
  "rfd",
