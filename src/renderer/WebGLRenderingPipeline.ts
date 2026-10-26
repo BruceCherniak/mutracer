@@ -576,6 +576,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     },
     aovReady(kind) { return !!execution?.aovs?.includes(kind) && aov.samples > 0; },
     getAovSamples() { return aov.samples; },
+    restartAovs() { aov.reset(); },
     refineAovs(camera, samples = sampleCount) {
       if (samples < 1 || !execution?.aovs?.length) return true;
       rayTracePass.setCamera(camera); aovCamera = camera;

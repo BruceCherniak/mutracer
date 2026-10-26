@@ -26,6 +26,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
         activate: vi.fn(() => { active = label; operations.push({id: label, kind: 'activate'}); }),
         isFirstFrame: () => first, getTotalSamplesRendered: () => samples,
         getAovSamples: () => aovSamples,
+        restartAovs: vi.fn(() => {aovSamples = 0;}),
         aovReady: (kind: AovKind) => enabled.includes(kind) && aovSamples > 0,
         refineAovs: vi.fn((camera: Camera, count = samples) => {
           aovSamples = Math.min(count, aovCap);

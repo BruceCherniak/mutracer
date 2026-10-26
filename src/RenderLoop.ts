@@ -45,6 +45,7 @@ export default class RenderLoop {
   private _previewFrameOwner?: Render;
   private _presented?: Render;
   private _finishedImage?: string;
+  private _motion?: {render: Render; phase: 'moving' | 'priming' | 'settling' | 'settled'};
   private _unsubscribe: () => void;
   constructor(readonly engine: Engine, options: RenderLoopOptions = {}) {
     // Validate foreign objects before allocating owned resources.
@@ -129,11 +130,30 @@ export default class RenderLoop {
       return this._setStatus('previewing');
     }
     const current = selected === 'preview' && this.preview ? this.preview : this.final;
+    const idle = !changed && !this.changing;
+    if (aov !== 'motion') this._motion = undefined;
+    else if (this._motion?.render !== current) {
+      // Targets have independent histories. Prime every target switch, even
+      // when a final small camera edit coincides with leaving preview.
+      this._motion = {render: current, phase: this._motion ? 'priming' : 'moving'};
+    } else if ((!idle && this._motion.phase !== 'priming') || (!current._completeFor('motion') && this._motion.phase === 'settled')) {
+      this._motion.phase = 'moving';
+    }
+    const motion = this._motion;
     const imageState = loopImageState(this.final, this.display);
-    if (!changed && !this.changing && current === this.final && this.status === 'finished' && this.final.status === 'finished' && imageState === this._finishedImage) return this.status;
+    if (idle && current === this.final && this.status === 'finished' && this.final.status === 'finished' && imageState === this._finishedImage && (!motion || motion.phase === 'settled')) return this.status;
     // Invalidate a completed filter before refinement when display settings changed.
     if (this.status === 'finished' && imageState !== this._finishedImage && this.final.samples > 0) this._present(this.final);
-    const status = refine(current);
+    // Motion describes successive images. One unchanged image retires the last
+    // displacement; afterwards leave the finished target idle as usual.
+    if (motion?.phase === 'moving' && idle && current._completeFor('motion')) {
+      current._restartAovs(); motion.phase = 'settling';
+    }
+    let status = refine(current);
+    if (motion?.phase === 'priming' && status === 'finished') {
+      current._restartAovs(); motion.phase = 'settling'; status = refine(current);
+    }
+    if (motion?.phase === 'settling' && status === 'finished') motion.phase = 'settled';
     // Keep the canvas on the last completed image while filtering the next
     // preview; presenting its raw sample here would overwrite the denoise above.
     const waitingForPreview = !!this.preview && ((current === this.preview && status === 'converging' && samples(current) === 0) || (!aov && this.coalesceSceneUpdates && this.preview.denoising)) &&

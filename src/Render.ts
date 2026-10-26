@@ -336,6 +336,11 @@ export default class Render {
     return kind && this.aovs.includes(kind) && this._target?.aovReady
       ? this._current && this._target.aovReady(kind) : this._complete;
   }
+  /** @internal */
+  _restartAovs(): void {
+    this._target?.activate(); this._target?.restartAovs?.();
+    this._status = 'converging';
+  }
   private _refineAov(kind: AovKind): RenderStatus {
     if (this._engine._initializationError) throw this._engine._initializationError;
     if (!this.aovs.includes(kind)) throw new Error(`AOV ${kind} is not enabled`);

@@ -406,6 +406,9 @@ export rejects until that output is ready. Display selection alone does not enab
 Changing the channel or mapping preserves beauty samples, raw AOV values and completed denoising.
 With `RenderLoop`, selecting an enabled AOV traces surface outputs without
 advancing beauty or running a denoiser, including after camera or scene edits.
+When viewing motion, the loop refreshes once inputs settle so stationary surfaces
+return to black. Switching between preview and final first displays zero motion;
+subsequent camera or object changes show motion from that view.
 ID and motion need one center sample; other AOVs stop at the smaller of
 `maxSamples` and `aovSamples`. Loop status can be `finished` while beauty
 `samples` remains zero. Switching back to Final resumes beauty for the current

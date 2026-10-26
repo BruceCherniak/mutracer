@@ -99,6 +99,91 @@ describe('AOV display channels', () => {
     expect(loop.final.samples).toBe(0);
     loop.dispose(); engine.dispose();
   });
+  it.each([false, true])('settles motion once after input changes (preview %s)', preview => {
+    const {engine, camera, targets} = renderFixture();
+    const loop = new RenderLoop(engine, {idleMs: 0, preview: preview ? {aovs: ['motion']} : false, final: {aovs: ['motion']}});
+    engine.display.channel = 'motion';
+    let moving = false;
+    loop.select = () => moving && preview ? 'preview' : 'final';
+    loop.tick(); loop.tick();
+    const final = targets[0];
+    moving = true;
+    for (let i = 0; i < 3; i++) {camera.position = [i + 1, 0, 0]; loop.tick();}
+    moving = false;
+    const presentedRestarts: number[] = [];
+    // A preview/final switch must prime final's history before presenting it.
+    final.present = vi.fn(() => presentedRestarts.push(vi.mocked(final.restartAovs!).mock.calls.length));
+    const restarts = vi.mocked(final.restartAovs!).mock.calls.length;
+    loop.tick(); loop.tick();
+    expect(final.restartAovs).toHaveBeenCalledTimes(restarts + 1);
+    expect(presentedRestarts[0]).toBe(restarts + 1);
+    const settled = vi.mocked(final.refineAovs!).mock.calls.length;
+    for (let i = 0; i < 4; i++) loop.tick();
+    expect(final.refineAovs).toHaveBeenCalledTimes(settled);
+    expect(final.trace).not.toHaveBeenCalled();
+    expect(loop.status).toBe('finished');
+    // Externally committed edits still get a moving frame, then a static one.
+    camera.position = [9, 0, 0]; engine.update();
+    loop.tick(); const updated = vi.mocked(final.restartAovs!).mock.calls.length;
+    loop.tick(); expect(final.restartAovs).toHaveBeenCalledTimes(updated + 1);
+    loop.dispose(); engine.dispose();
+  });
+  it.each([false, true])('waits for motion history while shaders are pending (camera changes %s)', changing => {
+    const {engine, camera, targets} = renderFixture();
+    const loop = new RenderLoop(engine, {idleMs: 0, preview: {aovs: ['motion']}, final: {aovs: ['motion']}});
+    engine.display.channel = 'motion'; loop.tick(); loop.tick();
+    const final = targets[0], refine = final.refineAovs!;
+    loop.select = () => 'preview'; camera.position = [1, 0, 0]; loop.tick();
+    loop.select = () => 'final';
+    final.refineAovs = vi.fn().mockReturnValueOnce(false).mockImplementationOnce(refine).mockReturnValueOnce(false).mockImplementation(refine);
+    const presented = vi.mocked(final.present).mock.calls.length;
+    if (changing) camera.position = [2, 0, 0];
+    expect(loop.tick()).toBe('previewing');
+    expect(final.present).toHaveBeenCalledTimes(presented);
+    if (changing) camera.position = [3, 0, 0];
+    expect(loop.tick()).toBe('previewing');
+    expect(final.present).toHaveBeenCalledTimes(presented);
+    expect(loop.tick()).toBe('finished');
+    expect(final.present).toHaveBeenCalledTimes(presented + 1);
+    loop.tick(); expect(final.refineAovs).toHaveBeenCalledTimes(4);
+    loop.dispose(); engine.dispose();
+  });
+  it('settles a preview/final switch that coincides with a final small camera edit', () => {
+    const {engine, camera, targets} = renderFixture();
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+    const loop = new RenderLoop(engine, {preview: {aovs: ['motion'], adaptiveResolution: false}, final: {aovs: ['motion']}});
+    try {
+      engine.display.channel = 'motion'; loop.tick(); loop.tick();
+      now.mockReturnValue(16); camera.position = [1, 0, 0]; loop.tick();
+      now.mockReturnValue(32); camera.position = [2, 0, 0]; loop.tick();
+      expect(loop.status).toBe('previewing');
+      now.mockReturnValue(48); loop.tick();
+      // Orbit damping can produce an isolated Float32 camera change after
+      // consecutive changes have stopped and the idle delay has elapsed.
+      const final = targets[0], restartCount = vi.mocked(final.restartAovs!).mock.calls.length;
+      const presented: number[] = [];
+      final.present = vi.fn(() => presented.push(vi.mocked(final.restartAovs!).mock.calls.length));
+      now.mockReturnValue(200); camera.position = [2.000001, 0, 0];
+      expect(loop.tick()).toBe('finished');
+      expect(presented).toEqual([restartCount + 1]);
+    } finally {loop.dispose(); engine.dispose(); now.mockRestore();}
+  });
+  it('preserves accumulated beauty and denoising when settling motion', async () => {
+    const {engine, targets} = renderFixture();
+    const loop = new RenderLoop(engine, {preview: false, final: {aovs: ['motion'], maxSamples: 1, denoiser: {type: 'jnlm'}}});
+    await new Promise(resolve => setTimeout(resolve, 0));
+    loop.tick(); const samples = loop.final.samples;
+    const target = targets[0], restarts = vi.mocked(target.restartSamples).mock.calls.length;
+    const cancelled = vi.mocked(target.cancelDenoise!).mock.calls.length;
+    engine.display.channel = 'motion'; loop.tick(); loop.tick();
+    expect(loop.final.samples).toBe(samples);
+    expect(target.restartSamples).toHaveBeenCalledTimes(restarts);
+    expect(target.cancelDenoise).toHaveBeenCalledTimes(cancelled);
+    engine.display.channel = 'final'; loop.tick();
+    expect(loop.final.samples).toBe(samples);
+    expect(target.trace).toHaveBeenCalledOnce();
+    loop.dispose(); engine.dispose();
+  });
   it('adapts preview resolution from surface-only frames without adding beauty samples', () => {
     const {engine} = renderFixture();
     let frame!: FrameRequestCallback;

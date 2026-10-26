@@ -244,6 +244,9 @@ async function capture() {
       await reference.converge({samples: 2});
       const resumed = (await loop.final.readPixels('hdr')).data, expectedHdr = (await reference.readPixels('hdr')).data;
       check(resumed.every((v,i) => Object.is(v,expectedHdr[i])), 'Resuming Final changed beauty');
+      engine.display.channel = 'motion'; await finish(); loop.tick();
+      check(loop.final.samples === 2, 'Settling motion discarded beauty samples');
+      check((await loop.final.readPixels('hdr')).data.every((v,i) => Object.is(v,resumed[i])), 'Settling motion changed beauty pixels');
     } finally {engine._createTarget = createTarget; loop.dispose(); reference.dispose();}
     check(errors.length === 0, errors.join('\n'));
     return { backend: engine.backend, hdr: Array.from(hdr.data), shown, primitiveColors: colors.size, missingRejected: missing, samplesUnchanged: true, png: true, reducedAovPreview: true, partialCoverage: partial, transparentPixels: background, standaloneAovLoop: true };
