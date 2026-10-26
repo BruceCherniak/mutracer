@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "host-time.h"
 _Static_assert(sizeof(mt_job_snapshot)==24,"job snapshot ABI");
 static char error[4096];static unsigned checks;
 #define REQUIRE(test) do{checks++;if(!(test)){fprintf(stderr,"line %d: %s; %s\n",__LINE__,#test,error);return 1;}}while(0)
@@ -21,7 +22,7 @@ static unsigned char *load(const char *path,size_t *size){
 static int read_image(mt_context context,unsigned kind,unsigned char *output,size_t size){size_t written=0;
  return mt_context_read_pixels(context,kind,output,size,&written,error,sizeof(error))||written!=size;
 }
-static void pause_poll(void){const struct timespec delay={0,1000000};nanosleep(&delay,NULL);}
+static void pause_poll(void){mt_host_pause();}
 static void *other_thread(void *input){char message[128];mt_render_job id=*(mt_render_job*)input;
  mt_job_snapshot info={.struct_size=sizeof(info)};
  return (void*)(uintptr_t)(mt_job_info(id,&info,message,sizeof(message))==0);

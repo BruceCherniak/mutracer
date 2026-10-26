@@ -26,7 +26,7 @@ fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
 }
 fn independent_surface_aovs(backend: Backend) {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
-    let engine = Engine::new(EngineOptions { backend }).unwrap();
+    let engine = aov_engine(backend);
     let mut descriptor = tests::lit_scene();
     let mut words: Vec<_> = descriptor
         .chunks_exact(4)
@@ -239,10 +239,7 @@ impl CustomDenoiser for AovFilter {
 #[ignore = "requires real GPU"]
 fn custom_filters_receive_only_declared_aovs_in_cpu_and_resident_modes() {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
-    let engine = Engine::new(EngineOptions {
-        backend: aov_test_backend(),
-    })
-    .unwrap();
+    let engine = aov_engine(aov_test_backend());
     engine.display().set_size(16, 12).unwrap();
     engine.set_scene(&tests::lit_scene()).unwrap();
     engine.update().unwrap();
@@ -305,6 +302,46 @@ impl CustomDenoiser for TemporalFilter {
             frame.stable_ids().size(),
             (input.size[0] * input.size[1] * 16) as u64
         );
+        // Read both orientations independently: guides are top-first, while
+        // pixel records and stable integer identities are bottom-first.
+        let records =
+            crate::hit_diagnostics::read_raw(&self.engine.inner.gpu, frame.pixel_records())
+                .unwrap();
+        let stable =
+            crate::hit_diagnostics::read_raw(&self.engine.inner.gpu, frame.stable_ids()).unwrap();
+        let depth = super::gpu_output_tests::bytes(
+            &self.engine,
+            frame.guide(TemporalGuide::LinearDepth).unwrap(),
+            4,
+        );
+        for y in 0..input.size[1] as usize {
+            for x in 0..input.size[0] as usize {
+                let bottom = y * input.size[0] as usize + x;
+                let top = (input.size[1] as usize - 1 - y) * input.size[0] as usize + x;
+                assert_eq!(
+                    &records[bottom * 240 + 44..bottom * 240 + 48],
+                    &depth[top * 4..top * 4 + 4]
+                );
+                let flags = u32::from_le_bytes(
+                    records[bottom * 240 + 140..bottom * 240 + 144]
+                        .try_into()
+                        .unwrap(),
+                );
+                let identity: Vec<_> = stable[bottom * 16..bottom * 16 + 16]
+                    .chunks_exact(4)
+                    .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+                    .collect();
+                assert_eq!(identity == [u32::MAX; 4], flags & 1 == 0);
+            }
+        }
+        assert!(matches!(
+            frame.metadata().capabilities.specular_distance,
+            TemporalSupport::Unverified
+        ));
+        assert!(matches!(
+            frame.metadata().capabilities.deformation_motion,
+            TemporalSupport::Unverified
+        ));
         let validity = super::gpu_output_tests::bytes(
             &self.engine,
             frame.guide(TemporalGuide::Validity).unwrap(),
@@ -353,7 +390,7 @@ fn temporal_resident_frames_advance_only_after_acceptance_and_support_rigid_moti
 }
 fn accepted_temporal_frames(backend: Backend) {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
-    let engine = Engine::new(EngineOptions { backend }).unwrap();
+    let engine = aov_engine(backend);
     let mut scene = tests::lit_scene();
     engine.display().set_size(16, 12).unwrap();
     engine.set_scene(&scene).unwrap();
@@ -437,10 +474,7 @@ impl CustomDenoiser for RejectTemporal {
 #[ignore = "requires real GPU"]
 fn temporal_rejection_resets_the_next_frame_and_pinhole_limits_are_enforced() {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
-    let engine = Engine::new(EngineOptions {
-        backend: aov_test_backend(),
-    })
-    .unwrap();
+    let engine = aov_engine(aov_test_backend());
     let scene = tests::lit_scene();
     engine.display().set_size(16, 12).unwrap();
     engine.set_scene(&scene).unwrap();
@@ -482,10 +516,7 @@ fn temporal_rejection_resets_the_next_frame_and_pinhole_limits_are_enforced() {
 #[ignore = "requires real GPU"]
 fn surface_aov_plane_matches_cross_backend_fixture_with_uint32_ids() {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
-    let engine = Engine::new(EngineOptions {
-        backend: aov_test_backend(),
-    })
-    .unwrap();
+    let engine = aov_engine(aov_test_backend());
     let mut words: Vec<_> = tests::lit_scene()
         .chunks_exact(4)
         .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
@@ -588,6 +619,26 @@ fn aov_test_backend() -> Backend {
         Backend::Software
     }
 }
+// An explicit adapter index proves which graphics API executes these tests.
+// WGPU_BACKEND alone does not change the default Engine constructor.
+fn aov_engine(backend: Backend) -> Engine {
+    let options = EngineOptions { backend };
+    match std::env::var("MUTRACER_TEST_ADAPTER") {
+        Ok(index) => {
+            let index: usize = index.parse().expect("MUTRACER_TEST_ADAPTER index");
+            let adapters = Engine::adapters();
+            let adapter = adapters.get(index).expect("selected AOV adapter");
+            assert!(matches!(
+                adapter.get_info().device_type,
+                wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu
+            ));
+            println!("AOV selected adapter {index}: {:?}", adapter.get_info());
+            Engine::on_adapter(adapter, options).unwrap()
+        }
+        Err(std::env::VarError::NotPresent) => Engine::new(options).unwrap(),
+        Err(error) => panic!("MUTRACER_TEST_ADAPTER: {error}"),
+    }
+}
 
 #[test]
 #[ignore = "requires real hardware ray-query GPU"]
@@ -598,4 +649,436 @@ fn hardware_surface_aovs_preserve_beauty_ids_and_motion() {
 #[ignore = "requires real hardware ray-query GPU"]
 fn hardware_temporal_frames_support_rigid_motion_and_accepted_history() {
     accepted_temporal_frames(Backend::Hardware);
+}
+
+struct HeldTemporal {
+    entered: std::sync::mpsc::Sender<(u32, Option<u32>, DenoiseFrameStatus)>,
+    released: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    mode: std::sync::atomic::AtomicU32,
+}
+impl CustomDenoiser for HeldTemporal {
+    fn input_mode(&self) -> DenoiseInputMode {
+        DenoiseInputMode::TemporalGpu
+    }
+    fn denoise(
+        &self,
+        mut input: DenoiseInput,
+        _: CancelToken,
+    ) -> std::result::Result<DenoiseOutput, String> {
+        let resident = input.resident.take().unwrap();
+        let frame = resident.temporal.as_ref().unwrap();
+        self.entered
+            .send((
+                frame.metadata().sample_index,
+                frame.previous_metadata().map(|m| m.sample_index),
+                resident.status(),
+            ))
+            .unwrap();
+        let mode = self.mode.load(std::sync::atomic::Ordering::Relaxed);
+        if mode != 0 {
+            self.released
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap();
+            if mode == 2 {
+                return Err("deliberate pending temporal failure".into());
+            }
+        }
+        let output = resident.buffers.color.clone();
+        Ok(DenoiseOutput::Resident(resident.submit([], output)?))
+    }
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn temporal_cancel_replace_and_failure_keep_the_last_accepted_history() {
+    use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};
+    use std::time::Duration;
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    for action in 0..3 {
+        let engine = aov_engine(aov_test_backend());
+        engine.display().set_size(16, 12).unwrap();
+        engine.set_scene(&tests::lit_scene()).unwrap();
+        engine.update().unwrap();
+        let render = Arc::new(
+            Render::new(
+                &engine,
+                RenderSettings {
+                    max_samples: 2,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        let (entered, receive) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let filter = Arc::new(HeldTemporal {
+            entered,
+            released: Mutex::new(released),
+            mode: Default::default(),
+        });
+        render
+            .set_custom_denoiser(Some(filter.clone()), DenoiseSchedule::Converged)
+            .unwrap();
+        render.converge(ConvergeOptions::new(2)).unwrap();
+        let first = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+        assert_eq!((first.0, first.1), (0, None));
+        assert_eq!(first.2.acceptance(), DenoiseAcceptance::Accepted);
+        filter
+            .mode
+            .store(if action == 2 { 2 } else { 1 }, Ordering::Relaxed);
+        let cancel = CancelToken::new();
+        let token = cancel.clone();
+        let worker_render = render.clone();
+        let worker = std::thread::spawn(move || {
+            let mut options = ConvergeOptions::new(2);
+            options.cancel = Some(token);
+            worker_render.converge(options)
+        });
+        let pending = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+        assert_eq!((pending.0, pending.1), (1, Some(0)));
+        match action {
+            0 => cancel.cancel(),
+            1 => render
+                .set_custom_denoiser(None, DenoiseSchedule::Converged)
+                .unwrap(),
+            _ => {}
+        }
+        release.send(()).unwrap();
+        let result = worker.join().unwrap();
+        if action != 1 {
+            assert!(result.is_err());
+        }
+        assert_eq!(pending.2.acceptance(), DenoiseAcceptance::Rejected);
+        filter.mode.store(0, Ordering::Relaxed);
+        render
+            .set_custom_denoiser(Some(filter), DenoiseSchedule::Converged)
+            .unwrap();
+        render.converge(ConvergeOptions::new(2)).unwrap();
+        let next = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+        assert_eq!(
+            (next.0, next.1),
+            (2, Some(0)),
+            "action {action}: rejected frame advanced temporal history"
+        );
+        assert_eq!(next.2.acceptance(), DenoiseAcceptance::Accepted);
+        println!("temporal action {action}: accepted 0, rejected 1, next frame 2 uses history 0");
+    }
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn temporal_record_binding_limit_rejects_before_allocation_and_preserves_beauty() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let adapters = Engine::adapters();
+    let index = std::env::var("MUTRACER_TEST_ADAPTER")
+        .map(|s| s.parse::<usize>().unwrap())
+        .unwrap_or_else(|_| {
+            adapters
+                .iter()
+                .position(|a| {
+                    !matches!(
+                        a.get_info().device_type,
+                        wgpu::DeviceType::Cpu | wgpu::DeviceType::Other
+                    )
+                })
+                .expect("real GPU adapter for the device-limit contract")
+        });
+    let adapter = &adapters[index];
+    println!("limited temporal adapter: {:?}", adapter.get_info());
+    let mut limits = adapter.limits();
+    limits.max_storage_buffer_binding_size = 262144;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: limits,
+        ..Default::default()
+    }))
+    .unwrap();
+    let engine = Engine::on_device(
+        adapter,
+        &device,
+        &queue,
+        EngineOptions {
+            backend: Backend::Software,
+        },
+        None,
+    );
+    engine.set_scene(&tests::lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            size: RenderSize::Fixed {
+                width: 48,
+                height: 48,
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
+    let before = render.read_pixels(PixelKind::Hdr).unwrap();
+    let oversized = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            size: RenderSize::Fixed {
+                width: 128,
+                height: 128,
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let ordinary = oversized.converge(ConvergeOptions::new(1)).unwrap_err();
+    assert!(ordinary.message.contains("storage buffer"), "{ordinary:?}");
+    assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap(), before);
+    drop(oversized);
+    let (entered, _) = std::sync::mpsc::channel();
+    let (_, released) = std::sync::mpsc::channel();
+    render
+        .set_custom_denoiser(
+            Some(std::sync::Arc::new(HeldTemporal {
+                entered,
+                released: std::sync::Mutex::new(released),
+                mode: Default::default(),
+            })),
+            DenoiseSchedule::Converged,
+        )
+        .unwrap();
+    let error = render.converge(ConvergeOptions::new(1)).unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("Frame records exceed device storage limits"),
+        "{error:?}"
+    );
+    assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap(), before);
+    render
+        .set_custom_denoiser(None, DenoiseSchedule::Converged)
+        .unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
+    println!(
+        "48x48 beauty passed; 552960-byte temporal binding rejected against 262144 bytes; engine remains usable"
+    );
+}
+
+fn full_plane_scene() -> (
+    crate::scene_api::Scene,
+    crate::scene_api::MeshId,
+    crate::scene_api::MaterialId,
+) {
+    use crate::scene_api::{Geometry, Mesh, OpenPbrMaterial, Scene};
+    let mut scene = Scene::new();
+    let geometry = scene
+        .add_geometry(Geometry::new(
+            vec![-10., 10., 0., 10., 10., 0., -10., -10., 0., 10., -10., 0.],
+            vec![0, 2, 1, 2, 3, 1],
+        ))
+        .unwrap();
+    let material = scene.add_material(OpenPbrMaterial::default()).unwrap();
+    let mesh = scene.add_mesh(Mesh::new(geometry, material)).unwrap();
+    scene.mesh_mut(mesh).unwrap().transform = glam::Mat4::from_rotation_z(0.17);
+    let mut camera = Camera::default();
+    camera.world_matrix[14] = 4.;
+    scene.set_default_camera(Some(camera));
+    (scene, mesh, material)
+}
+
+#[test]
+#[ignore = "requires real GPU with a 256 MiB storage binding"]
+fn aov_resolve_covers_images_larger_than_one_dispatch_dimension() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = aov_engine(aov_test_backend());
+    let (scene, object, material) = full_plane_scene();
+    let (object, material) = (object.aov_id(), material.aov_id());
+    engine.set_scene_object(&scene).unwrap();
+    engine.update().unwrap();
+    // 4,194,303 pixels: the old 64-lane 1D resolve needed 65,536 groups.
+    let size = [2049, 2047];
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            bounces: 1,
+            bevel: false,
+            aovs: 1 | 32,
+            aov_samples: 1,
+            size: RenderSize::Fixed {
+                width: size[0],
+                height: size[1],
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
+    let depth = render.read_pixels(PixelKind::Depth).unwrap();
+    assert_eq!([depth.width, depth.height], size);
+    assert!(
+        depth
+            .data
+            .chunks_exact(4)
+            .all(|p| (p[0] - 4.).abs() < 1e-4 && p[1] == 0. && p[2] == 0. && p[3] == 1.)
+    );
+    let ids = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    assert!(
+        ids.chunks_exact(4)
+            .all(|p| p[0] == object && p[1] == 0 && p[2] == material && p[3] < 2)
+    );
+    println!(
+        "2049x2047: all 4194303 depth and uint32 ID pixels validated on {:?}",
+        render.backend().unwrap().0
+    );
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn unsupported_reflectance_layers_report_invalid_coverage() {
+    use crate::scene_api::OpenPbrMaterial;
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = aov_engine(aov_test_backend());
+    let (mut scene, _, material) = full_plane_scene();
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../schemas/material-properties.json")).unwrap();
+    let property = |name: &str| {
+        schema
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["key"] == name)
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap() as u32
+    };
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            bounces: 1,
+            aovs: 4 | 8 | 16,
+            aov_samples: 1,
+            size: RenderSize::Fixed {
+                width: 8,
+                height: 8,
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for name in [
+        "supported",
+        "coat",
+        "fuzz",
+        "anisotropy",
+        "subsurface",
+        "volume",
+        "thin-film",
+        "dispersion",
+        "bevel",
+        "partial-alpha",
+        "unlit",
+    ] {
+        let mut value = OpenPbrMaterial::default();
+        let mut set = |key: &str, value3: [f32; 3]| value.set_float(property(key), value3).unwrap();
+        match name {
+            "coat" => set("coatWeight", [0.5, 0., 0.]),
+            "fuzz" => set("fuzzWeight", [0.5, 0., 0.]),
+            "anisotropy" => set("specularAnisotropy", [0.5, 0., 0.]),
+            "subsurface" => set("subsurfaceWeight", [0.5, 0., 0.]),
+            "volume" => {
+                set("transmissionWeight", [1., 0., 0.]);
+                // White transmittance has zero extinction and no scattering.
+                set("transmissionColor", [0.7, 0.8, 0.9]);
+                set("transmissionDepth", [1., 0., 0.]);
+                set("transmissionScatter", [0.2, 0.3, 0.4]);
+            }
+            "thin-film" => set("thinFilmWeight", [0.5, 0., 0.]),
+            "dispersion" => {
+                set("transmissionWeight", [1., 0., 0.]);
+                set("transmissionDispersionScale", [0.5, 0., 0.]);
+            }
+            "bevel" => set("bevelSize", [0.05, 0., 0.]),
+            "partial-alpha" => {
+                set("opacity", [0.75, 0., 0.]);
+                // Default cutoff selects mask in auto mode, which resolves
+                // this coverage to one. Test genuinely fractional coverage.
+                value.set_uint(property("alphaMode"), 3).unwrap();
+            }
+            "unlit" => value.set_uint(property("unlit"), 1).unwrap(),
+            _ => {}
+        }
+        *scene.material_mut(material).unwrap() = value;
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        let roughness = render.read_pixels(PixelKind::Roughness).unwrap().data;
+        assert!(roughness.chunks_exact(4).all(|p| p[3] == 1.));
+        for kind in [PixelKind::DiffuseAlbedo, PixelKind::SpecularAlbedo] {
+            let data = render.read_pixels(kind).unwrap().data;
+            if name == "supported" {
+                assert!(data.chunks_exact(4).all(|p| p[3] == 1. && p[0] > 0.));
+            } else {
+                assert!(
+                    roughness.chunks_exact(4).all(|p| p[2] == 1.),
+                    "{name}: unsupported flag missing"
+                );
+                assert!(
+                    data.iter().all(|v| *v == 0.),
+                    "{name}: invalid reflectance appeared valid"
+                );
+            }
+        }
+        println!("reflectance layer {name}: coverage and validity verified");
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU; optional driver pipeline-error reproduction"]
+fn aov_pipeline_failure_returns_an_error_and_preserves_beauty() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = aov_engine(Backend::Software);
+    engine.display().set_size(48, 32).unwrap();
+    engine.set_scene(&tests::lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 4,
+            bounces: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let before = render.read_pixels(PixelKind::Hdr).unwrap().data;
+    let mut settings = render.settings().unwrap();
+    settings.aovs = 127;
+    render.set_settings(settings.clone()).unwrap();
+    let result = render.converge(ConvergeOptions::new(4));
+    if std::env::var_os("MUTRACER_TEST_REQUIRE_AOV_PIPELINE_ERROR").is_some() {
+        let error = result.unwrap_err();
+        assert_eq!(error.status, Status::Error);
+        assert!(
+            error.message.contains("AOV pipeline creation failed"),
+            "{error}"
+        );
+        println!("Driver rejected AOV pipeline without a panic: {error}");
+    } else {
+        result.unwrap();
+        assert!(
+            render
+                .read_pixels(PixelKind::DiffuseAlbedo)
+                .unwrap()
+                .data
+                .iter()
+                .all(|v| v.is_finite())
+        );
+    }
+    settings.aovs = 0;
+    render.set_settings(settings).unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    assert_eq!(before, render.read_pixels(PixelKind::Hdr).unwrap().data);
+    println!("Beauty remains byte-identical and usable after the AOV pipeline attempt");
 }

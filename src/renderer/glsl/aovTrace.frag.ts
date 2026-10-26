@@ -31,7 +31,7 @@ bool aovSurface(Ray inputRay, out SurfaceInteraction si, out OpenPbrResolvedMate
 }
 `;
 export function aovTraceFragment(center: boolean) {
-  return new FragmentShader({name: center ? 'AOV center' : 'AOV accumulation',
+  const shader = new FragmentShader({name: center ? 'AOV center' : 'AOV accumulation',
     outputs: center ? ['id','motion'] : ['geometry','position','diffuse','specular'],
     outputTypes: center ? {id: 'uvec4'} : {}, defines: {DEPTH_QUERY_MODE: true},
     includes: [core,materials,intersect,random],
@@ -113,4 +113,6 @@ void main() {
   `}
 }
 `});
+  shader.parallelCompile = true;
+  return shader;
 }

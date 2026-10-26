@@ -60,6 +60,14 @@ export function nativeToolchainEnv(environment=process.env) {
   return env;
 }
 
+// C consumers live outside Cargo's release directory; the Windows loader does
+// not honor the rpath used by the Unix builds. Keep each target's DLL explicit.
+export function hostLibraryEnv(target,environment=process.env) {
+  const env=nativeToolchainEnv(environment);
+  if(windows)env.PATH=resolve(target,'release')+delimiter+env.PATH;
+  return env;
+}
+
 export function viewerPlatform() {
   if (process.platform === 'darwin' && process.arch === 'arm64') return 'macos-arm64';
   if (process.platform === 'linux' && process.arch === 'x64') return 'linux-x64';

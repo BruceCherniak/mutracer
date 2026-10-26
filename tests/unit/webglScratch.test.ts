@@ -10,7 +10,7 @@ function context() {
       : key === 'createTexture' || key === 'createFramebuffer' ? vi.fn(() => ({})) : key === 'getUniformLocation' ? vi.fn(() => null) : vi.fn());
     return values.get(key);
   }}) as WebGL2RenderingContext;
-  const renderer = {gl, createProgram: () => ({}), setViewport: vi.fn()} as unknown as WebGLDevice;
+  const renderer = {gl, createProgram: () => ({}), isProgramCompiled: () => true, setViewport: vi.fn()} as unknown as WebGLDevice;
   return {gl, renderer};
 }
 it('reuses WebGL storage while changing the logical image region', () => {

@@ -97,6 +97,4 @@ SDR and HDR-window formats and the exact layouts.
 - Native handles and Vulkan feature declarations are trusted caller inputs;
   invalid handles or queue/layout/lifetime violations cannot be made safe by
   argument validation.
-- The interop round trip has been exercised on Apple M4 Max through MoltenVK,
-  with software BVH traversal. Linux/Windows driver behavior and Vulkan HWRT
-  remain unverified.
+- Linux driver interoperability remains runtime-unverified.

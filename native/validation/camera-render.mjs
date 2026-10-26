@@ -1,4 +1,4 @@
-import {spawnNative as spawnSync, cCompiler} from '../scripts/platform.mjs';
+import {spawnNative as spawnSync, cCompiler, hostLibraryEnv, executable} from '../scripts/platform.mjs';
 import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -8,7 +8,7 @@ const jobs=resolve(out,'jobs'),target=resolve(process.env.CARGO_TARGET_DIR??reso
 const samples=Number(process.env.MUTRACER_NATIVE_SAMPLES??256);
 if(!Number.isInteger(samples)||samples<8||samples>4096)throw new Error('Camera validation samples must be 8..4096');
 mkdirSync(out,{recursive:true});
-const env={...process.env,CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:jobs,MUTRACER_NATIVE_SAMPLES:String(samples)};
+const env={...hostLibraryEnv(target),CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:jobs,MUTRACER_NATIVE_SAMPLES:String(samples)};
 const checks=[];
 function run(name,command,args){
  console.log(`${name}...`);
@@ -20,7 +20,7 @@ function run(name,command,args){
 }
 // Revalidate the complete AOT/raw/context/job graph before testing partial uploads.
 run('job-validation',process.execPath,['native/validation/job-render.mjs']);
-const host=resolve(out,'camera-host');
+const host=resolve(out,executable('camera-host'));
 run('camera-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/camera-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
 const fixtures=JSON.parse(readFileSync(resolve(jobs,'job-verification.json'))).results;
 const results=[];

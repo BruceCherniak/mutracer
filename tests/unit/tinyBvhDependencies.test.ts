@@ -73,8 +73,9 @@ describe('TinyBVH dependency preparation', () => {
   it('allows concurrent preparations to publish only complete verified files', async () => {
     const root = await cacheRoot();
     const options = {cacheRoot: root, manifest, fetchImpl: async () => new Response(contents)};
-    const [first, second] = await Promise.all([prepareTinyBvh(options), prepareTinyBvh(options)]);
-    expect(first).toBe(second);
+    const directories = await Promise.all(Array.from({length: 16}, () => prepareTinyBvh(options)));
+    const first = directories[0];
+    expect(directories.every(directory => directory === first)).toBe(true);
     for (const {file} of manifest.files) expect(await readFile(join(first, file))).toEqual(contents);
     expect(await readdir(first)).toEqual(manifest.files.map(({file}) => file));
   });
