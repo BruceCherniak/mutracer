@@ -71,7 +71,10 @@ if (mac) {
   const definition = resolve(work, 'exports.def');
   writeFileSync(definition, `LIBRARY mutracer_native_probe\nEXPORTS\n${exports.join('\n')}\n`);
   run('link.exe', ['/NOLOGO', '/DLL', '/INCREMENTAL:NO', '/OPT:REF', '/DEBUG:FULL',
-    `/DEF:${definition}`, `/WHOLEARCHIVE:${sourceStatic}`, `/OUT:${shared}`,
+    // The .def exports are linker roots and select every public API member.
+    // /WHOLEARCHIVE also forces unused Rust support/import objects, which MSVC
+    // can reject as a corrupt library (LNK1127) on an otherwise usable staticlib.
+    `/DEF:${definition}`, sourceStatic, `/OUT:${shared}`,
     `/IMPLIB:${resolve(lib, 'mutracer_native_probe.dll.lib')}`,
     `/PDB:${resolve(symbols, 'mutracer_native_probe.pdb')}`, ...nativeLibraries]);
   // MSVC puts linked debug data in the separate PDB, not the shipped DLL.
