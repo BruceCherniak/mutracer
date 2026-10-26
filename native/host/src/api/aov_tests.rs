@@ -621,9 +621,9 @@ fn aov_test_backend() -> Backend {
 }
 // An explicit adapter index proves which graphics API executes these tests.
 // WGPU_BACKEND alone does not change the default Engine constructor.
-fn aov_engine(backend: Backend) -> Engine {
+pub(super) fn aov_engine(backend: Backend) -> Engine {
     let options = EngineOptions { backend };
-    match std::env::var("MUTRACER_TEST_ADAPTER") {
+    let engine = match std::env::var("MUTRACER_TEST_ADAPTER") {
         Ok(index) => {
             let index: usize = index.parse().expect("MUTRACER_TEST_ADAPTER index");
             let adapters = Engine::adapters();
@@ -637,7 +637,12 @@ fn aov_engine(backend: Backend) -> Engine {
         }
         Err(std::env::VarError::NotPresent) => Engine::new(options).unwrap(),
         Err(error) => panic!("MUTRACER_TEST_ADAPTER: {error}"),
-    }
+    };
+    println!(
+        "AOV device: {:?}; requested traversal: {backend:?}",
+        engine.inner.gpu.info
+    );
+    engine
 }
 
 #[test]

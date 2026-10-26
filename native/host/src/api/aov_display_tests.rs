@@ -59,7 +59,7 @@ fn aov_display_options_validate_ranges_without_a_device() {
 }
 fn display_channels(backend: Backend) {
     let _lock = crate::ABI_TEST_LOCK.lock().unwrap();
-    let engine = Engine::new(EngineOptions { backend }).unwrap();
+    let engine = super::aov_tests::aov_engine(backend);
     engine.display().set_size(48, 32).unwrap();
     engine.set_scene(&plane()).unwrap();
     engine.update().unwrap();
