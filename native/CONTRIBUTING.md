@@ -114,6 +114,7 @@ inspect fixed-sample images separately.
 | `npm run native:modules:verify`, `native:storage:verify` | No | AOT module and storage contracts |
 | `node native/validation/matrix-verify.mjs`, `vector-verify.mjs` | No | Precision checks |
 | `npm run native:viewer:build` | No | Full AOT graph and platform app |
+| `npm run native:viewer:dev` | Yes | Interactive viewer with Subsecond UI hot reload |
 | `npm run native:viewer:package` | No | Archives the app, extracts it elsewhere and checks the sample and linked denoising runtime |
 | `npm run native:viewer:package -- --gpu` | Yes | Also checks rendering, all AOVs and real-window startup |
 | `npm run native:sdk:package` | No | Packages the SDK and checks C linking |
@@ -155,6 +156,7 @@ Filtered Rust tests do not replace the final AOT, C consumer or GPU validation.
 | Variable | Purpose |
 | --- | --- |
 | `MUTRACER_SCRIPTC` | scriptc 0.4.4 executable |
+| `MUTRACER_DX` | dx 0.7.10 executable for [UI hot reload](#ui-hot-reload) |
 | `MUTRACER_NATIVE_OUTPUT` | Output and evidence directory |
 | `MUTRACER_AOT_ARCHIVE` | Archive for direct Cargo builds |
 | `MUTRACER_NATIVE_SAMPLES` | Fixture sample count; byte comparisons across stages need the same count and seed |
@@ -391,6 +393,41 @@ reordering. Switching builders can change leaf order, packed displacement
 heights and output; archive those differences rather than claiming pixel parity.
 
 ### Viewer
+
+#### UI hot reload
+
+After the [native setup](#setup), install the matching Dioxus CLI and start the
+development viewer from the repository root:
+
+```sh
+cargo install dioxus-cli --version 0.7.10 --locked
+npm run native:viewer:dev
+```
+
+Save UI function or layout edits to update the open window. Successful UI patches
+keep the loaded model, camera, accumulated samples and GPU resources. The command
+also wakes a converged viewer when a patch arrives. Compilation errors leave the
+previous code running; fix the error and save again.
+
+Pass a model path to open it at launch, including paths with spaces:
+`npm run native:viewer:dev -- "/absolute/path/my model.glb"`. Add `--port 9012`
+to choose the devserver port; otherwise dx chooses an available local port.
+`MUTRACER_DX` selects an existing dx executable. Its version must be 0.7.10,
+matching the pinned Subsecond and devtools crates.
+
+The command prepares the AOT core once at startup and uses a separate development
+build in `.native-build/viewer-dev/`. `MUTRACER_NATIVE_OUTPUT` changes that directory;
+`CARGO_TARGET_DIR` overrides its Cargo cache. It finds the bundled scriptc unless
+`MUTRACER_SCRIPTC` is set. `MUTRACER_AOT_PREBUILT` reuses an archive you have already
+built from the current AOT inputs.
+
+Subsecond is experimental. Patching covers the viewer binary's UI call chain
+rooted at `Viewer::panels`; startup code and dependency crates are outside it.
+Stop the command before changing state struct layouts, then relaunch: existing
+state is not migrated to a new layout. Relaunch for SDK, TS/AOT or GPU setup
+changes as well. Development-only hot reload is disabled in release builds.
+
+#### Implementation
 
 `npm run native:viewer:build` builds the full AOT graph and app with locked
 dependencies. eframe/egui-wgpu and tracing share one adapter, device and queue.

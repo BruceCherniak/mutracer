@@ -12,6 +12,8 @@ mod focus;
 mod focus_smoke;
 mod geometry_smoke;
 mod history;
+#[cfg(all(feature = "hot-reload", debug_assertions))]
+mod hot_reload;
 mod input;
 mod live_denoise_smoke;
 mod material_presets;
@@ -1444,6 +1446,9 @@ impl eframe::App for Viewer {
         }
         self.receive_model(&ctx);
         self.input_files(&ctx);
+        #[cfg(all(feature = "hot-reload", debug_assertions))]
+        hot_reload::panels(self, root);
+        #[cfg(not(all(feature = "hot-reload", debug_assertions)))]
         self.panels(root);
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             let painter = ctx.layer_painter(egui::LayerId::new(
@@ -2964,6 +2969,8 @@ fn main() -> Result<()> {
             _ => model = Some(PathBuf::from(arg)),
         }
     }
+    #[cfg(all(feature = "hot-reload", debug_assertions))]
+    let model = model.or_else(hot_reload::startup_model);
     let model = model.unwrap_or_else(default_model);
     #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
     let dlss = if use_dlss {
@@ -3124,6 +3131,8 @@ fn main() -> Result<()> {
         options,
         Box::new(move |cc| {
             theme::install(&cc.egui_ctx);
+            #[cfg(all(feature = "hot-reload", debug_assertions))]
+            hot_reload::connect(&cc.egui_ctx);
             let mut viewer = Viewer::new_on_device(&model, cc.wgpu_render_state.clone())?;
             #[cfg(all(target_os = "windows", feature = "dlss-rr"))]
             {

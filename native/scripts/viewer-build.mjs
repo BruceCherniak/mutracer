@@ -1,33 +1,13 @@
-import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
-import {spawnCompiler} from './compiler.mjs';
-import {spawnSync} from 'node:child_process';
 import {mkdirSync,copyFileSync,cpSync,writeFileSync,renameSync,readFileSync,rmSync,readdirSync} from 'node:fs';
-import {dirname,resolve} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {summarizeCoverage} from '../validation/diagnostics.mjs';
-import {archiveName,executable,nativeToolchainEnv,viewerPlatform} from './platform.mjs';
+import {resolve} from 'node:path';
+import {executable,viewerPlatform} from './platform.mjs';
+import {prepareViewerCore,viewerRoot as root} from './viewer-core-build.mjs';
 import {prepareDxc} from './fetch-dxc.mjs';
 import {bundleWindowsRuntime} from './windows-redist.mjs';
-const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??resolve(root,'.native-build/viewer'));
 const target=resolve(process.env.CARGO_TARGET_DIR??resolve(out,'cargo-target'));
-const compiler=process.env.MUTRACER_SCRIPTC??'scriptc';
 const platform=viewerPlatform(),mac=platform==='macos-arm64';
-mkdirSync(out,{recursive:true});
-// native:ci passes the archive it already built.
-const prebuilt=process.env.MUTRACER_AOT_PREBUILT;
-const env={...nativeToolchainEnv(),CARGO_TARGET_DIR:target,MUTRACER_AOT_ARCHIVE:resolve(prebuilt??resolve(out,archiveName('render-core')))};
-function run(command,args){const r=(command===compiler?spawnCompiler:spawnSync)(command,args,{cwd:root,env,stdio:'inherit'});if(r.error||r.status!==0)throw new Error(`${command} failed: ${r.error?.message??r.status}`);}
-const version=spawnCompiler(compiler,['--version'],{encoding:'utf8'});if(version.status!==0||version.stdout.trim()!=='0.4.4')throw new Error('Set MUTRACER_SCRIPTC to scriptc 0.4.4.');
-const coverage=spawnCompiler(compiler,['coverage','native/src/render-core.ts','--print','diagnostics','--fail-on','blockers'],{cwd:root,encoding:'utf8',maxBuffer:32*1024*1024});
-writeFileSync(resolve(out,'coverage.json'),coverage.stdout??'');
-if(coverage.nativeMatrixPrecision!==64)throw new Error('Native viewer requires Float64 CPU matrix storage.');
-if(coverage.error||!summarizeCoverage(JSON.parse(coverage.stdout),coverage.status).passed)throw new Error('AOT compilation graph failed; see coverage.json.');
-if(!prebuilt)run(compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',env.MUTRACER_AOT_ARCHIVE]);
-run(process.execPath,['native/scripts/generate-display.mjs','--check']);
-run(process.execPath,['native/scripts/generate-sky.mjs','--check']);
-run(process.execPath,['native/scripts/generate-viewer-spheres.mjs','--check']);
-await prepareTinyBvh();
+const {run}=await prepareViewerCore(out,target);
 run('cargo',['build','--release','--locked','--manifest-path','native/viewer/Cargo.toml',...(process.env.MUTRACER_VIEWER_DLSS==='1'?['--features','dlss-rr']:[])]);
 const app=resolve(out,mac?'MuTracer.app':'MuTracer'),contents=mac?resolve(app,'Contents'):app;
 const bin=mac?resolve(contents,'MacOS'):contents,resources=mac?resolve(contents,'Resources'):contents;
