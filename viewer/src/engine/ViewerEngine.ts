@@ -137,7 +137,7 @@ export class ViewerEngine {
     this.engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
     this.preview = new Render(this.engine, {resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125}, maxSamples: 1,
       bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
-    this.final = new Render(this.engine, {fallback: this.preview});
+    this.final = new Render(this.engine, {fallback: this.preview, batchSamples: true});
     this.engine.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
 
     this.scene.add(this.modelGroup);
