@@ -394,4 +394,107 @@ mod tests {
         let mut fresh = Baker::new(device, queue);
         assert_eq!(afternoon.as_raw(), fresh.bake(15.).unwrap().as_raw());
     }
+
+    #[test]
+    #[ignore = "requires a real GPU and OIDN"]
+    fn gpu_environment_pole_render_stays_bounded_through_oidn() -> Result<()> {
+        use mutracer_native_probe::api;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
+        let mut environment = crate::scene::Environment::default();
+        environment.image = Some(Arc::new(Baker::new(device, queue).bake(15.)?));
+        let model = crate::scene::Model::spheres()?;
+        let size = [827, 767];
+        // This camera/seed sends sample 47 at pixel (644, 463), top row first,
+        // almost straight down after reflecting off the car-paint sphere.
+        // The old south-pole PDF produced ~1e21 HDR and a large OIDN blotch.
+        let camera = api::Camera {
+            fov: 35.,
+            near_clip: 0.00025400444,
+            far_clip: 2540.0442,
+            world_matrix: [
+                0.9927212,
+                0.,
+                0.120436475,
+                0.,
+                0.01769299,
+                0.9891504,
+                -0.14583792,
+                0.,
+                -0.11912978,
+                0.14690724,
+                0.98195034,
+                0.,
+                -0.41777027,
+                1.0324888,
+                4.2373843,
+                1.,
+            ],
+            ..Default::default()
+        };
+        let descriptor = model.descriptor(&camera.to_bytes(), size, &environment);
+        for backend in [api::Backend::Software, api::Backend::Hardware] {
+            let engine = api::Engine::new(api::EngineOptions { backend })?;
+            engine.display().set_size(size[0], size[1])?;
+            engine.set_scene(&descriptor)?;
+            engine.update()?;
+            let render = api::Render::new(
+                &engine,
+                api::RenderSettings {
+                    max_samples: 64,
+                    bounces: 6,
+                    bevel: false,
+                    dispersion_wavelengths: 1,
+                    direct_light_candidates: 2,
+                    seed: 12345,
+                    size: api::RenderSize::Fixed {
+                        width: size[0],
+                        height: size[1],
+                    },
+                    ..Default::default()
+                },
+            )?;
+            render.set_denoiser(Some(api::DenoiserOptions {
+                backend: api::DENOISE_OIDN_WEBGPU,
+                ..Default::default()
+            }))?;
+            render.converge(api::ConvergeOptions::new(64))?;
+            for kind in [api::PixelKind::Hdr, api::PixelKind::Denoised] {
+                let image = render.read_pixels(kind)?;
+                if let Some(out) = std::env::var_os("MUTRACER_TEST_CAPTURE") {
+                    let out = std::path::PathBuf::from(out);
+                    std::fs::create_dir_all(&out)?;
+                    std::fs::write(
+                        out.join(format!("{backend:?}-{kind:?}.f32")),
+                        image
+                            .data
+                            .iter()
+                            .flat_map(|v| v.to_le_bytes())
+                            .collect::<Vec<_>>(),
+                    )?;
+                    if kind == api::PixelKind::Denoised {
+                        let (w, h, pixels) = engine.display().read_rgba8(&render)?;
+                        image::save_buffer(
+                            out.join(format!("{backend:?}-denoised.png")),
+                            &pixels,
+                            w,
+                            h,
+                            image::ColorType::Rgba8,
+                        )?;
+                    }
+                }
+                assert!(
+                    image
+                        .data
+                        .iter()
+                        .all(|v| v.is_finite() && *v >= 0. && *v < 1e6),
+                    "Unbounded {kind:?} on {backend:?}"
+                );
+                let pixel = &image.data[(463 * size[0] as usize + 644) * 4..][..3];
+                assert!(pixel.iter().all(|v| *v < 1.), "Pole firefly: {pixel:?}");
+            }
+        }
+        Ok(())
+    }
 }

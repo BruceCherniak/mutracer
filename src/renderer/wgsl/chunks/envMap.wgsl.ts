@@ -98,6 +98,14 @@ fn getEnvmapU(u: f32, vOffset: i32, pdf: ptr<function, vec2f>) -> f32 {
   return (f32(uOffset) + (u - s0.x) / (s1.x - s0.x)) / f32(size.x);
 }
 
+// The lat-long Jacobian is undefined at either pole. In f32, sin(PI) can
+// also be negative, which makes MIS amplify a BSDF hit instead of weighting it.
+fn envMapSolidAnglePdf(partialPdf: vec2f, v: f32) -> f32 {
+  if (!(v > 0.0 && v < 1.0)) { return 0.0; }
+  let sinTheta = sin(min(v, 1.0 - v) * PI);
+  return partialPdf.x * partialPdf.y * INVPI2 / (2.0 * sinTheta);
+}
+
 // Perform two binary searches to find light direction.
 fn sampleEnvmap(random: vec2f, uv: ptr<function, vec2f>, pdf: ptr<function, f32>) -> vec3f {
   var partialPdf: vec2f;
@@ -115,7 +123,7 @@ fn sampleEnvmap(random: vec2f, uv: ptr<function, vec2f>, pdf: ptr<function, f32>
 
   let dir = vec3f(-sinTheta * cosPhi, cosTheta, -sinTheta * sinPhi);
 
-  *pdf = partialPdf.x * partialPdf.y * INVPI2 / (2.0 * sinTheta);
+  *pdf = envMapSolidAnglePdf(partialPdf, (*uv).y);
 
   return environmentOrientation() * dir;
 }
@@ -123,14 +131,12 @@ fn sampleEnvmap(random: vec2f, uv: ptr<function, vec2f>, pdf: ptr<function, f32>
 fn envMapPdf(_uv: vec2f) -> f32 {
   let size = vec2f(textureDimensions(envMap, 0));
 
-  let sinTheta = sin(_uv.y * PI);
-
-  let _uv2 = vec2i(_uv * size);
+  let _uv2 = clamp(vec2i(_uv * size), vec2i(0), vec2i(size) - vec2i(1));
 
   let partialX = textureLoad(envMapDistribution, vec2i(1 + _uv2.x, _uv2.y), 0).y;
   let partialY = textureLoad(envMapDistribution, vec2i(0, _uv2.y), 0).y;
 
-  return partialX * partialY * INVPI2 / (2.0 * sinTheta);
+  return envMapSolidAnglePdf(vec2f(partialX, partialY), _uv.y);
 }
 
 
