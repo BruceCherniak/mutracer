@@ -158,7 +158,8 @@ lower preview's scale; resizing the display canvas affects both.
 
 Call `render.setDenoiser({ type: 'jnlm', schedule: 'converged' })` with JNLM or an OIDN
 configuration. The schedules are `converged` (default), `progressive` (first
-sample, then 4, 8, 16, … with a ten-second limit), and `every-sample`. Same-engine
+sample, then doubling counts at least 500 ms apart; see [scheduling](./denoising.md#scheduling)),
+and `every-sample`. Same-engine
 renders share equal filter configurations and OIDN weight downloads. The engine
 releases a network when its last render lease is released. OIDN is ignored with
 a warning on WebGL; JNLM works on both backends.

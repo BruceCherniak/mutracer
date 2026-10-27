@@ -113,8 +113,11 @@ preview.setDenoiser({type: 'oidn', model: 'small', schedule: 'every-sample'});
 ```
 
 Converged filters the final sample budget. Progressive filters sample 1,
-then 4, 8, 16, … and the final budget, with a ten-second limit between
-updates. Every-sample filters every complete sample of its render. Coalescing
+then the first count that is at least double the previous update (and at
+least 4) and comes 500 ms or more after it, and finally the sample budget.
+Updates come at least every ten seconds. With [sample batching](./progressive-rendering.md#sample-batching),
+counts grow faster, so the 500 ms floor skips intermediate doublings.
+Every-sample filters every complete sample of its render. Coalescing
 continuous scene/camera edits is application loop policy; the engine accepts
 edits only when update is called. See [progressive rendering](./progressive-rendering.md).
 

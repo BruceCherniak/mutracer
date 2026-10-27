@@ -522,7 +522,11 @@ export default class Render {
     if (this._schedule() === 'every-sample') return Math.min(this.maxSamples, this.samples + 1);
     if (this._schedule() === 'converged') return this.maxSamples;
     if (this._denoisedSamples === 0) return 1;
-    if (performance.now() - this._lastDenoiseTime >= 10000) return Math.min(this.maxSamples, this.samples + 1);
+    const sinceUpdate = performance.now() - this._lastDenoiseTime;
+    if (sinceUpdate >= 10000) return Math.min(this.maxSamples, this.samples + 1);
+    // Batched sampling doubles the count within a few frames. Without a floor,
+    // most filtering would go to images replaced almost at once.
+    if (sinceUpdate < 500) return this.maxSamples;
     return Math.min(this.maxSamples, Math.max(4, this._denoisedSamples * 2));
   }
   /** Reloads a filter dropped by device recovery; failures report through engine errors. */
