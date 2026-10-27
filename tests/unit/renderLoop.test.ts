@@ -18,7 +18,31 @@ describe('RenderLoop selection and presentation', () => {
     expect(loop.preview!.timeBudgetMs).toBe(80);
     expect(loop.preview!.adaptiveResolution).toEqual({targetFrameMs: 80, minScale: .125});
     expect(loop.final.timeBudgetMs).toBe(21);
+    expect(loop.final.batchSamples).toBe(false);
+    expect(loop.preview!.batchSamples).toBe(false);
     loop.dispose(); engine.dispose();
+  });
+  it('disables batching during interaction even when preview is disabled or final is explicitly selected', () => {
+    for (const preview of [false, undefined] as const) {
+      const {engine, targets} = renderFixture(); const sync = new Source(engine);
+      const loop = new RenderLoop(engine, {sync, preview, final: {batchSamples: true}}); loop.select = () => 'final';
+      loop.tick(); expect(targets[0].configure).toHaveBeenLastCalledWith(expect.objectContaining({batchSamples: true}));
+      sync.moving = true; loop.tick();
+      expect(targets[0].configure).toHaveBeenLastCalledWith(expect.objectContaining({batchSamples: false}));
+      expect(loop.final.batchSamples).toBe(true);
+      sync.moving = false; loop.tick();
+      expect(targets[0].configure).toHaveBeenLastCalledWith(expect.objectContaining({batchSamples: true}));
+      loop.dispose(); engine.dispose();
+    }
+  });
+  it('batches final samples only when requested, including through the deprecated alias', () => {
+    const {engine} = renderFixture();
+    for (const [final, batching] of [[undefined, false], [{batchSamples: true}, true], [{allowMultipleSamplesPerFrame: true}, true], [new Render(engine, {batchSamples: true}), true]] as const) {
+      const loop = new RenderLoop(engine, {final}); loop.tick();
+      expect(loop.final._output!.configure).toHaveBeenLastCalledWith(expect.objectContaining({batchSamples: batching}));
+      loop.dispose();
+    }
+    engine.dispose();
   });
   it.each([false, true])('finishes tiled previews during continuous camera edits (coalescing: %s)', coalesceSceneUpdates => {
     const {engine, camera, targets, operations} = renderFixture({tiles: 3});
@@ -265,6 +289,81 @@ describe('RenderLoop events and inference', () => {
     await settle(); expect(loop.tick()).toBe('finished');
     expect(targets.map(target => vi.mocked(target.performDenoise!).mock.calls.length)).toEqual([1, 1]);
     loop.dispose(); engine.dispose();
+  });
+});
+
+describe('RenderLoop sampling between display frames', () => {
+  function refillFixture() {
+    let id = 0; const frames = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {frames.set(++id, callback); return id;});
+    vi.stubGlobal('cancelAnimationFrame', (key: number) => frames.delete(key));
+    const fixture = renderFixture(), sync = new Source(fixture.engine);
+    const loop = new RenderLoop(fixture.engine, {sync, final: {batchSamples: true}}); loop.tick();
+    const target = fixture.targets[0], completions: (() => void)[] = [];
+    const budget = vi.fn(), defer = vi.fn();
+    Object.assign(target, {getRealtimeSampleTime: () => 1, setRealtimeBatchBudget: budget, setRealtimeDeferPostProcess: defer,
+      whenTraceAvailable: () => fixture.engine.device!.queue.onSubmittedWorkDone()});
+    vi.spyOn(fixture.engine.device!.queue, 'onSubmittedWorkDone').mockImplementation(() => new Promise(resolve => completions.push(() => resolve(undefined))));
+    loop.tick();
+    return {...fixture, loop, sync, target, frames, completions, budget, defer, async complete() {completions.shift()!(); await settle();}};
+  }
+  it('refills short batches after GPU completion without updating syncs or presenting extra frames', async () => {
+    const f = refillFixture(); const {loop, engine, target, sync, operations, budget, defer} = f;
+    expect(loop.final.samples).toBe(2); const presents = operations.filter(o => o.kind === 'present').length;
+    expect(defer).toHaveBeenLastCalledWith(false);
+    await f.complete(); await f.complete();
+    // Refills leave resolving to the next presentation.
+    expect(defer).toHaveBeenLastCalledWith(true);
+    expect(loop.final.samples).toBe(4); expect(sync.update).toHaveBeenCalledTimes(2);
+    expect(operations.filter(o => o.kind === 'present')).toHaveLength(presents);
+    expect(target.configure).toHaveBeenLastCalledWith(expect.objectContaining({timeBudgetMs: 21}));
+    expect(budget).toHaveBeenLastCalledWith(4);
+    loop.stop(); await f.complete(); expect(loop.final.samples).toBe(4);
+    loop.dispose(); engine.dispose();
+  });
+  it('expires a manual tick at the next display frame and ignores old completion callbacks after a new tick', async () => {
+    const f = refillFixture();
+    const expire = [...f.frames.values()][0]; expire(0);
+    await f.complete(); expect(f.loop.final.samples).toBe(2);
+    f.loop.tick(); f.loop.tick(); expect(f.loop.final.samples).toBe(4);
+    await f.complete(); expect(f.loop.final.samples).toBe(4);
+    await f.complete(); expect(f.loop.final.samples).toBe(5);
+    f.loop.dispose(); f.engine.dispose();
+  });
+  it.each(['input', 'selection', 'camera', 'aov', 'stop', 'dispose', 'hidden', 'device'] as const)('cancels deferred work on %s', async reason => {
+    const f = refillFixture();
+    if (reason === 'input') f.sync.moving = true;
+    if (reason === 'selection') f.loop.select = () => 'preview';
+    if (reason === 'camera') {f.camera.position = [1, 0, 0]; f.engine.update();}
+    if (reason === 'aov') f.engine.display.channel = 'depth';
+    if (reason === 'stop') f.loop.stop();
+    if (reason === 'dispose') f.loop.dispose();
+    if (reason === 'hidden') vi.stubGlobal('document', {hidden: true, removeEventListener: vi.fn()});
+    if (reason === 'device') vi.spyOn(f.engine, 'device', 'get').mockReturnValue(undefined);
+    const before = vi.mocked(f.target.trace).mock.calls.length;
+    await f.complete(); expect(f.target.trace).toHaveBeenCalledTimes(before);
+    f.loop.dispose(); f.engine.dispose();
+  });
+  it('cancels interactive refills before offline convergence', async () => {
+    const f = refillFixture();
+    const converge = vi.spyOn(f.loop.final, 'converge').mockResolvedValue({samples: 2, averageSamplesPerPixel: 2, pilotSamples: 0, adaptiveSampling: false});
+    await f.loop.converge({samples: 2}); const before = vi.mocked(f.target.trace).mock.calls.length;
+    await f.complete(); expect(f.target.trace).toHaveBeenCalledTimes(before); expect(converge).toHaveBeenCalledOnce();
+    f.loop.dispose(); f.engine.dispose();
+  });
+  it('stops at the denoising boundary instead of submitting another batch', async () => {
+    const f = refillFixture();
+    f.loop.final.maxSamples = 3; await f.loop.final.setDenoiser({type: 'jnlm'});
+    await f.complete(); expect(f.loop.final.samples).toBe(3); expect(f.loop.final.denoising).toBe(true);
+    const before = vi.mocked(f.target.trace).mock.calls.length;
+    await f.complete(); expect(f.target.trace).toHaveBeenCalledTimes(before); expect(f.completions).toHaveLength(0);
+    f.loop.dispose(); f.engine.dispose();
+  });
+  it('does not re-arm when a sample listener stops the loop', async () => {
+    const f = refillFixture(); f.loop.on('sample', () => f.loop.stop());
+    f.loop.tick(); expect(f.loop.final.samples).toBe(3); expect(f.completions).toHaveLength(1);
+    await f.complete(); expect(f.loop.final.samples).toBe(3);
+    f.loop.dispose(); f.engine.dispose();
   });
 });
 

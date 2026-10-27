@@ -17,7 +17,7 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
   engine.bvhLayout = layout;
   engine.bvhBuilder = layout === 'bvh2' ? 'builtin' : 'tinybvh';
   engine.display.setSize(32, 24);
-  const render = new Render(engine, {bounces: 4, allowMultipleSamplesPerFrame: true});
+  const render = new Render(engine, {bounces: 4, batchSamples: true});
   try {
     const info = await engine.init();
     const camera = new Camera({projection: 'perspective', aspect: 4 / 3});

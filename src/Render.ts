@@ -21,6 +21,12 @@ import {scheduleFrame} from './util/frame.js';
 export interface SampleEvent { samples: number; isFirstFrame: boolean; frameTimeMs: number; }
 /** State of one independent accumulation. Default preparing. */
 export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'error';
+/** Execution overrides for one refine call; accumulated samples are retained. */
+export interface RefineOptions {
+  /** Batch several samples in this call. Default this render's batchSamples. */ batchSamples?: boolean;
+  /** Positive finite WebGPU queue budget in milliseconds; capped by timeBudgetMs, ignored on WebGL. Default timeBudgetMs. */ targetBatchTimeMs?: number;
+  /** Leave the displayed image unchanged, for calls between display frames; the next presentation or pixel read updates it once with every new sample. Ignored on WebGL. Default false. */ deferResolve?: boolean;
+}
 /** When a render filters its complete samples. Default converged. */
 export type DenoiseSchedule = 'converged' | 'progressive' | 'every-sample';
 /** Caller-owned WebGPU filter. Render/Engine never dispose it; calls on one engine are serialized. */
@@ -104,7 +110,8 @@ export interface RenderSettings {
   /** Minimum transmissive path alpha, using path depth. Default 1. Changes restart this accumulation. */ transmissiveOutputAlphaMin?: number;
   /** Tile execution budget in milliseconds. Default 21. */ timeBudgetMs?: number;
   /** Maximum tiles per frame. Default Infinity. */ maxTiles?: number;
-  /** Accumulate multiple samples when frame time permits. Default false. */ allowMultipleSamplesPerFrame?: boolean;
+  /** Let one refine submit several samples, up to timeBudgetMs of GPU work; WebGPU requires GPU timestamps. RenderLoop also keeps batching between display frames. Default false. */ batchSamples?: boolean;
+  /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */ allowMultipleSamplesPerFrame?: boolean;
   /** Adapt scale to frame timing; minScale must not exceed resolutionScale. Default false. */ adaptiveResolution?: {targetFrameMs: number; minScale: number} | false;
   /** Single-level fallback on the same engine. Default null. */ fallback?: Render | null;
   /** Denoising configuration. Default null. */ denoiser?: DenoiserOptions | null;
@@ -223,7 +230,10 @@ export default class Render {
   /** Minimum transmissive path alpha. Default 1. Changing it restarts this render. */ transmissiveOutputAlphaMin = 1;
   /** Execution budget in milliseconds. Default 21. */ timeBudgetMs = 21;
   /** Maximum tiles per frame. Default Infinity. */ maxTiles = Infinity;
-  /** Allow several samples per frame when possible. Default false. */ allowMultipleSamplesPerFrame = false;
+  /** Let one refine submit several samples within timeBudgetMs; WebGPU requires GPU timestamps. Default false. */ batchSamples = false;
+  /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */
+  get allowMultipleSamplesPerFrame(): boolean { return this.batchSamples; }
+  set allowMultipleSamplesPerFrame(value: boolean) { this.batchSamples = value; }
   /** Adaptive resolution controller, or false. Default false. */ adaptiveResolution: {targetFrameMs: number; minScale: number} | false = false;
   private _resolutionScale = 1;
   /** Canvas-relative scale. Default 1; cannot be assigned on a fixed-size render. */
@@ -271,6 +281,7 @@ export default class Render {
   private _status: RenderStatus = 'preparing';
   private _disposed = false;
   private _busy = false;
+  private _refineOptions?: RefineOptions;
   private _offlineCamera = false;
   private _input = {scene: -1, camera: -1, settings: ''};
   private _adaptiveScale = 1;
@@ -307,8 +318,9 @@ export default class Render {
       if ('resolutionScale' in options || !Number.isInteger(options.width) || !Number.isInteger(options.height) || options.width! < 1 || options.height! < 1) throw new Error('Provide positive integer width and height, or resolutionScale, exclusively.');
       this._fixed = {width: options.width!, height: options.height!};
     }
-    const {width: _width, height: _height, resolutionScale, fallback, denoiser, ...settings} = options;
+    const {width: _width, height: _height, resolutionScale, fallback, denoiser, allowMultipleSamplesPerFrame, ...settings} = options;
     Object.assign(this, settings);
+    if (settings.batchSamples === undefined && allowMultipleSamplesPerFrame !== undefined) this.batchSamples = allowMultipleSamplesPerFrame;
     if (resolutionScale !== undefined) this.resolutionScale = resolutionScale;
     this._adaptiveScale = this._resolutionScale; this._lastScale = this._resolutionScale;
     this._validate(); this.fallback = fallback ?? null;
@@ -328,6 +340,13 @@ export default class Render {
   /** @internal */ get _complete() { return this._current && !!this._target?.presentationComplete && !this._target.isFirstFrame() && this.samples > 0; }
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
+  /** Latest WebGPU full beauty sample estimate in milliseconds. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  get gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
+  /** Waits for the next release of WebGPU sampling queue capacity. Resolves immediately if no sampling is queued or on WebGL; does not submit work. Throws after disposal. */
+  whenReadyToRefine(): Promise<void> {
+    if (this._disposed) throw new Error('Render is disposed.');
+    return this._target?.whenTraceAvailable?.() ?? Promise.resolve();
+  }
   /** Complete surface-output samples since restart; stale inputs report 0. Independent of beauty samples. Default 0. */
   get aovSamplesRendered(): number { return this._current ? this._target?.getAovSamples?.() ?? 0 : 0; }
   /** @internal */
@@ -380,6 +399,7 @@ export default class Render {
   }
   private _settings(sampleCap = this.maxSamples): TraceSettings {
     const settings=collectTraceSettings(this,sampleCap);
+    settings.batchSamples = this._refineOptions?.batchSamples ?? settings.batchSamples;
     if(this._denoiserOptions?.type==='custom') settings.aovs=[...new Set([...this.aovs,...(this._denoiserOptions.aovs ?? [])])];
     return settings;
   }
@@ -392,6 +412,8 @@ export default class Render {
     const key = imageSettingsKey(settings, size);
     const inputs = this._engine._inputs;
     target.configure(settings); target.activate();
+    target.setRealtimeBatchBudget?.(this._refineOptions?.targetBatchTimeMs ?? Infinity);
+    target.setRealtimeDeferPostProcess?.(!!this._refineOptions?.deferResolve);
     if ((!offline && this._offlineCamera) || inputs.scene !== this._input.scene || inputs.camera !== this._input.camera || key !== this._input.settings) {
       if (!offline) this._offlineCamera = false;
       this._cancelDenoise(); target.restartSamples();
@@ -443,14 +465,18 @@ export default class Render {
     for (const cancel of this._adaptiveFrames) cancel();
     this._adaptiveFrames.clear(); this._adaptiveFastFrames = 0;
   }
-  /** Accumulates within this frame's budget. Default undefined traces beauty and requested AOVs. Pass an enabled AOV kind to refine surface outputs only, without beauty or denoising; progress is aovSamplesRendered. Rejects calls during converge or after disposal. */
-  refine(channel?: AovKind): RenderStatus {
+  /** Accumulates within this frame's budget. Default undefined traces beauty and requested AOVs. Pass an enabled AOV kind to refine surface outputs only, without beauty or denoising; progress is aovSamplesRendered. Options default to this render's execution settings. Rejects calls during converge or after disposal. */
+  refine(channel?: AovKind, options?: RefineOptions): RenderStatus {
     if (this._busy) throw new Error('Cannot refine a render while converge is running.');
     if (this._disposed) throw new Error('Render is disposed.');
     this._engine._setRenderError();
-    try { return channel === undefined ? this._refine() : this._refineAov(channel); }
+    const previous = this._refineOptions; this._refineOptions = options;
+    try {
+      if (options?.targetBatchTimeMs !== undefined && (!Number.isFinite(options.targetBatchTimeMs) || options.targetBatchTimeMs <= 0)) throw new RangeError('targetBatchTimeMs must be positive and finite.');
+      return channel === undefined ? this._refine() : this._refineAov(channel);
+    }
     catch (error) { this._engine._setRenderError(this._engine._notifyError(error)); return this._status = 'error'; }
-    finally { this._engine._reportShaderProgress(); }
+    finally { this._refineOptions = previous; this._engine._reportShaderProgress(); }
   }
   private _refine(): RenderStatus {
     if (this._engine._initializationError) throw this._engine._initializationError;
@@ -663,7 +689,7 @@ export default class Render {
       this._reloadDenoiser(); await this._engine._awaitDevice(Promise.resolve(this._filterPending)); check();
       const stage = async (cap: number, name: 'pilot' | 'final', offset: number) => {
         check(); this._cancelDenoise(); target!.activate(); target!.restartSamples();
-        target!.configure({...this._settings(cap), allowMultipleSamplesPerFrame: true});
+        target!.configure({...this._settings(cap), batchSamples: true});
         let batch = options.targetBatchTimeMs && this._engine.device ? 1 : Math.min(batchLimit, cap);
         let previous = -1, lastPreview = performance.now(); const started = performance.now();
         for (;;) {

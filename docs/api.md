@@ -139,7 +139,7 @@ other sequences retain their completed samples.
 | `width` / `height` | undefined | Paired fixed constructor dimensions; getters report actual output dimensions |
 | `adaptiveResolution` | `false` | `{targetFrameMs, minScale}` for scale-based renders; both required, positive, minScale ≤ resolutionScale |
 | `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Tile time budget / tiles per call |
-| `allowMultipleSamplesPerFrame` | `false` | Add multiple samples when time permits |
+| `batchSamples` | `false` | Let one refine submit several samples within timeBudgetMs; see [sample batching](./progressive-rendering.md#sample-batching). `allowMultipleSamplesPerFrame` is a deprecated alias |
 | `fallback` | `null` | Single-level Render on the same engine |
 | `denoiser` | `null` | Per-render configuration; read back through the frozen `denoiser` getter and change with `setDenoiser()`; see [denoising](./denoising.md) |
 
@@ -153,13 +153,15 @@ or alpha, plus its existing early depth termination.
 
 | Method / property | Meaning |
 | --- | --- |
-| `refine()` | Trace within this render's budget; returns status |
+| `refine(channel?, options?)` | Trace beauty or an enabled AOV within this render's budget; returns status |
 | `converge(options)` | Deterministic offline image; see below |
 | `readPixels(kind = 'hdr')` | Read this render; see [pixel outputs](#pixel-outputs) |
 | `engine` | Owning engine |
 | `denoising` | Queued/running inference, including intermediate updates; default false |
 | `on('sample', listener)` | Complete samples: `{samples, isFirstFrame, frameTimeMs}`; returns unsubscribe |
 | `samples` | Complete samples since restart; stale engine inputs report 0 |
+| `gpuSampleTimeMs` | Latest WebGPU full beauty sample estimate in ms; undefined without timestamps, for stale inputs or during converge |
+| `whenReadyToRefine()` | Wait for the next release of WebGPU sampling queue capacity; resolves immediately if none is queued or on WebGL; submits no work |
 | `converged` | `samples >= maxSamples`, independently of filtering |
 | `status` | Preparing, compiling, converging, denoising, finished or error |
 | `setDenoiser(options)` | Replace the denoiser configuration; resolves when the filter is ready |
@@ -172,6 +174,14 @@ during shader compilation. Intermediate progressive denoising stays
 completed filtering. Synchronous execution failures return `'error'` and set
 engine.lastError. Invalid lifecycle operations (disposed render or refine during
 converge) throw.
+
+`refine(undefined, {batchSamples, targetBatchTimeMs, deferResolve})`
+overrides batching for one call without changing render settings or discarding
+samples. The first two options default to the render's execution settings.
+`targetBatchTimeMs` must be positive and finite, defaults to `timeBudgetMs`, is
+capped by that budget and is ignored on WebGL. `deferResolve` (default false,
+WebGPU only) leaves the displayed image unchanged for calls between display
+frames; the next presentation or pixel read updates it once with every new sample.
 
 A fallback gets one sample when the requested render cannot finish its first
 sample within budget and the fallback has no current complete image. A ready

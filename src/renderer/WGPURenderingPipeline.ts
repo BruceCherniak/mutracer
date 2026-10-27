@@ -8,6 +8,7 @@ import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
 import { WGPUScratchBuffer } from './WGPUScratchBuffer.js';
 import { WGPUScratchTexture } from './WGPUScratchTexture.js';
 import { ScratchPool } from './ScratchPool.js';
+import { GPUTraceQueue } from './GPUTraceQueue.js';
 import { makeRenderPipeline, type TraceSettings, type RenderPipeline } from './renderPipeline.js';
 import { textureBytes } from './gpuMemory.js';
 import type { TargetPipeline } from './accumulationTarget.js';
@@ -135,7 +136,8 @@ function makeWGPUAccumulationTarget(
   rayTracePass: WGPURayTracePass,
   surface: WGPUCanvasSurface,
   scratch: ScratchPool,
-  customJobs: Set<Promise<unknown>>
+  customJobs: Set<Promise<unknown>>,
+  traceQueue: GPUTraceQueue
 ) {
   let sampleRenderedCallback: (
     sampleCount: number,
@@ -143,7 +145,12 @@ function makeWGPUAccumulationTarget(
     frameTime: number
   ) => void = () => { };
 
-  let allowMultipleSamplesPerFrame = false;
+  let batchSamples = false;
+  let realtimeBatchBudgetMs = Infinity;
+  // Samples traced between display frames skip the resolve and composition;
+  // the next presentation or read resolves them once.
+  let realtimeDeferPostProcess = false;
+  let postProcessPending = false;
   let offlineSamplesPerBatch = 0;
   let deferPostProcess = false;
   let sampleSequenceOffset = 0;
@@ -190,6 +197,8 @@ function makeWGPUAccumulationTarget(
   let maxTimePerTile = 21;
 
   let bloomIntensity = 0;
+  // Sample count of this accumulation's last bloom refresh.
+  let bloomSamples = 0;
   let bloomThreshold = 1;
   let bloomRadius = 0.6;
 
@@ -717,11 +726,11 @@ output.color = color;
       catcherBackgroundTexture = layers.getOutput('background');
     }
     const bloomEnabled = bloomIntensity > 0.0;
-    // Progressive accumulation refreshes bloom every ten samples.
-    const samplesSkipped = sampleCount < 10 || sampleCount % 10 > 0;
+    // Progressive accumulation refreshes bloom after every ten new samples,
+    // including when several samples are resolved at once.
     const bloomState = scratch.get('bloom state', () => ({ owner: undefined as object | undefined, settings: '', dispose() { } }));
     const bloomSettings = `${bloomThreshold}/${bloomRadius}/${+(denoiseValid && denoisedHDR)}`;
-    const needsUpdateBloom = bloomEnabled && sampleCount >= 10 && (!samplesSkipped || bloomState.owner !== targetKey || bloomState.settings !== bloomSettings);
+    const needsUpdateBloom = bloomEnabled && sampleCount >= 10 && (sampleCount - bloomSamples >= 10 || bloomState.owner !== targetKey || bloomState.settings !== bloomSettings);
     let bloomIntensityToUpdate = bloomIntensity;
     if (needsUpdateBloom) {
       if (!bloomPass) {
@@ -729,7 +738,7 @@ output.color = color;
         bloomPass.setSize(renderWidth, renderHeight);
       }
       bloomPass.setSize(renderWidth, renderHeight);
-      bloomState.owner = targetKey; bloomState.settings = bloomSettings;
+      bloomState.owner = targetKey; bloomState.settings = bloomSettings; bloomSamples = sampleCount;
       bloomPass.setBrightThreshold(bloomThreshold);
       bloomPass.setRadius(bloomRadius);
       bloomPass.createPass(encoder, colorTexture);
@@ -807,6 +816,12 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
   }
 
+  function flushPostProcess() {
+    if (!postProcessPending) return;
+    postProcessPending = false;
+    drawPostProcess(device.createCommandEncoder(), false, true);
+  }
+
   function trace(camera: Camera, maxSamples: number) {
     // A call to draw means accumulation has been invalidated. Cancel OIDN
     // before checking shader compilation: pipeline-affecting parameter changes
@@ -826,6 +841,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     const resetAccumulation = isFirstFrame;
     if (resetAccumulation) aov.reset();
     if (resetAccumulation) {
+      postProcessPending = false;
+      bloomSamples = 0;
       denoiseValid = false;
       tileTimingGeneration++;
       elapsedTileTime = undefined;
@@ -875,11 +892,25 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
 
     const frameSampleCount = sampleCount;
+    const sampleTimeMs = lastGpuTraceTiming?.estimatedFullFrameTimeMs;
+    const realtime = offlineSamplesPerBatch === 0 && batchSamples;
+    const realtimeBudget = Math.min(maxTimePerTile, realtimeBatchBudgetMs);
+    if (realtime && !resetAccumulation && !isPredictingFrame && sampleTimeMs !== undefined &&
+      traceQueue.available(realtimeBudget) < Math.min(sampleTimeMs, realtimeBudget)) return false;
+    // Only batch a measured, unchanged full-frame workload. New cameras get
+    // their first sample immediately; expensive samples retain tiled execution.
+    const realtimeBatch = realtime && sampleCount > 0 &&
+      !resetAccumulation && !isPredictingFrame && lastGpuTraceTiming?.tileCount === 1 && sampleTimeMs !== undefined &&
+      sampleTimeMs <= realtimeBudget / 2;
+    const realtimeSamples = realtimeBatch
+      ? Math.min(64, Math.floor(traceQueue.available(realtimeBudget) / sampleTimeMs!)) : 1;
+    if (realtimeBatch && realtimeSamples === 0) return false;
+    const batchStarted = performance.now();
     _startRecordFrameTime(!resetAccumulation);
     const renderSampleTarget = maxSamples;
     const batchTarget = Math.min(
       renderSampleTarget,
-      sampleCount + Math.max(offlineSamplesPerBatch, 1)
+      sampleCount + (offlineSamplesPerBatch > 0 ? offlineSamplesPerBatch : realtimeSamples)
     );
     do {
       let {
@@ -894,9 +925,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
       rayTraceOutputPass.setSampleTileGrid(columns, rows);
 
-      if (offlineSamplesPerBatch > 0 && columns * rows === 1) {
+      if ((offlineSamplesPerBatch > 0 || realtimeBatch) && columns * rows === 1) {
         samplesPerFrame = batchTarget - sampleCount;
-      } else if (!allowMultipleSamplesPerFrame) {
+      } else if (!batchSamples) {
         samplesPerFrame = 1;
       }
 
@@ -911,10 +942,17 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
           sample(sampleCount === 0, [1, 1]);
           sampleCount++;
           samplesSubmitted++;
+          if (realtime && !isPredictingFrame && sampleTimeMs !== undefined) traceQueue.track(sampleTimeMs);
+          if (realtimeBatch) {
+            // Encoding many tiny samples must also leave the main thread free
+            // to receive camera input. Yield before encoding another batch.
+            if (performance.now() - batchStarted >= 4) break;
+          }
         }
       } else {
         rayTracePass.setSampleTiles(columns, rows, xIndex, yIndex);
         sample(sampleCount === 0 && isFirstTile, [columns, rows]);
+        if (realtime && !isPredictingFrame && sampleTimeMs !== undefined) traceQueue.track(sampleTimeMs / (columns * rows));
         if (isLastTile) sampleCount++;
       }
     } while (
@@ -935,7 +973,10 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     if (sampleCount !== frameSampleCount && execution?.aovs?.length) {
       rayTracePass.renderAovs(aov, camera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
     }
-    if (sampleCount !== frameSampleCount && (!deferPostProcess || sampleCount >= renderSampleTarget)) {
+    if (sampleCount !== frameSampleCount && realtime && realtimeDeferPostProcess && sampleCount < renderSampleTarget) {
+      postProcessPending = true;
+    } else if (sampleCount !== frameSampleCount && (!deferPostProcess || sampleCount >= renderSampleTarget)) {
+      postProcessPending = false;
       const encoder = device.createCommandEncoder();
       drawPostProcess(encoder, sampleCount >= renderSampleTarget, true);
     }
@@ -1221,6 +1262,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   ): Promise<boolean> {
     cancelDenoise();
     if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
+    flushPostProcess();
     if (attachedDenoiser.kind === 'custom') return performCustomDenoise(attachedDenoiser.denoiser, denoiseSchedule, signal, attachedDenoiser.aovs);
     denoisedHDR = false;
     if (attachedDenoiser.kind === 'jnlm') return performJNLMDenoise(attachedDenoiser.denoiser);
@@ -1506,7 +1548,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       if (displayedAov && !settings.aovs?.includes(displayedAov)) output = 'final';
       if (previousMask && !nextMask) { aov.dispose(); aov.history.clear(); aov.width = aov.height = 0; aov.reset(); }
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
-      allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
+      batchSamples = settings.batchSamples;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
       tileRender.setMaxTiles(settings.maxTiles);
       tileRenderWithPredict?.setDesiredMsPerTile(maxTimePerTile);
@@ -1517,6 +1559,10 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     canCompleteSampleWithin(timeBudgetMs: number) {
       return (lastGpuTraceTiming?.estimatedFullFrameTimeMs ?? elapsedFrameTime) <= timeBudgetMs;
     },
+    setRealtimeBatchBudget(milliseconds) { realtimeBatchBudgetMs = milliseconds; },
+    setRealtimeDeferPostProcess(defer) { realtimeDeferPostProcess = defer; },
+    getRealtimeSampleTime() { return lastGpuTraceTiming?.tileCount === 1 ? lastGpuTraceTiming.estimatedFullFrameTimeMs : undefined; },
+    whenTraceAvailable() { return traceQueue.whenAvailable(); },
     get presentationComplete() { return !!presentationTexture; },
     get presentationDenoised() { return presentationDenoised; },
     present() {
@@ -1546,7 +1592,7 @@ width: renderWidth, height: renderHeight,
       preserveDenoisedOutput = false;
       denoiseValid = false;
       presentationDenoised = false;
-      resolvedSamples = 0;
+      resolvedSamples = 0; postProcessPending = false; bloomSamples = 0;
       (tileRenderWithPredict || tileRender).reset();
       isPredictingFrame = false;
       isFirstFrame = true;
@@ -1554,6 +1600,7 @@ width: renderWidth, height: renderHeight,
     },
 
     getOutputTexture(kind) {
+      flushPostProcess();
       if (kind === 'hdr') return resolvedSamples > 0 ? getFrameInput('color') : undefined;
       return displayPostProcess.output ?? presentationTexture;
     },
@@ -1562,8 +1609,9 @@ width: renderWidth, height: renderHeight,
     },
     trace,
     drawPostProcess() {
-      const encoder = device.createCommandEncoder();
-      drawPostProcess(encoder, true);
+      const resolve = postProcessPending;
+      postProcessPending = false;
+      drawPostProcess(device.createCommandEncoder(), true, resolve);
     },
     performDenoise,
     cancelDenoise,
@@ -1610,6 +1658,7 @@ width: renderWidth, height: renderHeight,
       return aov.read(kind);
     },
     async readOutput(kind) {
+      flushPostProcess();
       rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);
       const width = renderWidth, height = renderHeight;
       const bytesPerRow = Math.ceil(width * 16 / 256) * 256;
@@ -1746,6 +1795,7 @@ width: renderWidth, height: renderHeight,
 /** Independent render targets, without preview or presentation policy. */
 export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanvas, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
   const rayTracePass = new WGPURayTracePass(device, options.materialTextures);
+  const traceQueue = new GPUTraceQueue(device.queue);
   const customJobs = new Set<Promise<unknown>>();
   const scratch = new ScratchPool(work => {
     // A cancelled custom filter can keep submitting GPU work until its promise settles.
@@ -1756,7 +1806,7 @@ export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanva
   });
   const surface = scratch.get('canvas', () => new WGPUCanvasSurface(canvas, device, options.presentationFormat ?? navigator.gpu.getPreferredCanvasFormat()));
   return makeRenderPipeline(rayTracePass, () => {
-    const target = makeWGPUAccumulationTarget(canvas, device, rayTracePass, surface, scratch, customJobs);
+    const target = makeWGPUAccumulationTarget(canvas, device, rayTracePass, surface, scratch, customJobs, traceQueue);
     return target;
   }, false, scratch);
 }

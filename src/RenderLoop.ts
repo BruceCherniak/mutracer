@@ -40,6 +40,8 @@ export default class RenderLoop {
   private _busy = false;
   private _disposed = false;
   private _cancelScheduled?: () => void;
+  private _refillGeneration = 0;
+  private _cancelRefillFrame?: () => void;
   private _warnedTick = false;
   /** Render whose next presentation is waiting for a complete preview frame. */
   private _previewFrameOwner?: Render;
@@ -101,10 +103,15 @@ export default class RenderLoop {
     return this._tick();
   }
   private _tick(): RenderLoopStatus {
+    this._cancelRefill();
+    const refillGeneration = this._refillGeneration;
     if (this._busy || (typeof document !== 'undefined' && document.hidden)) return this.status;
     for (const sync of this._syncs) sync.update();
     const aov = aovChannel(this.display.channel);
-    const refine = (render: Render) => render.refine(aov);
+    const refine = (render: Render) => render.refine(aov, {
+      batchSamples: render.batchSamples && !this.changing && render !== this.preview,
+      targetBatchTimeMs: 4,
+    });
     const samples = (render: Render) => aov ? render.aovSamplesRendered : render.samples;
     const owner = this._previewFrameOwner;
     const pendingPreview = !!owner && (owner === this.preview || !owner._completeFor(this.display.channel));
@@ -165,22 +172,55 @@ export default class RenderLoop {
     const previewing = waitingForPreview || (!aov && current === this.preview && current.denoising) || (!!this.preview && this._presented === this.preview);
     const next = status === 'error' ? 'error' : previewing ? 'previewing' : status;
     this._finishedImage = next === 'finished' ? loopImageState(this.final, this.display) : undefined;
+    if (refillGeneration === this._refillGeneration && !aov && idle && current === this.final && !previewing) this._scheduleRefill();
     return this._setStatus(next);
+  }
+  private _cancelRefill(): void {
+    this._refillGeneration++;
+    this._cancelRefillFrame?.(); this._cancelRefillFrame = undefined;
+  }
+  private _scheduleRefill(): void {
+    const device = this.engine.device;
+    if (!device || !this._canRefill()) return;
+    const generation = this._refillGeneration;
+    // A manual tick grants work only until the next display frame. If the host
+    // stops ticking (pause/export), it cannot leave a background render running.
+    this._cancelRefillFrame = scheduleFrame(() => this._cancelRefill());
+    const refill = () => {
+      if (generation !== this._refillGeneration || device !== this.engine.device ||
+        this._disposed || this._busy || (typeof document !== 'undefined' && document.hidden) ||
+        aovChannel(this.display.channel) ||
+        !this._canRefill() || [...this._syncs].some(sync => sync.active) ||
+        this.select({changing: false}) !== 'final') return;
+      const before = this.final.samples;
+      const status = this.final.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
+      if (status === 'error') {this._cancelRefill(); this._setStatus('error'); return;}
+      if (this.final.samples > before && status === 'converging') wait();
+    };
+    const wait = () => {void this.final.whenReadyToRefine().then(refill, () => {});};
+    // Keep only a short chunk ahead of input. GPU completion, rather than the
+    // display refresh rate, paces the next chunk; presentation stays on rAF.
+    wait();
+  }
+  private _canRefill(): boolean {
+    const time = this.final.gpuSampleTimeMs;
+    return this.final.batchSamples && !this.final.denoising && this.final.samples > 0 &&
+      this.final.status === 'converging' && time !== undefined && time <= this.final.timeBudgetMs;
   }
   private _schedule(): void {
     if (!this._running || this._busy || this._cancelScheduled !== undefined || (typeof document !== 'undefined' && document.hidden)) return;
     this._cancelScheduled = scheduleFrame(() => { this._cancelScheduled = undefined; try {this._tick();} finally {this._schedule();} });
   }
   private _visibility = (): void => {
-    if (document.hidden) this._cancelFrame(); else this._schedule();
+    if (document.hidden) {this._cancelFrame(); this._cancelRefill();} else this._schedule();
   };
   private _cancelFrame(): void { this._cancelScheduled?.(); this._cancelScheduled = undefined; }
   /** Starts an idempotent loop; uses a 16 ms timer without rAF. Hidden pages pause automatically. */ start(): void { this._assertAlive(); this._running = true; this._schedule(); }
-  /** Stops scheduling without discarding accumulated images. */ stop(): void { this._running = false; this._cancelFrame(); }
+  /** Stops scheduling without discarding accumulated images. */ stop(): void { this._running = false; this._cancelFrame(); this._cancelRefill(); }
   /** Pauses ticks, converges final, presents it, and resumes a previously running loop. */
   async converge(options: ConvergeOptions): Promise<ConvergeResult> {
     this._assertAlive(); if (this._busy) throw new Error('RenderLoop convergence is already running.');
-    this._busy = true; this._previewFrameOwner = undefined; this._cancelFrame();
+    this._busy = true; this._previewFrameOwner = undefined; this._cancelFrame(); this._cancelRefill();
     try {
       for (const sync of this._syncs) sync.update(); this.engine.update();
       this._setStatus('preparing');

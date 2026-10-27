@@ -11,6 +11,11 @@ export interface TargetPipeline extends RenderPasses {
   configure(settings: TraceSettings): void;
   synchronizeBackground(background: Scene['background']): void;
   canCompleteSampleWithin(timeBudgetMs: number): boolean;
+  /** Optional WebGPU throughput controls; do not alter the tile budget. */
+  setRealtimeBatchBudget?(milliseconds: number): void;
+  setRealtimeDeferPostProcess?(defer: boolean): void;
+  getRealtimeSampleTime?(): number | undefined;
+  whenTraceAvailable?(): Promise<void>;
   present(): void;
   readPresentation(): Promise<{width: number; height: number; data: Float32Array}>;
   readonly presentationComplete: boolean;

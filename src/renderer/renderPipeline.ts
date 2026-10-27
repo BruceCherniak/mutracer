@@ -12,7 +12,7 @@ export interface TraceSettings {
   bounces: number; clamping: number; bevel: boolean; bevelSamples: number;
   dispersionWavelengths: 1 | 3; directLightCandidates: number;
   alphaBlendStrategy: AlphaBlendStrategy; samplingPattern: SamplingPattern; maxSamples: number;
-  timeBudgetMs: number; maxTiles: number; allowMultipleSamplesPerFrame: boolean;
+  timeBudgetMs: number; maxTiles: number; batchSamples: boolean;
 }
 export interface DisplaySettings {
   toneMapping: ToneMappingParams;

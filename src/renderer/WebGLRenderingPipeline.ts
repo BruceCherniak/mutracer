@@ -47,7 +47,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     _isFirstFrame: boolean,
     _frameTime: number
   ) => { };
-  let allowMultipleSamplesPerFrame = false;
+  let batchSamples = false;
   let offlineSamplesPerBatch = 0;
   let deferPostProcess = false;
   let sampleSequenceOffset = 0;
@@ -320,7 +320,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     if (offlineSamplesPerBatch > 0 && tile.isFirstTile && tile.isLastTile) {
       tile.samplesPerFrame = offlineSamplesPerBatch;
     } else if (
-      !allowMultipleSamplesPerFrame ||
+      !batchSamples ||
       !(tile.isFirstTile && tile.isLastTile)
     ) {
       tile.samplesPerFrame = 1;
@@ -423,7 +423,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       if (displayedAov && !settings.aovs?.includes(displayedAov)) output = 'final';
       if(previousMask && !nextMask){aov.dispose();aov.history.clear();aov.width=aov.height=0;aov.reset();}
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
-      allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
+      batchSamples = settings.batchSamples;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
       tileRender.setMaxTiles(settings.maxTiles);
     },

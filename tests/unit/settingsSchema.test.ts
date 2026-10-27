@@ -9,7 +9,7 @@ const renderChanges: Record<string, unknown> = {
   aovs: ['depth'], aovSamples: 8,
   bounces: 5, clamping: 2, bevel: false, bevelSamples: 12, dispersionWavelengths: 1,
   directLightCandidates: 8, alphaBlendStrategy: 'deterministic-source-over', transmissiveOutputAlphaMin: .3,
-  samplingPattern: 'random', timeBudgetMs: 50, maxTiles: 2, allowMultipleSamplesPerFrame: true,
+  samplingPattern: 'random', timeBudgetMs: 50, maxTiles: 2, batchSamples: true,
 };
 const displayChanges: Record<string, unknown> = {
   aovDepthRange:[1,20],aovPositionScale:2,aovMotionScale:32,aovIdComponent:'material',

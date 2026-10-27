@@ -17,6 +17,7 @@ edits start final immediately; consecutive changes without explicit sync activit
 hold preview for idleMs (default 150 ms). When interaction ends, final starts after
 the current preview completes; its fallback remains visible until final completes a sample.
 With intermediate denoising enabled, it stays visible until the first filtered final image is ready.
+To keep the GPU busy while the view is still, enable [sample batching](#sample-batching) on final.
 
 ```ts
 loop.select = ({changing}) => changing || slider.dragging ? 'preview' : 'final';
@@ -84,6 +85,27 @@ it runs, object edits and scene/camera replacement have no effect on tracing.
 Call it once after updating your scene and controls, even when several renders
 are refined that frame. See [scene updates](updates.md) for notifications.
 
+## Sample batching
+
+Without batching, a still image gets one sample per display frame, so a fast GPU
+idles for most of each frame. With `batchSamples`, sampling works on two levels:
+
+- **Per call.** One `refine()` may submit several samples while at most
+  `timeBudgetMs` of GPU work is queued, and returns without waiting for them.
+  Without `batchSamples`, a call traces one sample or tile.
+- **Between frames.** RenderLoop also refines its final render each time the GPU
+  finishes queued work, until the next display frame. It keeps about 4 ms of work
+  queued, or one sample if that is longer, so a camera edit waits behind at most
+  that much work at any refresh rate.
+
+Batching is off by default. Enable it on the loop's final render with
+`final: {batchSamples: true}`, or on a Render you supply. RenderLoop stops
+batching while the view is changing.
+
+In your own loop, `batchSamples` gives the first level. For the second, call
+`render.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true})` after each
+`await render.whenReadyToRefine()` until your next frame; see [Render](./api.md#render).
+
 ## Reading and exporting
 
 A fixed-size render does not need to be displayed. Its camera defaults to the
@@ -149,6 +171,14 @@ to a stale fallback before continuing. A current fallback is reused; a fast
 final sample does not render the fallback. `present` selects the requested
 complete image, then its complete fallback, and otherwise leaves the canvas
 unchanged. It never traces.
+
+Sample batching on WebGPU needs GPU timestamps; without them, a call traces one
+sample, and between-frame refines are WebGPU-only. A larger `timeBudgetMs`
+batches more per call, but an edit made just after waits for that work before its
+preview starts. Batching keeps the GPU at full speed until `maxSamples`, which
+draws more power than one sample per frame. `stop()` ends between-frame refines
+at once, though submitted work still finishes; a manual `tick()` refines between
+frames only until the next display frame.
 
 `prepare(nextScene)` performs optional CPU BVH preparation without disturbing
 the current GPU scene. Setting `engine.scene` and calling `update` commits a
