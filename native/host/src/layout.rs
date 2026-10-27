@@ -48,7 +48,8 @@ pub mod header {
     pub const MESH_AOV_IDS: usize = 24;
     pub const MATERIAL_AOV_IDS: usize = 25;
     pub const ENVIRONMENT_SETTINGS: usize = 26;
-    pub const RESERVED_END: usize = 27;
+    pub const GROUNDED_BACKGROUND: usize = 27;
+    pub const RESERVED_END: usize = 28;
     pub const WORDS: usize = 32;
 }
 pub mod geometry {

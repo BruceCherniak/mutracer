@@ -5,7 +5,7 @@ use std::sync::Arc;
 /// `displacement_projection` is 0 UV, 1 triplanar, 2 spherical or 3 cylindrical.
 /// `Default` makes surfaces thin-walled; [`super::OpenPbrMaterial::default`] makes
 /// them solid.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct MaterialLayers {
     pub diffuse_roughness: f32,
     pub specular_weight: f32,

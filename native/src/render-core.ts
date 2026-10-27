@@ -121,3 +121,11 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
 
 import {sceneAovParameters as prepareAov} from './scene-core.js';
 export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array {return prepareAov(bytes,token);}
+
+import {jnlmParameters as prepareJnlm} from './jnlm-core.js';
+export function jnlmParameters(width: number, height: number, strength: number,
+  searchRadius: number, patchRadius: number, albedoBandwidth: number,
+  normalBandwidth: number, iterations: number): Uint8Array {
+  return prepareJnlm(width, height, strength, searchRadius, patchRadius,
+    albedoBandwidth, normalBandwidth, iterations);
+}

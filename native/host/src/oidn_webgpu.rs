@@ -25,6 +25,7 @@ static NEXT_PREPARATION: AtomicU64 = AtomicU64::new(1);
 pub(crate) struct Denoiser {
     size: [u32; 2],
     prepared: PreparedDenoise,
+    auxiliary: Option<Auxiliary>,
     color: wgpu::Buffer,
     albedo: wgpu::Buffer,
     normal: wgpu::Buffer,
@@ -33,6 +34,14 @@ pub(crate) struct Denoiser {
     restore: wgpu::ComputePipeline,
     #[cfg(test)]
     identity: u64,
+}
+struct Auxiliary {
+    prepared: [PreparedDenoise; 2],
+    encoded: [wgpu::Buffer; 2],
+    filtered: [wgpu::Buffer; 2],
+    clean: [wgpu::Buffer; 2],
+    encode: wgpu::ComputePipeline,
+    decode: wgpu::ComputePipeline,
 }
 impl Denoiser {
     pub(crate) fn new(
@@ -44,6 +53,10 @@ impl Denoiser {
         if !size.into_iter().all(|edge| (1..=16384).contains(&edge)) {
             return Err("Invalid OIDN image dimensions".into());
         }
+        let clean_aux = weights.filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n == "rt_hdr_calb_cnrm_large.tza")
+        });
         let weights = match weights {
             Some(path) => std::fs::read(path)?,
             None => include_bytes!("../../../oidn/weights/rt_hdr_alb_nrm.tza").to_vec(),
@@ -72,12 +85,71 @@ impl Denoiser {
         let albedo = image("OIDN linear albedo input");
         let normal = image("OIDN signed normal input");
         let output = image("OIDN filtered HDR output");
+        let auxiliary = if let Some(path) = clean_aux {
+            let encoded = [image("OIDN sRGB albedo"), image("OIDN encoded normal")];
+            let filtered = [
+                image("OIDN prefiltered albedo"),
+                image("OIDN prefiltered normal"),
+            ];
+            let clean = [
+                image("OIDN clean linear albedo"),
+                image("OIDN clean signed normal"),
+            ];
+            let prepare = |i: usize, name: &str| -> Result<PreparedDenoise> {
+                let weights = std::fs::read(path.with_file_name(name))?;
+                let model = Model::from_tza(&weights)?;
+                let mut options = DenoiserOptions::default();
+                options.hdr = false;
+                options.max_tile_size = max_tile_size;
+                let mut filter = Network::new(&gpu.device, &gpu.adapter, &model, options)?;
+                Ok(filter.prepare(
+                    size,
+                    DenoiseBuffers {
+                        color: (&encoded[i]).into(),
+                        albedo: None,
+                        normal: None,
+                        output: (&filtered[i]).into(),
+                    },
+                )?)
+            };
+            let prepared = [
+                prepare(0, "rt_alb_large.tza")?,
+                prepare(1, "rt_nrm_large.tza")?,
+            ];
+            let module = gpu
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("OIDN clean auxiliary transfer"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("oidn-auxiliary.wgsl").into()),
+                });
+            let pipeline = |entry| {
+                gpu.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some(entry),
+                        layout: None,
+                        module: &module,
+                        entry_point: Some(entry),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    })
+            };
+            Some(Auxiliary {
+                prepared,
+                encoded,
+                filtered,
+                clean,
+                encode: pipeline("encode"),
+                decode: pipeline("decode"),
+            })
+        } else {
+            None
+        };
         let prepared = network.prepare(
             size,
             DenoiseBuffers {
                 color: (&color).into(),
-                albedo: Some((&albedo).into()),
-                normal: Some((&normal).into()),
+                albedo: Some(auxiliary.as_ref().map_or(&albedo, |a| &a.clean[0]).into()),
+                normal: Some(auxiliary.as_ref().map_or(&normal, |a| &a.clean[1]).into()),
                 output: (&output).into(),
             },
         )?;
@@ -102,6 +174,7 @@ impl Denoiser {
         Ok(Self {
             size,
             prepared,
+            auxiliary,
             color,
             albedo,
             normal,
@@ -198,6 +271,43 @@ impl Denoiser {
             pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
         };
         dispatch(&mut encoder, &self.normalize, &normalize);
+        if let Some(aux) = &mut self.auxiliary {
+            let bind = |pipeline: &wgpu::ComputePipeline, buffers: &[(u32, &wgpu::Buffer)]| {
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("OIDN auxiliary transfer"),
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &buffers
+                        .iter()
+                        .map(|(i, b)| entry(*i, b))
+                        .collect::<Vec<_>>(),
+                })
+            };
+            let encode = bind(
+                &aux.encode,
+                &[
+                    (0, &self.albedo),
+                    (1, &self.normal),
+                    (2, &aux.encoded[0]),
+                    (3, &aux.encoded[1]),
+                    (8, &params),
+                ],
+            );
+            let decode = bind(
+                &aux.decode,
+                &[
+                    (4, &aux.filtered[0]),
+                    (5, &aux.filtered[1]),
+                    (6, &aux.clean[0]),
+                    (7, &aux.clean[1]),
+                    (8, &params),
+                ],
+            );
+            dispatch(&mut encoder, &aux.encode, &encode);
+            for filter in &mut aux.prepared {
+                filter.encode(&mut encoder, DenoiseParams::default())?;
+            }
+            dispatch(&mut encoder, &aux.decode, &decode);
+        }
         self.prepared
             .encode(&mut encoder, DenoiseParams::default().with_input_scale(1.0))?;
         dispatch(&mut encoder, &self.restore, &restore);

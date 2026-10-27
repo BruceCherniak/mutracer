@@ -327,7 +327,7 @@ typedef enum mt_alpha_blend_strategy {
 } mt_alpha_blend_strategy;
 typedef struct mt_render_options {
   uint32_t struct_size;
-  uint32_t max_samples; /* 1..4096. Default 2048. */
+  uint32_t max_samples; /* 1..16384. Default 2048. */
   uint32_t bounces; /* Clamped to 1..20. Default 3. */
   uint32_t sampling_pattern; /* mt_sampling_pattern. Default MT_SAMPLING_SOBOL. */
   uint32_t direct_light_candidates; /* Clamped to 1..16. Default 4. */
@@ -336,7 +336,7 @@ typedef struct mt_render_options {
   uint32_t dispersion_wavelengths; /* 1 or 3. Default 3. */
   /* Let one refine trace several samples when the measured sample time fits
    * time_budget_ms. Default 0 (one sample per refine). */
-  uint32_t allow_multiple_samples_per_frame;
+  union { uint32_t batch_samples; uint32_t allow_multiple_samples_per_frame; }; /* Alias shares the same flag. */
   /* Fixed size; 0x0 uses resolution_scale of the display size. Default 0x0. */
   uint32_t width, height;
   uint32_t seed; /* Default 12345. */
@@ -446,6 +446,40 @@ int32_t mt_render_set_custom_denoiser(mt_render render, const mt_custom_denoiser
  * status (optional) receives mt_render_status. A render failure returns MT_OK
  * with MT_RENDER_ERROR and an error event. */
 int32_t mt_render_refine(mt_render render, uint32_t *status, char *error, size_t capacity);
+/* JNLM filters the composed SDR image, including PNG export, without
+ * changing raw HDR, HDR window output or sample counts. Initialize with mt_jnlm_options_default. */
+typedef struct mt_jnlm_options {
+  uint32_t struct_size;
+  float strength; /* Positive finite multiplier. Default 1. */
+  uint32_t search_radius; /* 1..16. Default 5. */
+  uint32_t patch_radius; /* 0..3. Default 1. */
+  float albedo_bandwidth; /* 0.0001..10. Default 0.4. */
+  float normal_bandwidth; /* 0.0001..10. Default 0.05. */
+  uint32_t iterations; /* 1..4. Default 2. */
+  uint32_t reserved; /* Must be 0. */
+} mt_jnlm_options;
+MT_ENGINE_LAYOUT(mt_jnlm_options, 32);
+int32_t mt_jnlm_options_default(mt_jnlm_options *output);
+/* NULL disables the filter (default). Disable OIDN/custom filtering first to
+ * use JNLM alone. Invalid options preserve the previous filter. */
+int32_t mt_render_set_jnlm_display_filter(mt_render render, const mt_jnlm_options *options, char *error, size_t capacity);
+/* Per-call refine overrides. Initialize with mt_refine_options_default. */
+typedef struct mt_refine_options {
+  uint32_t struct_size;
+  uint32_t batch_samples; /* UINT32_MAX inherits render flags (default), 0 off, 1 on. */
+  uint32_t defer_resolve; /* 1 defers display capture until a normal refine/read. Default 0. */
+  uint32_t reserved; /* Must be 0. */
+  double target_batch_time_ms; /* 0 uses time_budget_ms (default); otherwise positive finite, capped by it. */
+} mt_refine_options;
+MT_ENGINE_LAYOUT(mt_refine_options, 24);
+int32_t mt_refine_options_default(mt_refine_options *output);
+/* Same as refine with per-call overrides; invalid options preserve the render. */
+int32_t mt_render_refine_with_options(mt_render render, const mt_refine_options *options,
+  uint32_t *status, char *error, size_t capacity);
+/* Last valid GPU trace time per beauty sample. available=0 before measurement,
+ * after an input restart, or without timestamps; milliseconds=0 then. Outputs optional. */
+int32_t mt_render_gpu_sample_time(mt_render render, double *milliseconds, uint32_t *available,
+  char *error, size_t capacity);
 /* Filters the current complete samples now without tracing, like the end of
  * converge; for hosts that stop refining (for example when paused). Call again
  * to collect the result; done (optional) receives 1 when the denoised image is
@@ -464,7 +498,7 @@ typedef enum mt_converge_stage { MT_CONVERGE_FINAL = 0, MT_CONVERGE_DENOISING = 
 typedef void (*mt_converge_callback)(uint32_t stage, uint32_t samples, uint32_t target_samples, void *user);
 typedef struct mt_converge_options {
   uint32_t struct_size;
-  uint32_t samples; /* Final complete samples, 1..4096. Required. */
+  uint32_t samples; /* Final complete samples, 1..16384. Required. */
   uint32_t sample_sequence_offset; /* Default 0. */
   uint32_t samples_per_batch; /* Clamped to 1..64. Default 8. */
   uint32_t use_camera; /* 1 renders this output with camera. Default 0 (engine camera). */
@@ -517,9 +551,22 @@ int32_t mt_render_read_pixels(mt_render render, uint32_t kind, void *pixels, siz
   char *error, size_t capacity);
 
 typedef void (*mt_sample_callback)(uint32_t samples, uint32_t first_frame, double frame_time_ms, void *user);
-/* Called for every complete batch, including auxiliary samples when the render
- * loop displays an enabled AOV. NULL removes it. Default none. */
+/* Called for complete beauty batches; auxiliary sampling is excluded. NULL removes it. Default none. */
 int32_t mt_render_set_callback(mt_render render, mt_sample_callback callback, void *user, char *error, size_t capacity);
+
+/* Optional offline timing controls; initialize with mt_converge_timing_default. */
+typedef struct mt_converge_timing {
+  uint32_t struct_size;
+  uint32_t reserved; /* Must be 0. */
+  double target_batch_time_ms; /* 0 fixed batches (default), otherwise positive finite. */
+  double preview_interval_ms; /* -1 end-only capture (default), otherwise finite >=0. */
+} mt_converge_timing;
+MT_ENGINE_LAYOUT(mt_converge_timing, 24);
+int32_t mt_converge_timing_default(mt_converge_timing *output);
+/* Same convergence/cancellation semantics, with GPU-paced batches and optional
+ * intermediate resolved images readable/presentable from the progress callback. */
+int32_t mt_render_converge_with_timing(mt_render render, const mt_converge_options *options,
+  const mt_converge_timing *timing, uint32_t *samples, char *error, size_t capacity);
 
 /* ---- Render loop ---- */
 
@@ -564,15 +611,26 @@ int32_t mt_render_loop_render(mt_render_loop loop, uint32_t which, mt_render *ou
  * mt_render_loop_status. */
 int32_t mt_render_loop_tick(mt_render_loop loop, uint32_t *status, char *error, size_t capacity);
 int32_t mt_render_loop_needs_tick(mt_render_loop loop, uint32_t *needs, char *error, size_t capacity);
+/* Between display frames, call on GPU completion on the tick thread. Collects
+ * and refills stationary beauty work without sync updates, commits or presents.
+ * Each tick grants at most 16 ms; interaction, AOVs, filtering and changed input
+ * stop refilling. active (optional) receives whether more refill calls may run. */
+int32_t mt_render_loop_refill(mt_render_loop loop, uint32_t *active, char *error, size_t capacity);
+int32_t mt_render_loop_needs_refill(mt_render_loop loop, uint32_t *active, char *error, size_t capacity);
+/* Call when pausing/hiding the host or suspending its frame loop. No samples lost. */
+int32_t mt_render_loop_cancel_refill(mt_render_loop loop, char *error, size_t capacity);
 /* Blocking final render, as mt_render_converge on the final render, then
  * presented. Cancel with mt_render_cancel on the final render. */
 int32_t mt_render_loop_converge(mt_render_loop loop, const mt_converge_options *options, uint32_t *samples,
   char *error, size_t capacity);
 
+/* Blocking final convergence with the same timing controls as Render. */
+int32_t mt_render_loop_converge_with_timing(mt_render_loop loop, const mt_converge_options *options,
+  const mt_converge_timing *timing, uint32_t *samples, char *error, size_t capacity);
 typedef struct mt_render_loop_snapshot {
   uint32_t struct_size;
   uint32_t status; /* mt_render_loop_status. */
-  uint32_t samples; /* Final-image samples, or displayed AOV samples; excludes previews. */
+  uint32_t samples; /* Final beauty samples; excludes previews and auxiliary sampling. */
   uint32_t changing;
   uint64_t presentations; /* Successful presentations so far. */
   mt_presented last_presented; /* samples 0 before the first presentation. */
@@ -582,10 +640,9 @@ MT_ENGINE_LAYOUT(mt_render_loop_snapshot, 48);
 int32_t mt_render_loop_info(mt_render_loop loop, mt_render_loop_snapshot *output, char *error, size_t capacity);
 
 typedef enum mt_loop_event_kind { MT_LOOP_EVENT_STATUS = 0, MT_LOOP_EVENT_SAMPLE = 1 } mt_loop_event_kind;
-/* value is the new mt_render_loop_status or the final image's sample count
- * (including the displayed AOV channel). */
+/* value is the new mt_render_loop_status or the final beauty sample count. */
 typedef void (*mt_loop_callback)(uint32_t kind, uint32_t value, void *user);
-/* Called on status changes and final-image samples (including displayed AOVs);
+/* Called on status changes and final beauty samples;
  * NULL removes it. Default none. */
 int32_t mt_render_loop_set_callback(mt_render_loop loop, mt_loop_callback callback, void *user,
   char *error, size_t capacity);

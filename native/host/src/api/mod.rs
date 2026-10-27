@@ -38,6 +38,7 @@ mod render_loop;
 mod surface;
 
 pub use crate::device_loss::DeviceLossNotifier;
+pub use crate::display::jnlm::Options as JnlmOptions;
 pub use crate::status::{Status, StatusError as Error};
 pub use depth::{DEPTH_SAMPLE_COUNT, DEPTH_SAMPLE_GRID, DepthSampleArea};
 pub use display::{
@@ -51,8 +52,8 @@ pub use post_process::{OutputKind, PostProcessContext, PostProcessSubscription};
 pub use render::{
     AdaptiveResolution, AlphaBlendStrategy, CancelToken, CommitKind, ConvergeOptions,
     ConvergeProgress, ConvergeResult, ConvergeStage, DENOISE_OIDN_WEBGPU, DenoiseReport,
-    DenoiseSchedule, DenoiserOptions, Image, OIDN_WEBGPU_AVAILABLE, PixelKind, Render,
-    RenderSettings, RenderSize, RenderStatus, SampleEvent, SamplingPattern,
+    DenoiseSchedule, DenoiserOptions, Image, OIDN_WEBGPU_AVAILABLE, PixelKind, RefineOptions,
+    Render, RenderSettings, RenderSize, RenderStatus, SampleEvent, SamplingPattern,
 };
 pub use render_loop::{
     LoopRender, LoopSubscription, LoopSync, RenderLoop, RenderLoopOptions, RenderLoopStatus,

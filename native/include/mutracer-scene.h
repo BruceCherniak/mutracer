@@ -41,7 +41,8 @@ typedef struct mt_scene_header_v4 {
   uint32_t environment_settings_offset; /* 0 = defaults, or four floats: lighting intensity,
     * lighting yaw, background intensity, background yaw. Yaw is radians about +Y;
     * intensities are finite and nonnegative. Defaults 1,0,1,0. */
-  uint32_t reserved_end[5];
+  uint32_t grounded_background_offset; /* 0 disables projection, or six floats: height, radius, floor Y, center X/Z, 0. Height > 0, radius > height; all finite. */
+  uint32_t reserved_end[4];
 } mt_scene_header_v4;
 
 typedef struct mt_geometry_v4 {

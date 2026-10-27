@@ -493,6 +493,7 @@ impl Viewer {
         else {
             return;
         };
+        let before = crate::history::Snapshot::capture(self);
         let pick = self.texture_browser.pick.take().unwrap();
         match result {
             Ok(prepared) => {
@@ -536,6 +537,8 @@ impl Viewer {
             }
             Err(error) => self.error = format!("Could not load {}: {error:#}", pick.name),
         }
+        let after = crate::history::Snapshot::capture(self);
+        self.history.record(before, after);
     }
     pub fn texture_browser_panel(&mut self, root: &mut egui::Ui) {
         if !self.texture_browser.open {

@@ -51,7 +51,17 @@ and presents it.
 - Syncs (`add_sync` / `mt_render_loop_add_sync`) write the latest application
   state to the engine before each commit and report whether more changes are
   expected, for example during a drag.
-- Hosts that schedule renders themselves call `refine` and `Display::present`.
+- Enable `RenderSettings::batch_samples` (C `mt_render_options.batch_samples`)
+  for GPU-timed stationary batches. Interaction uses one sample per submission.
+  Without GPU timestamps, refinement keeps single-sample batches.
+- Between display frames, a host may call `refill` / `mt_render_loop_refill`
+  on GPU completion, on the tick thread. It advances final sampling without
+  updating syncs or presenting. Call `cancel_refill` when pausing or hiding;
+  each tick's refill window also expires automatically.
+- Loop sample counts and sample events include final beauty samples only.
+  Preview and auxiliary-output progress stay independent.
+- Hosts that schedule renders themselves call `refine` and `Display::present`;
+  `refine_with_options` can override batching for one call.
 
 ## Updates
 
@@ -134,8 +144,8 @@ device.set_device_lost_callback(move |reason, message| {
 | `converge` | `render.converge()` | Blocks the calling thread |
 | `mt_render_loop_tick` | `RenderLoop.start()` | The host calls tick each frame |
 | Adaptive resolution | `adaptiveResolution` | Evaluated when each batch completes, not one frame later |
-| Denoising | OIDN, JNLM, custom | OIDN or a custom filter; no tiles or adaptive sampling |
-| Custom denoisers | `{type: 'custom'}` | Run on library threads with owned arrays |
+| Denoising | OIDN, JNLM, custom | [Native filter workflows](denoising.md); offline variance-adaptive sampling is not available |
+| Custom denoisers | `{type: 'custom'}` | Run on library threads with CPU arrays or resident GPU frames |
 | `diagnostics` | `Engine.getDiagnostics()` | Backend-specific counters differ |
 | Clear scene + update | `engine.scene = undefined; engine.update()` | Empty renders report Idle |
 | `Compiling` and compilation events | `status === 'compiling'`, progress stage `shaders` | — |

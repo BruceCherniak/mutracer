@@ -809,3 +809,309 @@ fn collect_accounts_a_batch_without_submitting_another() {
     render.refine().unwrap();
     assert!(render.engine().lock().renders[&render.id()].in_flight());
 }
+
+#[test]
+#[ignore = "requires real GPU timestamps"]
+fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
+    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = super::aov_tests::aov_engine(Backend::Software);
+    engine.display().set_size(16, 12).unwrap();
+    engine.set_scene(&lit_scene()).unwrap();
+    let updates = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    struct CountSync(Arc<std::sync::atomic::AtomicU32>, SyncActivity);
+    impl LoopSync for CountSync {
+        fn update(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn activity(&self) -> &SyncActivity {
+            &self.1
+        }
+        fn activity_mut(&mut self) -> &mut SyncActivity {
+            &mut self.1
+        }
+    }
+    let sync: SharedSync = Arc::new(Mutex::new(CountSync(
+        updates.clone(),
+        SyncActivity::default(),
+    )));
+    let mut render_loop = RenderLoop::new(
+        &engine,
+        RenderLoopOptions {
+            preview: None,
+            final_render: LoopRender::Settings(RenderSettings {
+                max_samples: 512,
+                batch_samples: true,
+                aovs: 1,
+                aov_samples: 3,
+                ..Default::default()
+            }),
+            syncs: vec![sync.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    tick_until(&mut render_loop, |l, _| l.needs_refill());
+    assert!(render_loop.final_render().gpu_sample_time_ms().unwrap() > 0.);
+    let samples = render_loop.samples();
+    let presentations = render_loop.presentations();
+    let sync_updates = updates.load(std::sync::atomic::Ordering::Relaxed);
+    let deadline = Instant::now() + Duration::from_millis(15);
+    while render_loop.samples() == samples && Instant::now() < deadline {
+        render_loop.refill().unwrap();
+        std::thread::yield_now();
+    }
+    assert!(render_loop.samples() > samples);
+    assert_eq!(render_loop.presentations(), presentations);
+    assert_eq!(
+        updates.load(std::sync::atomic::Ordering::Relaxed),
+        sync_updates
+    );
+    render_loop.cancel_refill();
+    assert!(!render_loop.refill().unwrap());
+    tick_until(&mut render_loop, |l, _| l.needs_refill());
+    std::thread::sleep(Duration::from_millis(17));
+    assert!(!render_loop.refill().unwrap());
+    tick_until(&mut render_loop, |l, _| l.needs_refill());
+    sync.lock().unwrap().set_active(true);
+    assert!(!render_loop.refill().unwrap());
+    render_loop.tick().unwrap();
+    let s = render_loop.final_render().settings().unwrap();
+    assert!(
+        s.batch_samples,
+        "interaction must override one call, preserving user settings"
+    );
+    sync.lock().unwrap().set_active(false);
+    let mut camera = Camera::default();
+    camera.world_matrix[12] = 0.2;
+    engine.set_camera(Some(camera)).unwrap();
+    assert!(!render_loop.refill().unwrap());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observed = events.clone();
+    let _events = render_loop.on_sample(move |e| observed.lock().unwrap().push(e.samples));
+    let mut display = engine.display().settings();
+    display.channel = Channel::Depth;
+    engine.display().set_settings(display).unwrap();
+    tick_until(&mut render_loop, |_, s| s == RenderLoopStatus::Finished);
+    assert_eq!(render_loop.final_render().aov_samples_rendered(), 3);
+    assert_eq!(render_loop.samples(), render_loop.final_render().samples());
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "AOV samples must not emit beauty sample events"
+    );
+    assert!(!render_loop.needs_refill());
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn jnlm_shapes_recompose_without_changing_accumulation() {
+    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = super::aov_tests::aov_engine(Backend::Software);
+    let display = engine.display();
+    display.set_size(24, 16).unwrap();
+    engine.set_scene(&lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 16,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render
+        .set_jnlm_display_filter(Some(JnlmOptions::default()))
+        .unwrap();
+    render.converge(ConvergeOptions::new(16)).unwrap();
+    let hdr = render.read_pixels(PixelKind::Hdr).unwrap();
+    let mut settings = display.settings();
+    settings.vignette = 0.3;
+    settings.bloom_intensity = 0.15;
+    settings.tone_mapping_exposure = 1.2;
+    display.set_settings(settings).unwrap();
+    render.set_jnlm_display_filter(None).unwrap();
+    let raw = display.read_rgba8(&render).unwrap().2;
+    let mut images = Vec::new();
+    for options in [
+        JnlmOptions::default(),
+        JnlmOptions {
+            strength: 0.3,
+            search_radius: 2,
+            patch_radius: 0,
+            albedo_bandwidth: 0.07,
+            normal_bandwidth: 0.02,
+            iterations: 1,
+        },
+        JnlmOptions {
+            strength: 2.,
+            search_radius: 7,
+            patch_radius: 3,
+            albedo_bandwidth: 0.2,
+            normal_bandwidth: 0.1,
+            iterations: 4,
+        },
+    ] {
+        render.set_jnlm_display_filter(Some(options)).unwrap();
+        let image = display.read_rgba8(&render).unwrap().2;
+        assert_eq!(display.read_rgba8(&render).unwrap().2, image);
+        assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap(), hdr);
+        assert_eq!(render.samples(), 16);
+        images.push(image);
+    }
+    assert!(images.iter().any(|image| *image != raw));
+    assert!(images.windows(2).any(|pair| pair[0] != pair[1]));
+    render.set_jnlm_display_filter(None).unwrap();
+    assert_eq!(display.read_rgba8(&render).unwrap().2, raw);
+    if let Some(folder) = std::env::var_os("MUTRACER_JNLM_EVIDENCE") {
+        let folder = std::path::PathBuf::from(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("raw.rgba8"), raw).unwrap();
+        for (i, image) in images.iter().enumerate() {
+            std::fs::write(folder.join(format!("shape-{i}.rgba8")), image).unwrap();
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn jnlm_composes_and_exports_without_changing_beauty_and_large_oidn_prefilters_guides() {
+    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = super::aov_tests::aov_engine(Backend::Software);
+    engine.display().set_size(24, 16).unwrap();
+    engine.set_scene(&lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 8,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render
+        .set_jnlm_display_filter(Some(JnlmOptions::default()))
+        .unwrap();
+    render.converge(ConvergeOptions::new(8)).unwrap();
+    let hdr = render.read_pixels(PixelKind::Hdr).unwrap();
+    let display = engine.display();
+    let (_, _, filtered) = display.read_rgba8(&render).unwrap();
+    assert_eq!(filtered.len(), 24 * 16 * 4);
+    assert_eq!(
+        display.read_rgba8(&render).unwrap().2,
+        filtered,
+        "a finished filter is stable"
+    );
+    render.set_jnlm_display_filter(None).unwrap();
+    let raw = display.read_rgba8(&render).unwrap().2;
+    assert_ne!(raw, filtered, "JNLM should filter this noisy scene");
+    assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap(), hdr);
+    assert_eq!(render.samples(), 8);
+    for filename in ["rt_hdr_alb_nrm_small.tza", "rt_hdr_calb_cnrm_large.tza"] {
+        render
+            .set_denoiser(Some(DenoiserOptions {
+                backend: DENOISE_OIDN_WEBGPU,
+                library: Some(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../oidn/weights")
+                        .join(filename),
+                ),
+                max_tile_size: 32,
+                ..Default::default()
+            }))
+            .unwrap();
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        assert!(
+            render
+                .read_pixels(PixelKind::Denoised)
+                .unwrap()
+                .data
+                .iter()
+                .all(|v| v.is_finite())
+        );
+        assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap(), hdr);
+    }
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn grounded_background_edits_match_fresh_contexts() {
+    use crate::scene_api::{Environment, GroundedBackground, Scene, Texture, TexturePixels};
+    let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = super::aov_tests::aov_engine(Backend::Software);
+    engine.display().set_size(16, 12).unwrap();
+    let mut scene = Scene::new();
+    let geometry = scene
+        .add_geometry(crate::scene_api::Geometry::new(
+            vec![-0.7, -0.5, 0., 0.7, -0.5, 0., 0., 0.5, 0.],
+            vec![0, 1, 2],
+        ))
+        .unwrap();
+    let material = scene
+        .add_material(crate::scene_api::OpenPbrMaterial::default())
+        .unwrap();
+    scene
+        .add_mesh(crate::scene_api::Mesh::new(geometry, material))
+        .unwrap();
+    let pixels: Vec<f32> = (0..4)
+        .flat_map(|y| (0..8).flat_map(move |x| [x as f32 / 7., y as f32 / 3., 0.2, 1.]))
+        .collect();
+    let texture = scene
+        .add_texture(Texture {
+            pixels: TexturePixels::Rgba32F(pixels.into()),
+            ..Texture::rgba8(8, 4, vec![])
+        })
+        .unwrap();
+    scene
+        .set_environment(Environment {
+            texture: Some(texture),
+            background: Some(texture),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut camera = Camera::default();
+    camera.world_matrix[13] = 1.;
+    camera.world_matrix[14] = 3.;
+    engine.set_camera(Some(camera)).unwrap();
+    let settings = RenderSettings {
+        max_samples: 2,
+        bevel: false,
+        dispersion_wavelengths: 1,
+        ..Default::default()
+    };
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    let mut previous = None;
+    for value in [
+        Some(GroundedBackground {
+            height: 1.6,
+            radius: 32.,
+            ground_height: 0.,
+            center: [0., 0.],
+        }),
+        Some(GroundedBackground {
+            height: 2.7,
+            radius: 30.,
+            ground_height: -0.2,
+            center: [0.3, -0.2],
+        }),
+        None,
+    ] {
+        scene.set_grounded_background(value).unwrap();
+        engine.set_scene_object(&scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(2)).unwrap();
+        let descriptor =
+            expected_descriptor(&scene.descriptor().unwrap(), [16, 12], 0, Some(&camera));
+        let actual = images(&render);
+        assert_bytes(
+            &actual,
+            &oracle(0, &descriptor, &settings.l0(settings.sample_cap(2), 0), 2),
+            "ground projection",
+        );
+        if let Some(before) = previous {
+            assert_ne!(
+                actual[0], before,
+                "projection changes must reach the retained scene"
+            );
+        }
+        previous = Some(actual[0].clone());
+    }
+}

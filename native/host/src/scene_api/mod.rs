@@ -244,7 +244,7 @@ impl Texture {
     }
 }
 /// Local instance matrices and optional RGB multipliers; default colors are white.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct Instances {
     pub transforms: Arc<[Mat4]>,
     pub colors: Option<Arc<[f32]>>,
@@ -330,6 +330,48 @@ impl Default for Environment {
     }
 }
 
+/// Camera background projected onto a level floor and surrounding dome.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroundedBackground {
+    /// Capture height above the floor in scene units; finite and positive.
+    pub height: f32,
+    /// Dome radius in scene units; finite and greater than height.
+    pub radius: f32,
+    /// Floor Y in scene units. Default usage is 0.
+    pub ground_height: f32,
+    /// Capture center X/Z in scene units. Default usage is [0, 0].
+    pub center: [f32; 2],
+}
+impl GroundedBackground {
+    fn values(self) -> [f32; 6] {
+        [
+            self.height,
+            self.radius,
+            self.ground_height,
+            self.center[0],
+            self.center[1],
+            0.,
+        ]
+    }
+    fn encode(value: Option<Self>, words: &mut Vec<u32>) {
+        let Some(value) = value else {
+            words[h::GROUNDED_BACKGROUND] = 0;
+            return;
+        };
+        let at = if words[h::GROUNDED_BACKGROUND] == 0 {
+            let at = words.len();
+            words.resize(at + 6, 0);
+            words[h::GROUNDED_BACKGROUND] = at as u32;
+            at
+        } else {
+            words[h::GROUNDED_BACKGROUND] as usize
+        };
+        for (i, v) in value.values().into_iter().enumerate() {
+            words[at + i] = v.to_bits();
+        }
+        words[h::LENGTH] = words.len() as u32;
+    }
+}
 /// Independent environment lighting and visible background controls. Settings
 /// persist when map handles change. They do not alter the source texture pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -410,6 +452,7 @@ pub struct Scene {
     lights: Arena<Light>,
     environment: Environment,
     environment_settings: EnvironmentSettings,
+    grounded_background: Option<GroundedBackground>,
     camera: Option<Camera>,
     dirty: Mutex<Dirty>,
     revision: u64,
@@ -433,6 +476,7 @@ impl Scene {
             lights: Arena::new(owner),
             environment: Environment::default(),
             environment_settings: EnvironmentSettings::default(),
+            grounded_background: None,
             camera: None,
             dirty: Mutex::new(Dirty {
                 structure: true,
@@ -455,6 +499,22 @@ impl Scene {
             self.textures.get(id.0)?;
         }
         self.environment = environment;
+        self.dirty.get_mut().unwrap().environment = true;
+        self.changed();
+        Ok(())
+    }
+    /// Projects the visible background map onto a floor/dome, or disables it
+    /// with `None` (default). Illumination stays unchanged. Invalid nonfinite or
+    /// nonpositive dimensions return `InvalidArgument` without changing the scene.
+    pub fn set_grounded_background(&mut self, value: Option<GroundedBackground>) -> Result<()> {
+        if value.is_some_and(|v| {
+            v.values().iter().any(|n| !n.is_finite()) || v.height <= 0. || v.radius <= v.height
+        }) {
+            return Err(invalid(
+                "Grounded background requires positive height and a larger radius",
+            ));
+        }
+        self.grounded_background = value;
         self.dirty.get_mut().unwrap().environment = true;
         self.changed();
         Ok(())
@@ -772,6 +832,7 @@ impl Scene {
         words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         words[h::BACKGROUND_TEXTURE] = r.background_index;
         self.environment_settings.encode(words);
+        GroundedBackground::encode(self.grounded_background, words);
         self.write_aov_ids(words);
         Ok(())
     }

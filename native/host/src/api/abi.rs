@@ -511,7 +511,9 @@ fn render_options(settings: &RenderSettings) -> MtRenderOptions {
         bevel: settings.bevel as u32,
         bevel_samples: settings.bevel_samples,
         dispersion_wavelengths: settings.dispersion_wavelengths,
-        allow_multiple_samples_per_frame: settings.allow_multiple_samples_per_frame as u32,
+        allow_multiple_samples_per_frame: (settings.batch_samples
+            || settings.allow_multiple_samples_per_frame)
+            as u32,
         width,
         height,
         seed: settings.seed,
@@ -568,6 +570,7 @@ fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
         dispersion_wavelengths: options.dispersion_wavelengths,
         transmissive_output_alpha_min: options.transmissive_output_alpha_min,
         time_budget_ms: options.time_budget_ms,
+        batch_samples: false,
         allow_multiple_samples_per_frame: options.allow_multiple_samples_per_frame != 0,
         size,
         seed: options.seed,
@@ -706,6 +709,8 @@ unsafe fn converge_options(
         camera: (options.use_camera != 0).then_some(options.camera),
         sample_sequence_offset: options.sample_sequence_offset,
         samples_per_batch: options.samples_per_batch,
+        target_batch_time_ms: None,
+        preview_interval_ms: None,
         timeout_ms: options.timeout_ms,
         on_progress,
         cancel: Some(cancel),
@@ -1532,6 +1537,64 @@ pub unsafe extern "C" fn mt_render_set_denoiser(
         render_of(handle)?.set_denoiser(options)
     })
 }
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MtJnlmOptions {
+    struct_size: u32,
+    strength: f32,
+    search_radius: u32,
+    patch_radius: u32,
+    albedo_bandwidth: f32,
+    normal_bandwidth: f32,
+    iterations: u32,
+    reserved: u32,
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_jnlm_options_default(output: *mut MtJnlmOptions) -> i32 {
+    if output.is_null() {
+        return Status::InvalidArgument as i32;
+    }
+    unsafe {
+        output.write(MtJnlmOptions {
+            struct_size: 32,
+            strength: 1.,
+            search_radius: 5,
+            patch_radius: 1,
+            albedo_bandwidth: 0.4,
+            normal_bandwidth: 0.05,
+            iterations: 2,
+            reserved: 0,
+        })
+    };
+    0
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_set_jnlm_display_filter(
+    handle: u64,
+    options: *const MtJnlmOptions,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let options = if options.is_null() {
+            None
+        } else {
+            let o = unsafe { record(options)? };
+            if o.reserved != 0 {
+                return Err(invalid("Reserved must be zero"));
+            }
+            Some(JnlmOptions {
+                strength: o.strength,
+                search_radius: o.search_radius,
+                patch_radius: o.patch_radius,
+                albedo_bandwidth: o.albedo_bandwidth,
+                normal_bandwidth: o.normal_bandwidth,
+                iterations: o.iterations,
+            })
+        };
+        render_of(handle)?.set_jnlm_display_filter(options)
+    })
+}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_render_refine(
     handle: u64,
@@ -1542,6 +1605,77 @@ pub unsafe extern "C" fn mt_render_refine(
     call(error_out, capacity, || {
         let status = render_of(handle)?.refine()?;
         unsafe { write_optional(status_out, render_status(status)) };
+        Ok(())
+    })
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MtRefineOptions {
+    struct_size: u32,
+    batch_samples: u32,
+    defer_resolve: u32,
+    reserved: u32,
+    target_batch_time_ms: f64,
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_refine_options_default(output: *mut MtRefineOptions) -> i32 {
+    if output.is_null() {
+        return Status::InvalidArgument as i32;
+    }
+    unsafe {
+        output.write(MtRefineOptions {
+            struct_size: 24,
+            batch_samples: u32::MAX,
+            defer_resolve: 0,
+            reserved: 0,
+            target_batch_time_ms: 0.,
+        })
+    };
+    0
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_refine_with_options(
+    handle: u64,
+    options: *const MtRefineOptions,
+    status_out: *mut u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let options = unsafe { record(options)? };
+        if options.reserved != 0 || options.defer_resolve > 1 {
+            return Err(invalid("Invalid refine flags"));
+        }
+        let batch_samples = match options.batch_samples {
+            u32::MAX => None,
+            0 => Some(false),
+            1 => Some(true),
+            _ => return Err(invalid("Invalid batch_samples")),
+        };
+        let status = render_of(handle)?.refine_with_options(RefineOptions {
+            batch_samples,
+            target_batch_time_ms: (options.target_batch_time_ms != 0.)
+                .then_some(options.target_batch_time_ms),
+            defer_resolve: options.defer_resolve != 0,
+        })?;
+        unsafe { write_optional(status_out, render_status(status)) };
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_gpu_sample_time(
+    handle: u64,
+    milliseconds: *mut f64,
+    available: *mut u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let time = render_of(handle)?.gpu_sample_time_ms();
+        unsafe {
+            write_optional(milliseconds, time.unwrap_or(0.));
+            write_optional(available, time.is_some() as u32);
+        }
         Ok(())
     })
 }
@@ -1622,6 +1756,93 @@ pub unsafe extern "C" fn mt_render_converge(
         let options = unsafe { converge_options(options, arm_cancel(handle)?)? };
         let result = render.converge(options)?;
         unsafe { write_optional(samples, result.samples) };
+        Ok(())
+    })
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MtConvergeTiming {
+    struct_size: u32,
+    reserved: u32,
+    target_batch_time_ms: f64,
+    preview_interval_ms: f64,
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_converge_timing_default(output: *mut MtConvergeTiming) -> i32 {
+    if output.is_null() {
+        return Status::InvalidArgument as i32;
+    }
+    unsafe {
+        output.write(MtConvergeTiming {
+            struct_size: 24,
+            reserved: 0,
+            target_batch_time_ms: 0.,
+            preview_interval_ms: -1.,
+        })
+    };
+    0
+}
+unsafe fn converge_timed(
+    handle: u64,
+    options: *const MtConvergeOptions,
+    timing: *const MtConvergeTiming,
+    is_loop: bool,
+) -> Result<u32> {
+    let t = unsafe { record(timing)? };
+    if t.reserved != 0
+        || !t.target_batch_time_ms.is_finite()
+        || t.target_batch_time_ms < 0.
+        || !t.preview_interval_ms.is_finite()
+        || t.preview_interval_ms < 0. && t.preview_interval_ms != -1.
+    {
+        return Err(invalid("Invalid convergence timing"));
+    }
+    let render_handle = if is_loop {
+        registry(|r| match r.objects.get(&handle) {
+            Some(Object::Loop(l)) => Ok(l.final_render),
+            _ => Err(invalid_handle()),
+        })?
+    } else {
+        handle
+    };
+    let mut options = unsafe { converge_options(options, arm_cancel(render_handle)?)? };
+    options.target_batch_time_ms = (t.target_batch_time_ms != 0.).then_some(t.target_batch_time_ms);
+    options.preview_interval_ms = (t.preview_interval_ms >= 0.).then_some(t.preview_interval_ms);
+    if is_loop {
+        let render_loop = loop_of(handle)?;
+        let result = lock_loop(&render_loop)?.converge(options)?;
+        Ok(result.samples)
+    } else {
+        Ok(render_of(handle)?.converge(options)?.samples)
+    }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_converge_with_timing(
+    handle: u64,
+    options: *const MtConvergeOptions,
+    timing: *const MtConvergeTiming,
+    samples: *mut u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let count = unsafe { converge_timed(handle, options, timing, false)? };
+        unsafe { write_optional(samples, count) };
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_loop_converge_with_timing(
+    handle: u64,
+    options: *const MtConvergeOptions,
+    timing: *const MtConvergeTiming,
+    samples: *mut u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let count = unsafe { converge_timed(handle, options, timing, true)? };
+        unsafe { write_optional(samples, count) };
         Ok(())
     })
 }
@@ -1940,6 +2161,46 @@ pub unsafe extern "C" fn mt_render_loop_needs_tick(
         let render_loop = loop_of(handle)?;
         let result = lock_loop(&render_loop)?.needs_tick();
         unsafe { write_required(needs, result as u32) }
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_loop_refill(
+    handle: u64,
+    active: *mut u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let render_loop = loop_of(handle)?;
+        let result = lock_loop(&render_loop)?.refill()?;
+        unsafe { write_optional(active, result as u32) };
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_loop_needs_refill(
+    handle: u64,
+    active: *mut u32,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let render_loop = loop_of(handle)?;
+        let result = lock_loop(&render_loop)?.needs_refill();
+        unsafe { write_optional(active, result as u32) };
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_loop_cancel_refill(
+    handle: u64,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let render_loop = loop_of(handle)?;
+        lock_loop(&render_loop)?.cancel_refill();
+        Ok(())
     })
 }
 #[unsafe(no_mangle)]

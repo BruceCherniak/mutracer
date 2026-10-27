@@ -28,6 +28,9 @@ impl Model {
         let mut nearest = f32::INFINITY;
         let mut selected = None;
         for (id, mesh) in self.meshes.iter().enumerate() {
+            if self.1.hidden.contains(&id) {
+                continue;
+            }
             let g = &self.geometries[mesh.geometry];
             let inverse = mesh.transform.inverse();
             let o = inverse.transform_point3(origin);

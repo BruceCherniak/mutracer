@@ -319,6 +319,15 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     w.reserved(h::RESERVED, 1)?;
 
     w.reserved(h::RESERVED_END, h::WORDS - h::RESERVED_END)?;
+    if w.u(h::GROUNDED_BACKGROUND) != 0 {
+        let at = w.u(h::GROUNDED_BACKGROUND);
+        w.span(at, 6)?;
+        w.finite(at, 5)?;
+        w.reserved(at + 5, 1)?;
+        if w.f(at) <= 0. || w.f(at + 1) <= w.f(at) {
+            return Err("Invalid grounded background dimensions".into());
+        }
+    }
     if w.u(h::ENVIRONMENT_SETTINGS) != 0 {
         let at = w.u(h::ENVIRONMENT_SETTINGS);
         w.span(at, 4)?;
@@ -1118,7 +1127,7 @@ impl PreparedState {
             return Err("Invalid environment descriptor length".into());
         }
         let w = Words(bytes);
-        if ![1, 2].contains(&w.u(0)) || w.u(3) > 1 || w.u(10) != 0 || w.u(11) != 0 {
+        if ![1, 2, 3].contains(&w.u(0)) || w.u(3) > 1 || w.u(10) != 0 || w.u(11) != 0 {
             return Err("Invalid environment version/visibility/reserved fields".into());
         }
         let mut pixels = 0;
@@ -1133,15 +1142,26 @@ impl PreparedState {
             }
             pixels += width * height;
         }
-        let header = if w.u(0) == 2 { 16 } else { 12 };
+        let header = match w.u(0) {
+            3 => 24,
+            2 => 16,
+            _ => 12,
+        };
         if w.len() != header + pixels * 4 {
             return Err("Environment pixel length mismatch".into());
         }
         w.finite(4, 4)?;
-        if header == 16 {
+        if header >= 16 {
             w.finite(12, 4)?;
             if w.f(12) < 0. || w.f(14) < 0. {
                 return Err("Environment intensity must be nonnegative".into());
+            }
+        }
+        if header == 24 {
+            w.finite(16, 5)?;
+            w.reserved(21, 3)?;
+            if w.f(16) < 0. || w.f(16) > 0. && w.f(17) <= w.f(16) {
+                return Err("Invalid grounded background dimensions".into());
             }
         }
         w.finite(header, pixels * 4)?;
@@ -2044,8 +2064,8 @@ pub unsafe extern "C" fn mt_probe_render_scene(
                 "Null scene input or oversized descriptor",
             ));
         }
-        if samples == 0 || samples > 4096 {
-            return Err(fail(Status::InvalidArgument, "Samples must be 1..4096"));
+        if samples == 0 || samples > 16384 {
+            return Err(fail(Status::InvalidArgument, "Samples must be 1..16384"));
         }
         let _entry = ENTRY_LOCK.try_lock().map_err(|error| match error {
             std::sync::TryLockError::WouldBlock => {

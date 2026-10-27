@@ -19,7 +19,7 @@ export function sceneRecords() { return {
     field('GEOMETRY_COUNT'), field('MESH_COUNT'), field('MATERIAL_COUNT'), field('LIGHT_COUNT'), field('TEXTURE_COUNT'),
     field('GEOMETRY_OFFSET'), field('MESH_OFFSET'), field('MATERIAL_OFFSET'), field('LIGHT_OFFSET'), field('TEXTURE_OFFSET'),
     field('CAMERA_OFFSET'), field('RESERVED'), field('BACKGROUND_COLOR', 4), field('ENVIRONMENT_TEXTURE'),
-    field('BACKGROUND_TEXTURE'), field('QUALITY_FLAGS'), field('BATCH_OFFSET'), field('MESH_AOV_IDS'), field('MATERIAL_AOV_IDS'), field('ENVIRONMENT_SETTINGS'), field('RESERVED_END', 5)]),
+    field('BACKGROUND_TEXTURE'), field('QUALITY_FLAGS'), field('BATCH_OFFSET'), field('MESH_AOV_IDS'), field('MATERIAL_AOV_IDS'), field('ENVIRONMENT_SETTINGS'), field('GROUNDED_BACKGROUND'), field('RESERVED_END', 4)]),
   GEOMETRY: record([field('VERTEX_COUNT'), field('INDEX_COUNT'), field('POSITION'), field('INDICES'), field('NORMAL'),
     field('UV'), field('UV1'), field('COLOR'), field('TANGENT'), field('MATERIAL_INDEX'), field('RESERVED', 2)]),
   MESH: record([field('GEOMETRY'), field('MATERIAL'), field('MATERIAL_TABLE'), field('MATERIAL_COUNT'), field('TRANSFORM', 16)]),

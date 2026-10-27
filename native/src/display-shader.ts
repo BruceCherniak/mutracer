@@ -1,5 +1,5 @@
 // Native presentation reuses the Web display functions without changing Web code.
-import {composeDefine} from '../../src/renderer/wgsl/compose.frag.wgsl.ts';
+import {composeDefine} from '../../src/renderer/wgsl/compose.frag.wgsl.js';
 export function nativeDisplayShader(): string {
   return `
 struct Params {
@@ -45,9 +45,9 @@ ${composeDefine}
 
 // Share the browser's layer composition. Native keeps its existing sRGB transfer
 // instead of changing the established native display encoding to gamma 2.2.
-import {composeMain} from '../../src/renderer/wgsl/compose.frag.wgsl.ts';
-export function nativeDisplayEffectsShader(hdr = false): string {
-  const main = composeMain.replace(/pow\(max\((\w+), vec3f\(0\.0\)\), vec3f\(1\.0 \/ 2\.2\)\)/g, 'linearToSrgb($1)');
+import {createComposeMain, createCompositeDenoiseColorMain, createCompositeDenoiseAlbedoMain} from '../../src/renderer/wgsl/compose.frag.wgsl.js';
+export function nativeDisplayEffectsShader(hdr = false, output: 'display' | 'linear' | 'albedo' = 'display'): string {
+  const main = createComposeMain('srgb');
   return `
 struct Params {
   size: vec2u, samples: f32, exposure: f32,
@@ -62,7 +62,7 @@ struct ShadowCatcherAccumulation { mask: vec4f, background: vec4f, moments: vec4
 @group(0) @binding(4) var<storage, read> shadows: array<ShadowCatcherAccumulation>;
 @group(0) @binding(5) var bloom: texture_2d<f32>;
 @group(0) @binding(6) var<uniform> params: Params;
-@group(0) @binding(7) var outputImage: texture_storage_2d<${hdr ? 'rgba16float' : 'rgba8unorm'}, write>;
+@group(0) @binding(7) var outputImage: texture_storage_2d<${output !== 'display' ? 'rgba32float' : hdr ? 'rgba16float' : 'rgba8unorm'}, write>;
 @group(0) @binding(8) var normalizedImage: texture_storage_2d<rgba32float, write>;
 var<private> toneMappingParams: vec4f;
 var<private> colorGradingParams: vec4f;
@@ -137,8 +137,8 @@ ${main}
     let a = load_flatBackgroundMaskTex(uv, 0);
     output.color = vec4f(linearToSrgb(a.rgb), clamp(a.a, 0.0, 1.0));
   } else if (params.outputKind == 4u) { output.color = load_shadowCatcherTex(uv, 0); }
-${hdr ? `// Native scRGB presentation uses linear values, including values above 1.
-  output.color = vec4f(select(pow((output.color.rgb + 0.055) / 1.055, vec3f(2.4)), output.color.rgb / 12.92, output.color.rgb <= vec3f(0.04045)), output.color.a);` : ''}
+${output === 'albedo' ? createCompositeDenoiseAlbedoMain('output.color') : ''}
+${hdr || output === 'linear' ? createCompositeDenoiseColorMain('output.color', 'output.color', 'srgb') : ''}
   if ((params.flags & 1u) == 0u) { output.color.a = 1.0; }
   if ((params.flags & 2u) != 0u) { output.color = vec4f(output.color.rgb * output.color.a, output.color.a); }
   textureStore(outputImage, id.xy, output.color);

@@ -367,6 +367,7 @@ fn environment_step(a: &Words, b: &Words) -> Option<Step> {
     if a.u(h::ENVIRONMENT_TEXTURE) != b.u(h::ENVIRONMENT_TEXTURE)
         || a.u(h::BACKGROUND_TEXTURE) != b.u(h::BACKGROUND_TEXTURE)
         || (a.u(h::QUALITY_FLAGS) ^ b.u(h::QUALITY_FLAGS)) & 4 != 0
+        || (a.u(h::GROUNDED_BACKGROUND) != 0) != (b.u(h::GROUNDED_BACKGROUND) != 0)
     {
         return None;
     }
@@ -387,7 +388,7 @@ fn environment_step(a: &Words, b: &Words) -> Option<Step> {
     };
     let (ew, eh, environment) = map(b.u(h::ENVIRONMENT_TEXTURE))?;
     let (bw, bh, background) = map(b.u(h::BACKGROUND_TEXTURE))?;
-    let mut bytes = record(&[2, ew, eh, u32::from(b.u(h::QUALITY_FLAGS) & 4 != 0)]);
+    let mut bytes = record(&[3, ew, eh, u32::from(b.u(h::QUALITY_FLAGS) & 4 != 0)]);
     bytes.extend_from_slice(b.span(h::BACKGROUND_COLOR, 4)?);
     bytes.extend_from_slice(&record(&[bw, bh, 0, 0]));
     let settings = b.u(h::ENVIRONMENT_SETTINGS);
@@ -396,6 +397,13 @@ fn environment_step(a: &Words, b: &Words) -> Option<Step> {
     } else {
         bytes.extend_from_slice(b.span(settings, 4)?);
     }
+    let grounded = b.u(h::GROUNDED_BACKGROUND);
+    if grounded == 0 {
+        bytes.extend_from_slice(&record(&[0; 6]));
+    } else {
+        bytes.extend_from_slice(b.span(grounded, 6)?);
+    }
+    bytes.extend_from_slice(&record(&[0; 2]));
     bytes.extend_from_slice(environment);
     bytes.extend_from_slice(background);
     Some(Step::Environment(bytes))

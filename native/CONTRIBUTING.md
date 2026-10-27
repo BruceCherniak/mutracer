@@ -285,6 +285,10 @@ environment packing, render settings, layouts, shader generation and
 incremental preparation. The host uses typed resource IDs, texture formats,
 layout entries and pipeline keys.
 
+- JNLM shaders and pass uniforms share `../src/renderer/wgsl/jnlm.compute.ts`.
+  `src/jnlm-core.ts` exposes them through AOT; Rust binds resources and dispatches
+  the passes. Native CI runs `validation/jnlm-shaders.mjs` to compare complete
+  JS/AOT packets and defaults.
 - After schema edits, update `scripts/generate-layout-schema.mjs`; its `--check`
   runs with typecheck.
 - Material wire IDs in `schemas/material-properties.json` are frozen. Regenerate

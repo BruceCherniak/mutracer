@@ -254,14 +254,23 @@ int main(int argc, char **argv) {
   /* Interactive refinement reaches the same image. */
   OK(mt_render_set_callback(render, on_sample, &sample_events, error, sizeof error));
   OK(mt_render_restart(render, error, sizeof error));
+  mt_refine_options refine_options;
+  OK(mt_refine_options_default(&refine_options));
+  refine_options.batch_samples = 0;
+  refine_options.target_batch_time_ms = -1;
+  STATUS(mt_render_refine_with_options(render, &refine_options, NULL, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+  refine_options.target_batch_time_ms = 4;
   uint32_t status = MT_RENDER_PREPARING;
   for (int i = 0; i < 600000 && status != MT_RENDER_FINISHED; i++) {
-    QUIET(mt_render_refine(render, &status, error, sizeof error));
+    QUIET(mt_render_refine_with_options(render, &refine_options, &status, error, sizeof error));
     if (status == MT_RENDER_ERROR) break;
     frame();
   }
   REQUIRE(status == MT_RENDER_FINISHED && sample_events > 0, "refine finishes with sample events");
   compare("refine", render, scene, length, backend, samples, width, height);
+  double gpu_ms = 0; uint32_t timing_available = 0;
+  OK(mt_render_gpu_sample_time(render, &gpu_ms, &timing_available, error, sizeof error));
+  REQUIRE(timing_available == 0 || gpu_ms > 0, "valid GPU batch timing");
 
   /* Display: presentation, settings round trip and export. */
   mt_display display, again;
@@ -304,6 +313,15 @@ int main(int argc, char **argv) {
   REQUIRE(written > 8 && memcmp(png + 1, "PNG", 3) == 0, "png signature");
   write_file(out, "engine-display.png", png, written);
   free(png);
+
+  mt_jnlm_options jnlm;
+  OK(mt_jnlm_options_default(&jnlm));
+  jnlm.search_radius = 1; jnlm.patch_radius = 0; jnlm.iterations = 1;
+  OK(mt_render_set_jnlm_display_filter(render, &jnlm, error, sizeof error));
+  OK(mt_display_read_pixels(display, render, MT_DISPLAY_PNG, NULL, 0, &written, NULL, NULL, error, sizeof error));
+  REQUIRE(written > 8, "JNLM PNG composition");
+  OK(mt_render_set_jnlm_display_filter(render, NULL, error, sizeof error));
+  compare("display JNLM preserves HDR", render, scene, length, backend, samples, width, height);
 
   /* Engine camera: equals the oracle of the descriptor with that camera record. */
   mt_camera_v4 camera;
@@ -355,7 +373,16 @@ int main(int argc, char **argv) {
   OK(mt_render_loop_remove_sync(render_loop, sync_id, error, sizeof error));
   STATUS(mt_render_loop_remove_sync(render_loop, sync_id, error, sizeof error), MT_ERROR_INVALID_HANDLE);
   OK(mt_render_cancel(final_render, error, sizeof error));
-  OK(mt_render_loop_converge(render_loop, &converge, &converged, error, sizeof error));
+  mt_converge_timing timing;
+  OK(mt_converge_timing_default(&timing));
+  timing.target_batch_time_ms = 4; timing.preview_interval_ms = 0;
+  OK(mt_render_loop_converge_with_timing(render_loop, &converge, &timing, &converged, error, sizeof error));
+  OK(mt_render_loop_cancel_refill(render_loop, error, sizeof error));
+  uint32_t refill = 123;
+  OK(mt_render_loop_needs_refill(render_loop, &refill, error, sizeof error));
+  REQUIRE(refill == 0, "finished loop has no refill lease");
+  OK(mt_render_loop_refill(render_loop, &refill, error, sizeof error));
+  REQUIRE(refill == 0, "inactive refill submits nothing");
   REQUIRE(converged == samples, "loop converge after an earlier cancel");
   OK(mt_render_loop_destroy(render_loop, error, sizeof error));
   STATUS(mt_render_refine(final_render, &status, error, sizeof error), MT_ERROR_INVALID_HANDLE);

@@ -14,9 +14,14 @@ pub(super) struct GpuTimer {
 }
 impl GpuTimer {
     pub fn new(device: &wgpu::Device, pairs: u32, encoder: bool) -> Option<Self> {
+        if !gpu_enabled() {
+            return None;
+        }
+        Self::realtime(device, pairs, encoder)
+    }
+    pub fn realtime(device: &wgpu::Device, pairs: u32, encoder: bool) -> Option<Self> {
         let features = device.features();
-        if !gpu_enabled()
-            || !features.contains(wgpu::Features::TIMESTAMP_QUERY)
+        if !features.contains(wgpu::Features::TIMESTAMP_QUERY)
             || encoder && !features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
         {
             return None;
@@ -56,6 +61,22 @@ impl GpuTimer {
     pub fn resolve(&self, encoder: &mut wgpu::CommandEncoder) {
         encoder.resolve_query_set(&self.queries, 0..self.count, &self.resolved, 0);
         encoder.copy_buffer_to_buffer(&self.resolved, 0, &self.readback, 0, self.count as u64 * 8);
+    }
+    pub fn map(&self) -> mpsc::Receiver<std::result::Result<(), wgpu::BufferAsyncError>> {
+        let (tx, rx) = mpsc::channel();
+        self.readback
+            .map_async(wgpu::MapMode::Read, .., move |result| {
+                let _ = tx.send(result);
+            });
+        rx
+    }
+    pub fn mapped_milliseconds(&self, queue: &wgpu::Queue) -> Option<f64> {
+        let result =
+            self.readback.get_mapped_range(..).ok().and_then(|mapped| {
+                timestamp_milliseconds(&mapped, queue.get_timestamp_period()).ok()
+            });
+        self.readback.unmap();
+        result
     }
     pub fn milliseconds(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<f64> {
         let (sender, receiver) = mpsc::channel();

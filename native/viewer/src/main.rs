@@ -6,10 +6,12 @@ mod denoiser;
 mod dlss;
 mod dock;
 mod edit_bench;
+mod environment_browser;
 mod examples;
 mod focus;
 mod focus_smoke;
 mod geometry_smoke;
+mod history;
 mod input;
 mod live_denoise_smoke;
 mod material_presets;
@@ -21,6 +23,7 @@ mod picking;
 mod renderer;
 mod resolution;
 mod scene;
+mod scene_tree;
 mod shell;
 mod sky;
 mod studio;
@@ -30,6 +33,7 @@ mod theme;
 mod ui;
 #[cfg(test)]
 mod ui_smoke;
+mod workflow;
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
 use mutracer_native_probe::api;
@@ -173,7 +177,7 @@ impl Target {
 /// bevel and dispersion quality bits clear, so the render does too.
 fn render_settings(settings: &RenderSettings, size: [u32; 2], held: bool) -> api::RenderSettings {
     api::RenderSettings {
-        max_samples: settings.max_samples.clamp(1, 4096),
+        max_samples: settings.max_samples.clamp(1, 16384),
         bounces: settings.bounces,
         clamping: settings.clamping,
         sampling_pattern: match settings.sampling_pattern {
@@ -187,7 +191,7 @@ fn render_settings(settings: &RenderSettings, size: [u32; 2], held: bool) -> api
         dispersion_wavelengths: 1,
         transmissive_output_alpha_min: settings.transmissive_output_alpha_min,
         // Held input traces one sample per frame, as before.
-        allow_multiple_samples_per_frame: !held,
+        batch_samples: !held,
         size: api::RenderSize::Fixed {
             width: size[0],
             height: size[1],
@@ -308,7 +312,25 @@ struct Viewer {
     debug_open: bool,
     preview_enabled: bool,
     preview_scale: f32,
-    applied_denoise: Option<(bool, bool)>,
+    applied_denoise: Option<(
+        bool,
+        bool,
+        denoiser::OidnSettings,
+        denoiser::Choice,
+        api::JnlmOptions,
+        bool,
+    )>,
+    oidn_settings: denoiser::OidnSettings,
+    jnlm_settings: api::JnlmOptions,
+    live_denoise: bool,
+    auto_rotate: bool,
+    auto_units: bool,
+    rotation_clock: std::time::Instant,
+    hide_ui: bool,
+    history: history::History,
+    initial_materials: history::Materials,
+    tools: workflow::Tools,
+    last_loop_frame: std::time::Instant,
     selected: usize,
     selected_mesh: Option<usize>,
     texture_browser: textures::Browser,
@@ -316,11 +338,13 @@ struct Viewer {
     scene_open: bool,
     inspector_open: bool,
     object_query: String,
+    scene_tree: scene_tree::Tree,
     loading: Option<std::sync::mpsc::Receiver<Result<Model>>>,
     loading_name: String,
     load_cancel: Arc<AtomicBool>,
     load_progress: Option<std::sync::mpsc::Receiver<String>>,
     examples: examples::Browser,
+    environments: environment_browser::Browser,
     camera_index: Option<usize>,
     pending_environment: Option<Environment>,
     running: bool,
@@ -424,6 +448,14 @@ impl Viewer {
             gpu_texture: None,
             scene_build: None,
             pending_model: None,
+            initial_materials: history::Materials::capture(&model),
+            history: Default::default(),
+            tools: Default::default(),
+            auto_rotate: false,
+            auto_units: true,
+            rotation_clock: std::time::Instant::now(),
+            hide_ui: false,
+            last_loop_frame: std::time::Instant::now(),
             model,
             descriptor: None,
             animation_clock: std::time::Instant::now(),
@@ -443,7 +475,10 @@ impl Viewer {
             picking_focus: false,
             focus: focus::AutoFocus::default(),
             samples: 0,
-            display_settings: mutracer_native_probe::display::Settings::default(),
+            display_settings: mutracer_native_probe::display::Settings {
+                shadow_catcher_alpha: 0.8,
+                ..Default::default()
+            },
             applied_display: None,
 
             aov_display: Default::default(),
@@ -452,6 +487,9 @@ impl Viewer {
             preview_enabled: true,
             preview_scale: 0.5,
             applied_denoise: None,
+            oidn_settings: Default::default(),
+            jnlm_settings: Default::default(),
+            live_denoise: true,
             selected,
             selected_mesh: None,
             texture_browser: textures::Browser::default(),
@@ -459,11 +497,13 @@ impl Viewer {
             scene_open: true,
             inspector_open: true,
             object_query: String::new(),
+            scene_tree: Default::default(),
             loading: None,
             loading_name: String::new(),
             load_cancel: Arc::new(AtomicBool::new(false)),
             load_progress: None,
             examples,
+            environments: Default::default(),
             camera_index: None,
             pending_environment: None,
             running: true,
@@ -590,6 +630,7 @@ impl Viewer {
         ctx: &egui::Context,
     ) {
         self.texture_browser.new_model();
+        self.environments.cancel();
         self.load_cancel.store(true, Ordering::Relaxed);
         let cancel = Arc::new(AtomicBool::new(false));
         self.load_cancel = cancel.clone();
@@ -656,7 +697,13 @@ impl Viewer {
         self.load_progress = None;
         match result {
             Ok(model) => {
-                let camera = model.camera_for_load(&self.camera);
+                if self.auto_units && self.camera.meters_per_unit != self.model.guessed_units() {
+                    self.auto_units = false;
+                }
+                let mut camera = model.camera_for_load(&self.camera);
+                if self.auto_units {
+                    camera.meters_per_unit = model.guessed_units();
+                }
                 if let Some(retired) = self.candidate.replace((model, camera)) {
                     std::thread::spawn(move || drop(retired));
                 }
@@ -763,13 +810,26 @@ impl Viewer {
         if self.texture_browser.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        let rotation_now = std::time::Instant::now();
+        if self.auto_rotate && self.running && !ctx.input(|i| i.pointer.any_down()) {
+            self.camera.yaw -= rotation_now
+                .duration_since(self.rotation_clock)
+                .as_secs_f32()
+                .min(0.1)
+                * std::f32::consts::TAU
+                / 30.;
+            self.camera_index = None;
+            self.dirty(Change::Camera);
+        }
+        self.rotation_clock = rotation_now;
         // Playback uses the same one-sample live-denoising policy as held input.
         let playing = self.running && self.model.0.animation.as_ref().is_some_and(|a| a.playing);
         // Display controls recompose only; they must not select the preview or
         // suspend the completed final denoiser while their pointer is held.
         let held = ctx.input(|i| i.pointer.any_down())
             && (self.drag.active() || self.change != Change::None)
-            || playing;
+            || playing
+            || self.auto_rotate && self.running;
         // A backend switch prepares a second engine; the current image stays.
         if self.backend == self.target.backend {
             self.replacement = None;
@@ -988,25 +1048,60 @@ impl Viewer {
             self.camera.orthographic || self.camera.f_stop == 0.,
         );
         let denoise = self.denoise;
-        if self.applied_denoise != Some((denoise, temporal)) {
+        if self.applied_denoise
+            != Some((
+                denoise,
+                temporal,
+                self.oidn_settings,
+                self.denoiser_choice,
+                self.jnlm_settings,
+                self.live_denoise,
+            ))
+        {
             for target in [Some(&mut self.target), self.replacement.as_mut()]
                 .into_iter()
                 .flatten()
             {
-                denoiser::configure(
+                denoiser::configure_full(
                     &mut target.render_loop,
                     denoise,
                     temporal,
                     self.custom_denoiser.as_ref(),
+                    self.oidn_settings,
+                    self.live_denoise,
+                    (denoise && self.denoiser_choice == denoiser::Choice::Jnlm)
+                        .then_some(self.jnlm_settings),
                 )?;
             }
-            self.applied_denoise = Some((denoise, temporal));
+            self.applied_denoise = Some((
+                denoise,
+                temporal,
+                self.oidn_settings,
+                self.denoiser_choice,
+                self.jnlm_settings,
+                self.live_denoise,
+            ));
             self.denoise_status.clear();
         }
-        self.target.render_loop.coalesce_scene_updates = self.denoise && self.preview_enabled;
-        if let Some(target) = &mut self.replacement {
-            target.render_loop.coalesce_scene_updates = self.denoise && self.preview_enabled;
+        if self.denoise && self.denoiser_choice == denoiser::Choice::Jnlm {
+            for target in [Some(&self.target), self.replacement.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                denoiser::configure_display_filter(
+                    &target.render_loop,
+                    Some(self.jnlm_settings),
+                    self.live_denoise,
+                )?;
+            }
         }
+        self.target.render_loop.coalesce_scene_updates =
+            self.denoise && self.live_denoise && self.preview_enabled;
+        if let Some(target) = &mut self.replacement {
+            target.render_loop.coalesce_scene_updates =
+                self.denoise && self.live_denoise && self.preview_enabled;
+        }
+        let final_was_finished = self.final_render().status() == api::RenderStatus::Finished;
         let status = if holding {
             ctx.request_repaint_after(Duration::from_millis(1));
             self.target.render_loop.status()
@@ -1014,8 +1109,21 @@ impl Viewer {
             if let Some(replacement) = &mut self.replacement {
                 replacement.render_loop.tick()?;
             }
-            self.target.render_loop.tick()?
+            let refill = self.change == Change::None
+                && !held
+                && !display_changed
+                && self.last_loop_frame.elapsed() < Duration::from_millis(16)
+                && self.target.render_loop.needs_refill();
+            if refill {
+                self.target.render_loop.refill()?;
+                ctx.request_repaint_after(Duration::from_millis(1));
+                self.target.render_loop.status()
+            } else {
+                self.last_loop_frame = std::time::Instant::now();
+                self.target.render_loop.tick()?
+            }
         } else {
+            self.target.render_loop.cancel_refill();
             // Paused: commit edits and recompose, but never trace.
             for target in [Some(&self.target), self.replacement.as_ref()]
                 .into_iter()
@@ -1045,6 +1153,14 @@ impl Viewer {
             }
             self.target.render_loop.status()
         };
+        if !final_was_finished
+            && status == api::RenderLoopStatus::Finished
+            && self.denoise
+            && !self.live_denoise
+            && self.denoiser_choice == denoiser::Choice::Jnlm
+        {
+            ctx.request_repaint();
+        }
         // Swap in a replacement engine once it shows an image.
         if self
             .replacement
@@ -1065,6 +1181,8 @@ impl Viewer {
             let retired = std::mem::replace(&mut self.model, model);
             std::thread::spawn(move || drop(retired));
             self.texture_browser.new_model();
+            self.history.new_model();
+            self.initial_materials = history::Materials::capture(&self.model);
             self.camera = camera;
             if let Some(environment) = self.pending_environment.take() {
                 self.environment = environment;
@@ -1091,6 +1209,7 @@ impl Viewer {
             self.selected_mesh = None;
             self.picking_focus = false;
             self.object_query.clear();
+            self.scene_tree = Default::default();
             self.animation_clock = std::time::Instant::now();
         }
         let presentations = self.target.render_loop.presentations();
@@ -1128,7 +1247,10 @@ impl Viewer {
                 Some(error) => error,
                 // GPU callbacks return after submission; their CPU wall time
                 // does not measure the duration of RR on the GPU.
-                None if self.applied_denoise.is_some_and(|(_, temporal)| temporal) => {
+                None if self
+                    .applied_denoise
+                    .is_some_and(|(_, temporal, _, _, _, _)| temporal) =>
+                {
                     "DLSS RR".into()
                 }
                 None => format!("{} · {:.0} ms", report.backend, report.milliseconds),
@@ -1141,11 +1263,15 @@ impl Viewer {
             }
             self.error = error;
         }
+        if self.target.render_loop.needs_refill() {
+            ctx.request_repaint_after(Duration::from_millis(1));
+        }
         if self.running && self.target.render_loop.needs_tick()
             || self.replacement.is_some()
             || self.scene_build.is_some()
             || self.pending_model.is_some()
             || self.change != Change::None
+            || self.auto_rotate && self.running
             || self
                 .model
                 .animation
@@ -2967,6 +3093,7 @@ fn main() -> Result<()> {
                         required_limits: adapter.limits(),
                         required_features: adapter.features()
                             & (wgpu::Features::EXPERIMENTAL_RAY_QUERY
+                                | wgpu::Features::TIMESTAMP_QUERY
                                 | wgpu::Features::SHADER_F16
                                 | wgpu::Features::SUBGROUP
                                 | wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX),

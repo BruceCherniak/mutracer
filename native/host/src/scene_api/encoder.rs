@@ -21,7 +21,7 @@ pub struct Texture {
 }
 /// Common OpenPBR values of [`super::OpenPbrMaterial`]; defaults match the browser
 /// `OpenPBRMaterial`.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Material {
     pub name: String,
     /// Linear base color.
@@ -47,7 +47,7 @@ pub struct Material {
     pub layers: MaterialLayers,
 }
 pub(super) use super::types::{Geometry, MaterialLayers};
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Mesh {
     pub materials: Vec<usize>,
     pub instances: Option<super::Instances>,

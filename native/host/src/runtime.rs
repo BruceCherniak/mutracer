@@ -158,8 +158,8 @@ fn pack_frames(
     seed: u32,
 ) -> Result<Vec<[u8; 16]>> {
     let body = move || {
-        let mut frames = Vec::with_capacity(4096);
-        for sample in 0..4096 {
+        let mut frames = Vec::with_capacity(16384);
+        for sample in 0..16384 {
             let mut pointer = std::ptr::null();
             let mut size = 0;
             unsafe {

@@ -37,8 +37,10 @@ render.set_denoiser(Some(DenoiserOptions {
 
 A standard model is bundled, so no weight download is needed. For custom weights,
 use `DenoiserOptions::library` / `mt_render_denoiser.library` with an HDR/PU TZA
-that takes color, albedo and normal. The render backend supplies sampled guides;
-clean-aux weights that require prefiltered guides are not supported.
+that takes color, albedo and normal. For the standard Large clean-aux model,
+keep `rt_hdr_calb_cnrm_large.tza`, `rt_alb_large.tza` and `rt_nrm_large.tza`
+together and select the first file. Its albedo and normal prefilters run before
+beauty filtering; they use more GPU memory and time than Standard or Small.
 
 Rust callers can lower `max_tile_size` to reduce temporary GPU memory at the
 cost of overlapping work. The C render interface uses whole-image inference.
@@ -53,6 +55,18 @@ these kernels. DX12 and devices without that support use implicit GEMM.
 A caller-owned device uses only the features enabled by its host.
 
 After device loss, create a new engine.
+
+## JNLM display filtering
+
+Use `Render::set_jnlm_display_filter` / `mt_render_set_jnlm_display_filter`
+with `JnlmOptions` / `mt_jnlm_options`. Disable an OIDN or custom denoiser
+first to use JNLM alone. Presents and PNG exports filter the composed SDR image,
+including its color settings, effects and background. Changing these controls
+recomputes the filter without tracing more samples.
+
+JNLM leaves raw HDR, `Denoised` readback and HDR window output unchanged. Its
+scratch images and retained guide moments increase GPU memory use. Larger
+search windows, patches and more passes cost more GPU work.
 
 ## Custom denoisers
 

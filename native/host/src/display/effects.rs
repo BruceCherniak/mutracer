@@ -19,6 +19,8 @@ pub(super) struct Effects {
     pipeline: wgpu::ComputePipeline,
     normalize: wgpu::ComputePipeline,
     hdr_pipeline: Option<wgpu::ComputePipeline>,
+    linear_pipeline: Option<wgpu::ComputePipeline>,
+    guide_pipeline: Option<wgpu::ComputePipeline>,
     dummy: wgpu::Texture,
     zero: wgpu::Buffer,
     normalized: Option<wgpu::Texture>,
@@ -48,6 +50,8 @@ impl Effects {
             pipeline: pipeline("main"),
             normalize: pipeline("normalize"),
             hdr_pipeline: None,
+            linear_pipeline: None,
+            guide_pipeline: None,
             dummy: image(device, [1, 1], wgpu::TextureFormat::Rgba16Float),
             zero: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Empty catcher"),
@@ -63,6 +67,29 @@ impl Effects {
             bloom_runs: 0,
         }
     }
+    pub(super) fn prepare_jnlm(&mut self, device: &wgpu::Device, sources: &[String; 2]) {
+        for (slot, source) in [&mut self.linear_pipeline, &mut self.guide_pipeline]
+            .into_iter()
+            .zip(sources)
+        {
+            if slot.is_none() {
+                let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Shared TS JNLM composition"),
+                    source: wgpu::ShaderSource::Wgsl(source.as_str().into()),
+                });
+                *slot = Some(
+                    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Shared TS JNLM composition"),
+                        layout: None,
+                        module: &module,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+                );
+            }
+        }
+    }
     pub fn reset(&mut self) {
         self.key = None;
     }
@@ -73,8 +100,27 @@ impl Effects {
         premultiply: bool,
         target: &wgpu::Texture,
     ) {
+        self.compose_inner(display, settings, premultiply, target, false);
+    }
+    pub(super) fn compose_guide(
+        &mut self,
+        display: &Display,
+        settings: &Settings,
+        target: &wgpu::Texture,
+    ) {
+        self.compose_inner(display, settings, false, target, true);
+    }
+    fn compose_inner(
+        &mut self,
+        display: &Display,
+        settings: &Settings,
+        premultiply: bool,
+        target: &wgpu::Texture,
+        guide: bool,
+    ) {
         let gpu = &display.gpu;
         let device = &gpu.device;
+        let linear = target.format() == wgpu::TextureFormat::Rgba32Float;
         let hdr = target.format() == wgpu::TextureFormat::Rgba16Float;
         if hdr && self.hdr_pipeline.is_none() {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -204,7 +250,13 @@ impl Effects {
         } else {
             &self.dummy
         };
-        let pipeline = if hdr {
+        let pipeline = if linear {
+            if guide {
+                self.guide_pipeline.as_ref().unwrap()
+            } else {
+                self.linear_pipeline.as_ref().unwrap()
+            }
+        } else if hdr {
             self.hdr_pipeline.as_ref().unwrap()
         } else {
             &self.pipeline

@@ -4,6 +4,7 @@ mod bloom;
 mod effects;
 #[cfg(test)]
 mod effects_tests;
+pub(crate) mod jnlm;
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Metadata {
     has_catcher: bool,
@@ -124,6 +125,8 @@ pub struct Display {
     effects: std::sync::Mutex<Option<effects::Effects>>,
     image_revision: u64,
     denoise_revision: u64,
+    jnlm_options: Option<jnlm::Options>,
+    jnlm: std::sync::Mutex<Option<jnlm::Jnlm>>,
 }
 impl Display {
     pub(super) fn new(gpu: GpuDevice, size: [u32; 2]) -> Self {
@@ -169,7 +172,8 @@ impl Display {
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -242,6 +246,8 @@ impl Display {
             effects: Default::default(),
             image_revision: 0,
             denoise_revision: 0,
+            jnlm_options: None,
+            jnlm: Default::default(),
         }
     }
     pub(super) fn capture(
@@ -259,7 +265,7 @@ impl Display {
             self.reset_effects();
         }
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        if metadata.has_catcher {
+        if metadata.has_catcher || self.jnlm_options.is_some() {
             let target = self.shadow.get_or_insert_with(|| {
                 self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("Stable catcher accumulation"),
@@ -280,6 +286,12 @@ impl Display {
         self.samples = samples;
         self.original_samples = samples;
         self.using_denoised = false;
+    }
+    pub(crate) fn set_jnlm(&mut self, options: Option<jnlm::Options>) {
+        if self.jnlm_options != options {
+            self.jnlm_options = options;
+            *self.jnlm.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
     }
     /// Replace the preview with a caller-owned linear denoised result. The image
     /// stays on the GPU, so [`Display::show_denoised`] can show it again after a capture.
@@ -629,6 +641,25 @@ impl Display {
         target: &wgpu::Texture,
     ) {
         if self.samples == 0 {
+            return;
+        }
+        if let Some(options) = self
+            .jnlm_options
+            .filter(|_| matches!(settings.output, 0 | 3) && self.shadow.is_some())
+        {
+            let mut slot = self.jnlm.lock().unwrap_or_else(|e| e.into_inner());
+            if slot
+                .as_ref()
+                .is_none_or(|filter| !filter.matches(self.size, options))
+            {
+                *slot = Some(jnlm::Jnlm::new(&self.gpu, self.size, options));
+            }
+            let mut effects = self.effects.lock().unwrap_or_else(|e| e.into_inner());
+            let effects = effects.get_or_insert_with(|| effects::Effects::new(&self.gpu.device));
+            slot.as_mut()
+                .unwrap()
+                .compose(self, settings, premultiply, effects, target)
+                .expect("JNLM stable guide capture");
             return;
         }
         if settings.vignette != 0.

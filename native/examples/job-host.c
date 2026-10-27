@@ -38,7 +38,7 @@ int main(int argc,char **argv){
  OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&a,error,sizeof(error)));OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&b,error,sizeof(error)));
  OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));
  FAILS(MT_ERROR_INVALID_HANDLE,mt_job_info(0,&info,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_submit(a,1,NULL,error,sizeof(error)));
- FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_submit(a,0,&old,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_submit(a,4097,&old,error,sizeof(error)));
+ FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_submit(a,0,&old,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_submit(a,16385,&old,error,sizeof(error)));
  OK(mt_context_submit(a,samples,&old,error,sizeof(error)));OK(mt_job_info(old,&info,error,sizeof(error)));
  REQUIRE(info.state==MT_JOB_QUEUED&&info.submitted_samples==0&&info.completed_samples==0&&info.base_samples==0);
  OK(mt_context_info(a,&context_info,error,sizeof(error)));REQUIRE(context_info.state==MT_CONTEXT_JOB_ACTIVE&&context_info.samples==0);

@@ -795,7 +795,7 @@ pub fn tree_row(ui: &mut Ui, name: &str, material: &str, selected: bool) -> Resp
     response.on_hover_text(format!("{name}\n{material}"))
 }
 
-fn paint_icon(ui: &Ui, center: egui::Pos2, icon: Icon, color: Color32) {
+pub(super) fn paint_icon(ui: &Ui, center: egui::Pos2, icon: Icon, color: Color32) {
     let painter = ui.painter();
     let stroke = Stroke::new(1.2, color);
     let rect = egui::Rect::from_center_size(center, egui::vec2(16., 14.));

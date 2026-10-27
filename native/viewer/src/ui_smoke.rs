@@ -158,6 +158,7 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
         required_limits: adapter.limits(),
         required_features: adapter.features()
             & (wgpu::Features::EXPERIMENTAL_RAY_QUERY
+                | wgpu::Features::TIMESTAMP_QUERY
                 | wgpu::Features::SHADER_F16
                 | wgpu::Features::SUBGROUP),
         experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
@@ -179,6 +180,7 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
     };
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
+    ctx.style_mut_of(egui::Theme::Dark, |style| style.animation_time = 0.);
     let mut viewer = Viewer::new_on_device(&default_model(), Some(gpu.clone()))?;
     viewer.resolution.scale = None;
     viewer.size = [240, 160];
@@ -325,5 +327,71 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
     assert_eq!(viewer.environment.name, "Procedural sky");
     assert!(viewer.environment.image.is_some());
     assert_eq!(viewer.examples.current.as_deref(), Some("spheres"));
+    viewer.display_settings.output = 0;
+    viewer.denoise = true;
+    viewer.denoiser_choice = denoiser::Choice::Jnlm;
+    viewer.tab = 0;
+    let image = settle(&mut viewer, &ctx, &gpu)?;
+    save(&gpu, &image, &out.join("render-jnlm.png"))?;
+    let hdr = viewer.hdr()?;
+    let beauty = viewer.final_render().samples();
+    let fov = viewer.camera.fov;
+    let before = history::Snapshot::capture(&viewer);
+    viewer.camera.fov = 50.;
+    viewer.live_denoise = false;
+    let after = history::Snapshot::capture(&viewer);
+    viewer.history.record(before, after);
+    viewer.undo(false);
+    assert_eq!(viewer.camera.fov, fov);
+    assert!(viewer.live_denoise);
+    viewer.undo(true);
+    assert_eq!(viewer.camera.fov, 50.);
+    assert!(!viewer.live_denoise);
+    viewer.undo(false);
+    settle(&mut viewer, &ctx, &gpu)?;
+    // Completed-only JNLM keeps the same final output and beauty accumulation.
+    let filtered = viewer
+        .target
+        .engine
+        .display()
+        .read_rgba8(viewer.final_render())?
+        .2;
+    viewer.live_denoise = false;
+    settle(&mut viewer, &ctx, &gpu)?;
+    assert_eq!(
+        viewer
+            .target
+            .engine
+            .display()
+            .read_rgba8(viewer.final_render())?
+            .2,
+        filtered
+    );
+    assert_eq!(viewer.hdr()?, hdr);
+    assert_eq!(viewer.final_render().samples(), beauty);
+    viewer.open_export(&ctx);
+    frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    save(&gpu, &image, &out.join("export-dialog.png"))?;
+    viewer.tools.export_samples = 16;
+    viewer.tools.transparent = true;
+    viewer.start_export(out.join("export-transparent.png"), &ctx);
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while viewer.tools.job.is_some() {
+        frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+        ensure!(std::time::Instant::now() < deadline, "Export timed out");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    ensure!(viewer.error.is_empty(), "{}", viewer.error);
+    let export = image::open(out.join("export-transparent.png"))?.into_rgba8();
+    assert_eq!(export.dimensions(), (viewer.size[0], viewer.size[1]));
+    assert!(export.pixels().any(|p| p.0[3] < 255));
+    assert_eq!(viewer.final_render().samples(), beauty);
+    assert_eq!(viewer.hdr()?, hdr);
+    viewer.environment.grounded = true;
+    viewer.dirty(Change::Environment);
+    let image = settle(&mut viewer, &ctx, &gpu)?;
+    save(&gpu, &image, &out.join("grounded.png"))?;
+    std::fs::write(out.join("render-setup.rs"), viewer.render_setup_code())?;
     Ok(())
 }

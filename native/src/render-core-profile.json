@@ -357,6 +357,21 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "jnlmParameters",
+      "symbol": "mt_core_jnlm",
+      "params": [
+        "u32",
+        "u32",
+        "f64",
+        "u32",
+        "u32",
+        "f64",
+        "f64",
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }

@@ -371,13 +371,12 @@ impl GpuDevice {
             .features()
             .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
         let use_hwrt = mode != 0 && hardware_ray_query;
-        let profile_features = if profiling::gpu_enabled() {
-            adapter.features()
-                & (wgpu::Features::TIMESTAMP_QUERY
-                    | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
-        } else {
-            wgpu::Features::empty()
-        };
+        let profile_features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY
+            | if profiling::gpu_enabled() {
+                adapter.features() & wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
+            } else {
+                wgpu::Features::empty()
+            };
         let cache_feature = if info.backend == wgpu::Backend::Vulkan {
             adapter.features() & wgpu::Features::PIPELINE_CACHE
         } else {
@@ -877,9 +876,6 @@ impl GpuScene {
             samples: 0,
         })
     }
-    fn dispatch_samples(&self, start: u32, additional: u32, bounces: f32, seed: u32) -> Result<()> {
-        self.dispatch_timed(start, additional, bounces, seed, None)
-    }
     fn dispatch_timed(
         &self,
         start: u32,
@@ -891,8 +887,8 @@ impl GpuScene {
         let end = start
             .checked_add(additional)
             .ok_or("Sample count overflow")?;
-        if additional == 0 || end > 4096 {
-            return Err("Total samples must be 1..4096".into());
+        if additional == 0 || end > 16384 {
+            return Err("Total samples must be 1..16384".into());
         }
         if self.frame_key != (bounces.to_bits(), seed) {
             return Err("Frame settings do not match the prepared sequence".into());
@@ -1198,12 +1194,18 @@ impl GpuScene {
         })
     }
     /// Submits samples `start..start + additional` of a target without waiting.
-    fn dispatch_target(&self, target: &Target, start: u32, additional: u32) -> Result<()> {
+    fn dispatch_target(
+        &self,
+        target: &Target,
+        start: u32,
+        additional: u32,
+        timer: Option<&profiling::GpuTimer>,
+    ) -> Result<()> {
         let end = start
             .checked_add(additional)
             .ok_or("Sample count overflow")?;
-        if additional == 0 || end > 4096 {
-            return Err("Total samples must be 1..4096".into());
+        if additional == 0 || end > 16384 {
+            return Err("Total samples must be 1..16384".into());
         }
         self.encode_samples(
             target.pipeline.as_ref().unwrap_or(&self.pipeline),
@@ -1217,7 +1219,7 @@ impl GpuScene {
             &target.frames,
             [target.width, target.height],
             start..end,
-            None,
+            timer,
         );
         Ok(())
     }
@@ -1581,8 +1583,8 @@ fn render_scene(
     assets: &Assets,
 ) -> Result<()> {
     let samples = options.samples;
-    if samples == 0 || samples > 4096 {
-        return Err("Samples must be 1..4096".into());
+    if samples == 0 || samples > 16384 {
+        return Err("Samples must be 1..16384".into());
     }
     fs::create_dir_all(output)?;
     let start = Instant::now();

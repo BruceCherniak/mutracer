@@ -17,7 +17,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 /// L0 limit on accumulated samples per context.
-const MAX_TOTAL_SAMPLES: u32 = 4096;
+const MAX_TOTAL_SAMPLES: u32 = 16384;
 /// L0 limit on samples dispatched by one job poll.
 const MAX_BATCH: u32 = 64;
 
@@ -61,7 +61,7 @@ pub struct RenderSettings {
     pub aovs: u32,
     /// Independent AOV sample cap, positive integer. Default 16.
     pub aov_samples: u32,
-    /// Maximum complete samples, 1–4096. Default 2048. Raising it continues the
+    /// Maximum complete samples, 1–16384. Default 2048. Raising it continues the
     /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
     pub max_samples: u32,
     /// Maximum scattering depth, clamped to 1–20. Default 3.
@@ -84,6 +84,10 @@ pub struct RenderSettings {
     pub transmissive_output_alpha_min: f64,
     /// Interactive frame budget in milliseconds for [`Render::refine`]. Default 21.
     pub time_budget_ms: f64,
+    /// Batch samples within `time_budget_ms` when GPU timestamps are available.
+    /// Default false. RenderLoop limits stationary batches to 4 ms.
+    pub batch_samples: bool,
+    /// Compatibility alias for `batch_samples`; either flag enables batching.
     /// Let one refine submit several samples when the measured sample time fits the
     /// budget. Default false (one sample per refine).
     pub allow_multiple_samples_per_frame: bool,
@@ -94,6 +98,31 @@ pub struct RenderSettings {
     /// Adapts the scale of a [`RenderSize::Scale`] render to frame timing, between
     /// `min_scale` and that scale. Default `None`.
     pub adaptive_resolution: Option<AdaptiveResolution>,
+}
+/// Overrides for one [`Render::refine_with_options`] call. Defaults use the render settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RefineOptions {
+    /// Batch samples for this call, overriding both render flags. Default `None`.
+    pub batch_samples: Option<bool>,
+    /// Positive finite GPU queue budget, capped by `time_budget_ms`. Default `None`.
+    pub target_batch_time_ms: Option<f64>,
+    /// Collect and trace without capturing a display image. The next normal
+    /// refine or image read resolves it. Default false.
+    pub defer_resolve: bool,
+}
+impl RefineOptions {
+    fn validate(self) -> Result<()> {
+        if self
+            .target_batch_time_ms
+            .is_some_and(|ms| !ms.is_finite() || ms <= 0.)
+        {
+            return Err(error(
+                Status::InvalidArgument,
+                "target_batch_time_ms must be positive and finite",
+            ));
+        }
+        Ok(())
+    }
 }
 /// Browser `adaptiveResolution`: after each observed batch the scale moves
 /// toward `target_frame_ms`; it grows only after four fast batches, by at most 25%.
@@ -120,6 +149,7 @@ impl Default for RenderSettings {
             dispersion_wavelengths: 3,
             transmissive_output_alpha_min: 1.,
             time_budget_ms: 21.,
+            batch_samples: false,
             allow_multiple_samples_per_frame: false,
             size: RenderSize::Scale(1.),
             seed: 12345,
@@ -136,7 +166,7 @@ impl RenderSettings {
             return invalid("Invalid AOV mask or sample cap");
         }
         if !(1..=MAX_TOTAL_SAMPLES).contains(&self.max_samples) {
-            return invalid("max_samples must be 1..4096");
+            return invalid("max_samples must be 1..16384");
         }
         if self.dispersion_wavelengths != 1 && self.dispersion_wavelengths != 3 {
             return invalid("dispersion_wavelengths must be 1 or 3");
@@ -388,6 +418,8 @@ pub struct DenoiserOptions {
     pub backend: u32,
     /// OIDN library path; default the bundled library or `MUTRACER_OIDN_LIBRARY`.
     /// Backend 5 uses an HDR/PU color/albedo/normal TZA path; default `rt_hdr_alb_nrm`.
+    /// Selecting `rt_hdr_calb_cnrm_large.tza` requires sibling `rt_alb_large.tza`
+    /// and `rt_nrm_large.tza` guide prefilters.
     pub library: Option<PathBuf>,
     /// Default [`DenoiseSchedule::Converged`].
     pub schedule: DenoiseSchedule,
@@ -433,7 +465,7 @@ pub struct ConvergeProgress {
 }
 /// Deterministic offline rendering options.
 pub struct ConvergeOptions {
-    /// Final complete samples, 1–4096. Required.
+    /// Final complete samples, 1–16384. Required.
     pub samples: u32,
     /// Camera for this output only. Default the committed engine camera.
     pub camera: Option<Camera>,
@@ -441,6 +473,10 @@ pub struct ConvergeOptions {
     pub sample_sequence_offset: u32,
     /// Maximum samples per submitted batch, clamped to 1–64. Default 8.
     pub samples_per_batch: u32,
+    /// Positive finite GPU batch budget in milliseconds. Default None (fixed batches).
+    pub target_batch_time_ms: Option<f64>,
+    /// Nonnegative finite delay between intermediate image captures. Default None (capture at the end).
+    pub preview_interval_ms: Option<f64>,
     /// Timeout for preparation and rendering. Default 600000.
     pub timeout_ms: u64,
     /// Called after every complete batch and before denoising. Default none.
@@ -456,6 +492,8 @@ impl ConvergeOptions {
             camera: None,
             sample_sequence_offset: 0,
             samples_per_batch: 8,
+            target_batch_time_ms: None,
+            preview_interval_ms: None,
             timeout_ms: 600_000,
             on_progress: None,
             cancel: None,
@@ -619,6 +657,7 @@ struct Denoise {
 
 pub(super) struct RenderState {
     pub(super) settings: RenderSettings,
+    jnlm: Option<crate::display::jnlm::Options>,
     pub(super) fallback: Option<u64>,
     /// L0 context linked as a target to the engine's shared scene.
     context: u64,
@@ -636,6 +675,8 @@ pub(super) struct RenderState {
     samples: u32,
     first_frame: bool,
     sample_ms: Option<f64>,
+    gpu_sample_ms: Option<f64>,
+    refine_options: RefineOptions,
     pub(super) capture: Option<Capture>,
     pub(super) output: super::post_process::OutputState,
     capture_key: Option<TargetKey>,
@@ -784,6 +825,7 @@ impl RenderState {
         self.status = RenderStatus::Converging;
         if full {
             self.sample_ms = None;
+            self.gpu_sample_ms = None;
         }
         cancel_denoise(self);
     }
@@ -1415,6 +1457,8 @@ fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
             render.adaptive.frame = Some((elapsed, scale));
             render.samples = samples;
             render.sample_ms = Some(elapsed / count.max(1) as f64);
+            render.gpu_sample_ms =
+                context::job_gpu_time(render.context).map(|ms| ms / count.max(1) as f64);
             render.needs_capture = true;
             update_aovs(render)?;
             let event = SampleEvent {
@@ -1429,10 +1473,10 @@ fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
     }
 }
 fn capture(render: &mut RenderState) -> Result<bool> {
-    if !render.needs_capture {
+    if !render.needs_capture || render.refine_options.defer_resolve {
         return Ok(true);
     }
-    match context::capture_display(render.context, &mut render.capture) {
+    match context::capture_display_filtered(render.context, &mut render.capture, render.jnlm) {
         Ok(true) => {
             render.needs_capture = false;
             render.capture_key = render.published.clone();
@@ -1481,17 +1525,29 @@ fn submit(render: &mut RenderState, count: u32) -> Result<()> {
         _ => Ok(()),
     }
 }
-fn batch_size(render: &RenderState, remaining: u32) -> u32 {
-    let count = match (
-        render.settings.allow_multiple_samples_per_frame,
-        render.sample_ms,
-    ) {
-        (true, Some(ms)) if ms > 0. => {
-            ((render.settings.time_budget_ms / ms).floor() as u32).clamp(1, MAX_BATCH)
+fn batch_count(enabled: bool, sample_ms: Option<f64>, budget: f64, remaining: u32) -> u32 {
+    let count = match (enabled, sample_ms) {
+        (true, Some(ms)) if ms.is_finite() && ms > 0. => {
+            ((budget / ms).floor() as u32).clamp(1, MAX_BATCH)
         }
         _ => 1,
     };
     count.min(remaining).max(1)
+}
+fn batch_size(render: &RenderState, remaining: u32) -> u32 {
+    batch_count(
+        render.refine_options.batch_samples.unwrap_or(
+            render.settings.batch_samples || render.settings.allow_multiple_samples_per_frame,
+        ),
+        render.gpu_sample_ms,
+        render.settings.time_budget_ms.min(
+            render
+                .refine_options
+                .target_batch_time_ms
+                .unwrap_or(f64::INFINITY),
+        ),
+        remaining,
+    )
 }
 /// Advances one render by at most one batch toward `limit` without blocking.
 fn advance(state: &mut State, id: u64, limit: u32) -> Result<()> {
@@ -2015,6 +2071,7 @@ impl Render {
             id,
             RenderState {
                 settings,
+                jnlm: None,
                 fallback: None,
                 context,
                 aov: None,
@@ -2028,6 +2085,8 @@ impl Render {
                 samples: 0,
                 first_frame: true,
                 sample_ms: None,
+                gpu_sample_ms: None,
+                refine_options: RefineOptions::default(),
                 capture: None,
                 output: Default::default(),
                 capture_key: None,
@@ -2105,10 +2164,14 @@ impl Render {
         })
         .unwrap_or(false)
     }
-    pub(super) fn refine_display(&self, stationary: bool) -> Result<RenderStatus> {
+    pub(super) fn refine_display(
+        &self,
+        stationary: bool,
+        options: RefineOptions,
+    ) -> Result<RenderStatus> {
         let channel = self.engine.lock().display.settings.channel;
         let Some(kind) = channel.aov_kind() else {
-            return self.refine();
+            return self.refine_with_options(options);
         };
         self.engine.poll_device();
         self.with(|state, id| {
@@ -2145,7 +2208,6 @@ impl Render {
                 .filter(|a| a.generation == r.input_generation && a.mask == mask)
                 .map_or(0, |a| a.samples);
             if count < target {
-                let started = Instant::now();
                 render_aovs(r, mask, (count + 1).min(target))?;
                 if stationary && kind == PixelKind::Motion {
                     let query = context::aov_query(r.context)
@@ -2157,14 +2219,6 @@ impl Render {
                         .map_err(|e| error(Status::Error, e.to_string()))?;
                 }
                 r.output.invalidate();
-                state.sample_events.push((
-                    id,
-                    SampleEvent {
-                        samples: count + 1,
-                        is_first_frame: count == 0,
-                        frame_time_ms: started.elapsed().as_secs_f64() * 1000.,
-                    },
-                ));
             } else if stationary && kind == PixelKind::Motion {
                 let query = context::aov_query(r.context)
                     .map_err(|e| error(Status::Error, e.to_string()))?;
@@ -2267,6 +2321,28 @@ impl Render {
                 }
             }
             state.renders.get_mut(&id).unwrap().fallback = fallback.map(|f| f.id);
+            Ok(())
+        })
+    }
+    /// Filters the composed SDR display with JNLM, including PNG export.
+    /// `None` disables it (default); settings do not change raw HDR, HDR window output or samples.
+    /// Invalid options return `InvalidArgument`. Disable an OIDN/custom denoiser
+    /// first when JNLM should be the only filter.
+    pub fn set_jnlm_display_filter(&self, options: Option<super::JnlmOptions>) -> Result<()> {
+        if options.is_some_and(|o| !o.valid()) {
+            return Err(error(Status::InvalidArgument, "Invalid JNLM options"));
+        }
+        self.with(|state, id| {
+            let r = state.renders.get_mut(&id).unwrap();
+            if r.jnlm != options {
+                r.jnlm = options;
+                r.denoiser_revision += 1;
+                r.needs_capture |= r.samples > 0;
+                r.output.invalidate();
+                if let Some(c) = &mut r.capture {
+                    c.set_jnlm(options);
+                }
+            }
             Ok(())
         })
     }
@@ -2373,6 +2449,12 @@ impl Render {
     /// Render failures return `Ok(RenderStatus::Error)` and an engine error event;
     /// terminal device loss returns `Err(Status::Unavailable)`.
     pub fn refine(&self) -> Result<RenderStatus> {
+        self.refine_with_options(RefineOptions::default())
+    }
+    /// Advances this render using per-call batching and capture overrides.
+    /// Invalid budgets return `InvalidArgument` before scheduling work.
+    pub fn refine_with_options(&self, options: RefineOptions) -> Result<RenderStatus> {
+        options.validate()?;
         self.engine.poll_device();
         self.with(|state, id| {
             state.renders.get_mut(&id).unwrap().output.invalidate();
@@ -2382,7 +2464,10 @@ impl Render {
                     "Cannot refine a render while converge is running",
                 ));
             }
-            match refine(state, id) {
+            state.renders.get_mut(&id).unwrap().refine_options = options;
+            let result = refine(state, id);
+            state.renders.get_mut(&id).unwrap().refine_options = RefineOptions::default();
+            match result {
                 Ok(status) => Ok(status),
                 Err(e) => {
                     let render = state.renders.get_mut(&id).unwrap();
@@ -2394,16 +2479,42 @@ impl Render {
             }
         })
     }
+    pub(super) fn refill_ready(&self) -> bool {
+        self.get(|_, r| r.denoise.worker.is_none() && r.samples < next_target(r))
+            .unwrap_or(false)
+    }
+    /// Last measured GPU time per beauty sample, or `None` before a valid
+    /// timestamp or after inputs restart. CPU polling time is excluded.
+    pub fn gpu_sample_time_ms(&self) -> Option<f64> {
+        self.get(|state, r| {
+            r.current(state.scene_revision, state.camera_revision)
+                .then_some(r.gpu_sample_ms)
+                .flatten()
+        })
+        .flatten()
+    }
     /// Renders exactly `options.samples` samples, blocking until they complete.
     /// The engine lock is released between batches, so the progress callback may
     /// use the API; refine on this render is rejected meanwhile.
     pub fn converge(&self, mut options: ConvergeOptions) -> Result<ConvergeResult> {
         self.engine.poll_device();
         if !(1..=MAX_TOTAL_SAMPLES).contains(&options.samples) {
-            return Err(error(Status::InvalidArgument, "samples must be 1..4096"));
+            return Err(error(Status::InvalidArgument, "samples must be 1..16384"));
         }
         let started = Instant::now();
         let timeout = Duration::from_millis(options.timeout_ms.max(1));
+        if options
+            .target_batch_time_ms
+            .is_some_and(|ms| !ms.is_finite() || ms <= 0.)
+            || options
+                .preview_interval_ms
+                .is_some_and(|ms| !ms.is_finite() || ms < 0.)
+        {
+            return Err(error(
+                Status::InvalidArgument,
+                "Invalid convergence timing budget",
+            ));
+        }
         let batch = options.samples_per_batch.clamp(1, MAX_BATCH);
         let key = self.with(|state, id| {
             if state.renders[&id].busy {
@@ -2513,6 +2624,7 @@ impl Render {
             Ok(())
         })?;
         let mut reported = 0;
+        let mut captured_at = Instant::now();
         loop {
             let (samples, done) = self.with(|state, id| {
                 check(state)?;
@@ -2521,8 +2633,22 @@ impl Render {
                     state.sample_events.push((id, event));
                 }
                 let render = state.renders.get_mut(&id).unwrap();
+                if options
+                    .preview_interval_ms
+                    .is_some_and(|ms| captured_at.elapsed().as_secs_f64() * 1e3 >= ms)
+                    && render.samples > 0
+                    && render.job.is_none()
+                {
+                    capture(render)?;
+                    captured_at = Instant::now();
+                }
                 if render.job.is_none() && render.samples < target {
-                    let count = batch.min(target - render.samples);
+                    let count = if let Some(budget) = options.target_batch_time_ms {
+                        batch_count(true, render.gpu_sample_ms, budget, target - render.samples)
+                            .min(batch)
+                    } else {
+                        batch.min(target - render.samples)
+                    };
                     submit(render, count)?;
                 }
                 Ok((render.samples, render.samples >= target))
@@ -2946,8 +3072,7 @@ impl Render {
     pub fn denoising(&self) -> bool {
         self.get(|_, r| r.denoise.worker.is_some()).unwrap_or(false)
     }
-    /// Subscribes to completed batches of this render, including auxiliary
-    /// batches when RenderLoop displays an enabled AOV channel.
+    /// Subscribes to completed beauty batches. Auxiliary samples are excluded.
     pub fn on_sample(&self, listener: impl FnMut(&SampleEvent) + Send + 'static) -> Subscription {
         self.engine.on_sample(self.id, listener)
     }
@@ -3396,5 +3521,33 @@ mod oidn_webgpu_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod batching_tests {
+    use super::*;
+    #[test]
+    fn batch_budget_requires_gpu_measurement_and_caps_queue_and_remaining_samples() {
+        assert_eq!(batch_count(true, None, 4., 100), 1);
+        assert_eq!(batch_count(false, Some(0.1), 4., 100), 1);
+        assert_eq!(batch_count(true, Some(0.1), 4., 100), 40);
+        assert_eq!(batch_count(true, Some(0.01), 4., 100), 64);
+        assert_eq!(batch_count(true, Some(0.1), 4., 7), 7);
+        assert_eq!(batch_count(true, Some(9.), 4., 100), 1);
+        for ms in [0., f64::NAN, f64::INFINITY] {
+            assert_eq!(batch_count(true, Some(ms), 4., 100), 1);
+        }
+        for ms in [0., -1., f64::NAN, f64::INFINITY] {
+            assert!(
+                RefineOptions {
+                    target_batch_time_ms: Some(ms),
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(RefineOptions::default().validate().is_ok());
     }
 }

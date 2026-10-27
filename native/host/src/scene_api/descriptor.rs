@@ -194,6 +194,23 @@ impl Scene {
         }
         Ok(scene)
     }
+    /// Assigns stable source identities for the optional indexed viewer adapter.
+    #[doc(hidden)]
+    #[cfg(feature = "viewer-support")]
+    pub fn set_indexed_aov_ids(&mut self, ids: &[u32]) -> Result<()> {
+        if ids.len() != self.meshes.iter().count() {
+            return Err(invalid("Indexed mesh identity count mismatch"));
+        }
+        self.aov_handles
+            .extend(self.meshes.iter().zip(ids).map(|((key, _), &id)| (key, id)));
+        self.aov_handles.extend(
+            self.materials
+                .iter()
+                .enumerate()
+                .map(|(i, (key, _))| (key, i as u32)),
+        );
+        Ok(())
+    }
     /// Encodes with consumer dimensions; quality flags default zero. Reuses the
     /// caller's cache for stable layouts, including edited vertex/image arrays.
     #[doc(hidden)]
@@ -232,6 +249,7 @@ impl Scene {
         d.words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         d.words[h::BACKGROUND_TEXTURE] = r.background_index;
         self.environment_settings.encode(&mut d.words);
+        super::GroundedBackground::encode(self.grounded_background, &mut d.words);
         self.write_aov_ids(&mut d.words);
         Ok(d.bytes())
     }

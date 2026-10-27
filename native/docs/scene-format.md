@@ -90,6 +90,10 @@ the rules the validator enforces.
   background yaw. Intensities are nonnegative, default 1; yaw is local-to-world
   rotation about +Y in radians, default 0. The background controls apply only
   to its map; lighting and background can use the same source texture.
+- `grounded_background_offset` is 0 for an ordinary background map, or points
+  to six floats: capture height, dome radius, floor Y, capture center X/Z and 0.
+  All values are finite, height is positive and radius exceeds height. Projection
+  changes camera-ray backgrounds without changing the environment lighting.
 - `mesh_aov_ids_offset` and `material_aov_ids_offset` optionally point to one
   uint32 ID per mesh or material. IDs in each table must be unique and must
   exclude `UINT32_MAX` (the background ID). Omitted tables use descriptor indices.

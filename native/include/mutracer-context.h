@@ -30,7 +30,7 @@ extern "C" {
  * temporarily hold both scenes' resources. Descriptors are documented in
  * native/docs/scene-format.md; mutracer-scene-builder.h assembles them.
  *
- * render adds samples to the current accumulation, total 1..4096. The default
+ * render adds samples to the current accumulation, total 1..16384. The default
  * commit uses seed 12345, bounces 6 and Sobol, matching the raw probe. A commit
  * with settings retains those settings for blocking and job renders. reset clears
  * accumulation, keeping the committed scene. Independent contexts keep
@@ -98,7 +98,7 @@ int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length
  * sequence offset 0, clamping 0, transmissive alpha minimum 1. These match commit.
  * sampling_pattern (mt_sampling_pattern): MT_SAMPLING_SOBOL, MT_SAMPLING_ZSOBOL
  * or MT_SAMPLING_RANDOM. max_samples configures the
- * sequence; render still allows total 1..4096 samples. seed is any u32.
+ * sequence; render still allows total 1..16384 samples. seed is any u32.
  * bounces clamp to 1..20, direct-light candidates to 1..16 and bevel samples to
  * 1..32. clamping must be finite; 0 disables it. Transmissive alpha must be
  * finite. Scene quality flags still select bevel and dispersion.

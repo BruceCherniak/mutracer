@@ -58,7 +58,7 @@ fn defaults_match_the_browser_library() {
 fn settings_validation_rejects_out_of_range_values() {
     let cases: [fn(&mut RenderSettings); 10] = [
         |s| s.max_samples = 0,
-        |s| s.max_samples = 4097,
+        |s| s.max_samples = 16385,
         |s| s.dispersion_wavelengths = 2,
         |s| s.clamping = -1.,
         |s| s.clamping = f64::NAN,

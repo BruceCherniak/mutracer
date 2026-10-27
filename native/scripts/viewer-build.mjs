@@ -41,7 +41,8 @@ const staged=resolve(bin,'.mutracer-viewer.build');
 copyFileSync(resolve(target,'release',executable('mutracer-viewer')),staged);
 renameSync(staged,resolve(bin,executable('mutracer-viewer')));
 copyFileSync(resolve(root,'native/viewer/assets/sample.glb'),resolve(resources,'sample.glb'));
-copyFileSync(resolve(root,'oidn/weights/rt_hdr_alb_nrm_small.tza'),resolve(resources,'rt_hdr_alb_nrm_small.tza'));
+for (const name of ['rt_hdr_alb_nrm_small.tza','rt_hdr_calb_cnrm_large.tza','rt_alb_large.tza','rt_nrm_large.tza'])
+  copyFileSync(resolve(root,'oidn/weights',name),resolve(resources,name));
 if(mac) {
   // ic08 carries the existing 256px PNG without another image tool or dependency.
   const png=readFileSync(resolve(root,'site/src/assets/mutracer-logo.png'));

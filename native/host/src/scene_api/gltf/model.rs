@@ -30,6 +30,7 @@ pub struct Model {
     pub ground_y: f32,
     pub warnings: Vec<String>,
     pub node_names: Vec<String>,
+    pub node_indices: Vec<usize>,
     pub mesh_names: Vec<String>,
 }
 impl Model {
@@ -71,6 +72,7 @@ impl Model {
             ground_y: 0.,
             warnings: vec![],
             node_names: vec![],
+            node_indices: vec![],
             mesh_names: vec![],
         };
         if resized {
@@ -853,6 +855,7 @@ impl Model {
                         crate::scene::invertible_affine(&matrix.to_cols_array()),
                         "Invalid instance transform"
                     );
+                    self.node_indices.push(node.index());
                     self.node_names.push(node.name().unwrap_or("").into());
                     self.mesh_names.push(mesh.name().unwrap_or("").into());
                     self.meshes.push(Mesh {

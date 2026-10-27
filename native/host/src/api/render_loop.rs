@@ -4,7 +4,7 @@
 //! and after editing engine inputs, render settings or the display.
 use super::display::DisplaySettings;
 use super::engine::Engine;
-use super::render::{ConvergeOptions, ConvergeResult, ConvergeStage, SampleEvent};
+use super::render::{ConvergeOptions, ConvergeResult, ConvergeStage, RefineOptions, SampleEvent};
 use super::{Display, Render, RenderSettings, RenderSize, RenderStatus, Result, Status, error};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -166,7 +166,7 @@ impl ProgressiveState {
         } else {
             self.last_continuous_change
         };
-        let idle = Duration::from_secs_f64(idle_ms.max(0.) / 1e3);
+        let idle = Duration::try_from_secs_f64(idle_ms.max(0.) / 1e3).unwrap_or(Duration::MAX);
         Self {
             previous_changed: changed && !active,
             last_continuous_change,
@@ -311,6 +311,18 @@ fn registered(shared: &Mutex<Shared>, test: impl FnOnce(&Listeners) -> bool) -> 
     test(&shared.lock().unwrap_or_else(|e| e.into_inner()).listeners)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MotionPhase {
+    Moving,
+    Priming,
+    Settling,
+    Settled,
+}
+#[derive(Clone, Copy)]
+struct Motion {
+    render: u64,
+    phase: MotionPhase,
+}
 /// Built-in interactive policy implemented entirely through the L1 API.
 /// Callbacks run on the ticking thread and must not call this loop.
 pub struct RenderLoop {
@@ -332,6 +344,8 @@ pub struct RenderLoop {
     finished_image: Option<ImageState>,
     last_presented: Option<super::Presented>,
     presentations: u64,
+    refill_until: Option<Instant>,
+    motion: Option<Motion>,
     _final_samples: super::Subscription,
 }
 impl RenderLoop {
@@ -438,6 +452,8 @@ impl RenderLoop {
             finished_image: None,
             last_presented: None,
             presentations: 0,
+            refill_until: None,
+            motion: None,
             _final_samples: final_samples,
         })
     }
@@ -482,13 +498,12 @@ impl RenderLoop {
     pub fn changing(&self) -> bool {
         self.policy.changing
     }
-    /// Complete final-image samples; preview sampling is excluded. Default 0.
-    /// Auxiliary channels report their independent sample count.
+    /// Complete final beauty samples; previews and auxiliary samples are excluded. Default 0.
     pub fn samples(&self) -> u32 {
         if self.status() == RenderLoopStatus::Previewing {
             0
         } else {
-            self.final_render.display_samples()
+            self.final_render.samples()
         }
     }
     /// Current presented/execution state. Default `Preparing`.
@@ -515,8 +530,7 @@ impl RenderLoop {
             id,
         }
     }
-    /// Called for complete final-image samples, including the displayed AOV
-    /// channel's independent samples; preview samples are not reported.
+    /// Called for complete final beauty samples; preview and auxiliary samples are excluded.
     pub fn on_sample(
         &self,
         listener: impl FnMut(&SampleEvent) + Send + 'static,
@@ -597,6 +611,7 @@ impl RenderLoop {
             && self.final_render.display_finished()
             && !self.policy.changing
             && self.preview_frame_owner.is_none()
+            && self.motion.is_none_or(|m| m.phase == MotionPhase::Settled)
             && !self.engine.inputs_pending()
             && !self.syncs_active()
             && !self.display.passes_pending()
@@ -615,6 +630,7 @@ impl RenderLoop {
     /// render and presents it. An attached window can block for frame acquisition
     /// or surface reconfiguration.
     pub fn tick(&mut self) -> Result<RenderLoopStatus> {
+        self.cancel_refill();
         self.engine.poll_device();
         let result = self.tick_inner();
         if result.is_err() {
@@ -668,14 +684,9 @@ impl RenderLoop {
             self.engine.update()?
         };
         let active = self.syncs_active();
-        let was_changing = self.policy.changing;
         self.policy = self
             .policy
             .update(changed, active, Instant::now(), self.idle_ms);
-        let settled = was_changing && !self.policy.changing;
-        if settled && self.display.settings().channel == super::Channel::Motion {
-            self.finished_image = None;
-        }
         let selected = (self.select)(SelectInfo {
             changing: self.policy.changing,
         });
@@ -684,7 +695,14 @@ impl RenderLoop {
                 // Finish this image against its committed camera while syncs collect
                 // the latest input; restarting it on every edit starves presentation.
                 if frame.tracing {
-                    let status = preview.refine_display(false)?;
+                    let status = preview.refine_display(
+                        false,
+                        RefineOptions {
+                            batch_samples: Some(false),
+                            target_batch_time_ms: Some(4.),
+                            ..Default::default()
+                        },
+                    )?;
                     if status == RenderStatus::Error {
                         self.preview_frame_owner = None;
                         return Ok(self.set_status(RenderLoopStatus::Error));
@@ -711,6 +729,29 @@ impl RenderLoop {
             _ => self.final_render.clone(),
         };
         let current_is_final = current.id() == self.final_render.id();
+        let idle = !changed && !self.policy.changing;
+        if self.display.settings().channel != super::Channel::Motion {
+            self.motion = None;
+        } else {
+            self.motion = Some(match self.motion {
+                None => Motion {
+                    render: current.id(),
+                    phase: MotionPhase::Moving,
+                },
+                Some(m) if m.render != current.id() => Motion {
+                    render: current.id(),
+                    phase: MotionPhase::Priming,
+                },
+                Some(mut m) => {
+                    if (!idle && m.phase != MotionPhase::Priming)
+                        || (!current.display_complete() && m.phase == MotionPhase::Settled)
+                    {
+                        m.phase = MotionPhase::Moving;
+                    }
+                    m
+                }
+            });
+        }
         let state = image_state(&self.final_render, &self.display)?;
         let status = self.status();
         if !changed
@@ -720,6 +761,7 @@ impl RenderLoop {
             && self.final_render.display_finished()
             && !self.display.passes_pending()
             && Some(&state) == self.finished_image.as_ref()
+            && self.motion.is_none_or(|m| m.phase == MotionPhase::Settled)
         {
             return Ok(status);
         }
@@ -727,12 +769,43 @@ impl RenderLoop {
         if status == RenderLoopStatus::Finished
             && Some(&state) != self.finished_image.as_ref()
             && self.final_render.display_samples() > 0
-            && !(settled && self.display.settings().channel == super::Channel::Motion)
         {
             let final_render = self.final_render.clone();
             self.present(&final_render)?;
         }
-        let refined = current.refine_display(!self.policy.changing)?;
+        if self.motion.is_some_and(|m| m.phase == MotionPhase::Moving)
+            && idle
+            && current.display_complete()
+        {
+            self.motion.as_mut().unwrap().phase = MotionPhase::Settling;
+        }
+        let options = RefineOptions {
+            batch_samples: Some(
+                current_is_final && !self.policy.changing && {
+                    let settings = current.settings()?;
+                    settings.batch_samples || settings.allow_multiple_samples_per_frame
+                },
+            ),
+            target_batch_time_ms: Some(4.),
+            ..Default::default()
+        };
+        let stationary_motion = self
+            .motion
+            .is_some_and(|m| matches!(m.phase, MotionPhase::Settling | MotionPhase::Settled));
+        let mut refined = current.refine_display(stationary_motion, options)?;
+        if self.motion.is_some_and(|m| m.phase == MotionPhase::Priming)
+            && refined == RenderStatus::Finished
+        {
+            self.motion.as_mut().unwrap().phase = MotionPhase::Settling;
+            refined = current.refine_display(true, options)?;
+        }
+        if self
+            .motion
+            .is_some_and(|m| m.phase == MotionPhase::Settling)
+            && refined == RenderStatus::Finished
+        {
+            self.motion.as_mut().unwrap().phase = MotionPhase::Settled;
+        }
         let preview_id = self.preview.as_ref().map(|p| p.id());
         let current_is_preview = Some(current.id()) == preview_id;
         // Keep the display on the last completed image while the next preview
@@ -765,11 +838,73 @@ impl RenderLoop {
         self.finished_image = (next == RenderLoopStatus::Finished)
             .then(|| image_state(&self.final_render, &self.display))
             .transpose()?;
+        if self.display.settings().channel.aov_kind().is_none()
+            && !changed
+            && !self.policy.changing
+            && current_is_final
+            && !previewing
+            && self.can_refill()
+        {
+            self.refill_until = Some(Instant::now() + Duration::from_millis(16));
+        }
         Ok(self.set_status(next))
+    }
+    fn can_refill(&self) -> bool {
+        let render = &self.final_render;
+        render.settings().is_ok_and(|s| {
+            (s.batch_samples || s.allow_multiple_samples_per_frame)
+                && render
+                    .gpu_sample_time_ms()
+                    .is_some_and(|ms| ms <= s.time_budget_ms)
+        }) && render.refill_ready()
+            && !render.denoising()
+            && render.samples() > 0
+            && render.status() == RenderStatus::Converging
+    }
+    /// Cancels between-frame work without discarding samples. Hosts call this
+    /// on pause, hiding/minimizing, export or when suspending their frame loop.
+    pub fn cancel_refill(&mut self) {
+        self.refill_until = None;
+    }
+    /// Whether a short stationary beauty batch can be collected/refilled before
+    /// the next frame. A tick grants at most 16 ms; input, activity, filtering,
+    /// auxiliary output and custom preview selection revoke that grant.
+    pub fn needs_refill(&self) -> bool {
+        self.refill_until
+            .is_some_and(|until| Instant::now() < until)
+            && self.display.settings().channel.aov_kind().is_none()
+            && !self.engine.inputs_pending()
+            && !self.syncs_active()
+            && self.can_refill()
+    }
+    /// Collects GPU completion and submits a short final batch within the current
+    /// tick's lease. Call on GPU completion on the same thread as `tick`. Does not
+    /// update syncs, commit inputs or present. Returns whether the lease remains
+    /// active. An expired/cancelled lease submits nothing.
+    pub fn refill(&mut self) -> Result<bool> {
+        if !self.needs_refill() || (self.select)(SelectInfo { changing: false }) != Selection::Final
+        {
+            self.cancel_refill();
+            return Ok(false);
+        }
+        let status = self.final_render.refine_with_options(RefineOptions {
+            target_batch_time_ms: Some(4.),
+            defer_resolve: true,
+            ..Default::default()
+        })?;
+        if status == RenderStatus::Error {
+            self.cancel_refill();
+            self.set_status(RenderLoopStatus::Error);
+        }
+        if !self.can_refill() {
+            self.cancel_refill();
+        }
+        Ok(self.needs_refill())
     }
     /// Updates syncs, commits engine inputs, converges the final render (blocking)
     /// and presents it.
     pub fn converge(&mut self, mut options: ConvergeOptions) -> Result<ConvergeResult> {
+        self.cancel_refill();
         self.preview_frame_owner = None;
         let result = (|| {
             for sync in &self.syncs {

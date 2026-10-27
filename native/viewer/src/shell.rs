@@ -121,6 +121,40 @@ fn header_button(ui: &mut egui::Ui, label: &str, export: bool, sample: bool) -> 
     response
 }
 
+fn history_button(ui: &mut egui::Ui, redo: bool) -> egui::Response {
+    let response = ui.add_sized([26., 28.], egui::Button::new("").frame(false));
+    let c = response.rect.center();
+    let sign = if redo { 1. } else { -1. };
+    let color = if ui.is_enabled() {
+        theme::MUTED
+    } else {
+        theme::SUBTLE
+    };
+    let stroke = Stroke::new(1.2, color);
+    let points = (0..20)
+        .map(|i| {
+            let t = i as f32 / 19. * 4.4 - 2.2;
+            c + egui::vec2(t.cos() * 5. * sign, t.sin() * 5.)
+        })
+        .collect();
+    ui.painter().add(egui::Shape::line(points, stroke));
+    ui.painter().add(egui::Shape::line(
+        vec![
+            c + egui::vec2(-6. * sign, -1.),
+            c + egui::vec2(-3. * sign, -5.),
+            c + egui::vec2(1. * sign, -2.),
+        ],
+        stroke,
+    ));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            if redo { "Redo" } else { "Undo" },
+        )
+    });
+    response
+}
 impl Viewer {
     pub(super) fn titlebar(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
@@ -204,13 +238,45 @@ impl Viewer {
                         panel_button(ui, "Toggle scene panel ([)", false, &mut self.scene_open);
                     });
                 });
-                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(86., 32.));
+                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(146., 32.));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(center), |ui| {
                     ui.horizontal_centered(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.;
                         if header_button(ui, "Open…", false, false).clicked() {
                             self.open_model(&ctx);
                         }
+                        ui.menu_button("More", |ui| {
+                            if ui.button("Open folder…").clicked() {
+                                ui.close();
+                                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                    let path = std::fs::read_dir(folder)
+                                        .ok()
+                                        .into_iter()
+                                        .flatten()
+                                        .filter_map(|e| e.ok().map(|e| e.path()))
+                                        .find(|p| {
+                                            p.extension().is_some_and(|e| {
+                                                e.eq_ignore_ascii_case("gltf")
+                                                    || e.eq_ignore_ascii_case("glb")
+                                            })
+                                        });
+                                    if let Some(path) = path {
+                                        self.load(path, &ctx);
+                                    } else {
+                                        self.error =
+                                            "No glTF or GLB file in the selected folder".into();
+                                    }
+                                }
+                            }
+                            if ui.button("Open from URL…").clicked() {
+                                self.tools.url_open = true;
+                                ui.close();
+                            }
+                            if ui.button("Load environment (.hdr)…").clicked() {
+                                self.load_hdr();
+                                ui.close();
+                            }
+                        });
                     });
                 });
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -223,9 +289,41 @@ impl Viewer {
                             .inner
                             .clicked()
                         {
-                            self.export_image();
+                            self.open_export(&ctx);
+                        }
+                        if ui.button("?").on_hover_text("Keyboard shortcuts").clicked() {
+                            self.tools.help_open = true;
                         }
                         if !compact {
+                            if ui
+                                .button("Code")
+                                .on_hover_text("Render setup in Rust")
+                                .clicked()
+                            {
+                                self.tools.code_open = true;
+                            }
+                            if ui.button("↺").on_hover_text("Reset all…").clicked() {
+                                self.tools.reset_open = true;
+                            }
+                            let (undo, redo) = self.history.labels();
+                            let can_undo = undo.is_some();
+                            let can_redo = redo.is_some();
+                            if ui
+                                .add_enabled_ui(can_redo, |ui| history_button(ui, true))
+                                .inner
+                                .on_hover_text("Redo (⇧⌘Z / Ctrl+Shift+Z)")
+                                .clicked()
+                            {
+                                self.undo(true);
+                            }
+                            if ui
+                                .add_enabled_ui(can_undo, |ui| history_button(ui, false))
+                                .inner
+                                .on_hover_text("Undo (⌘Z / Ctrl+Z)")
+                                .clicked()
+                            {
+                                self.undo(false);
+                            }
                             let old = self.backend;
                             egui::ComboBox::from_id_salt("header-backend")
                                 .width(98.)
@@ -258,23 +356,26 @@ impl Viewer {
             self.open_model(&ctx);
         }
     }
+    fn load_hdr(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Radiance HDR", &["hdr"])
+            .pick_file()
+        {
+            match self.environment.load(&path) {
+                Ok(()) => {
+                    self.environment.model_lighting = false;
+                    self.dirty(Change::Environment);
+                }
+                Err(e) => self.error = format!("Could not load environment: {e:#}"),
+            }
+        }
+    }
     fn open_model(&mut self, ctx: &egui::Context) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("glTF", &["gltf", "glb"])
             .pick_file()
         {
             self.load(path, ctx);
-        }
-    }
-    fn export_image(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .set_file_name("mutracer.png")
-            .add_filter("PNG", &["png"])
-            .save_file()
-        {
-            if let Err(error) = self.save_image(&path) {
-                self.error = error.to_string();
-            }
         }
     }
 }

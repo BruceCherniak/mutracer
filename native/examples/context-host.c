@@ -70,7 +70,7 @@ int main(int argc,char **argv) {
   OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));
   OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==MT_CONTEXT_COMMITTED&&info.samples==0&&info.width==words[2]&&info.height==words[3]);
-  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_render(a,0,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_render(a,4097,error,sizeof(error)));
+  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_render(a,0,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_render(a,16385,error,sizeof(error)));
   OK(mt_context_render(a,samples/4,error,sizeof(error)));
   OK(mt_context_render(b,samples/4,error,sizeof(error)));
   OK(mt_context_wait(a,MT_WAIT_INDEFINITELY,error,sizeof(error)));OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==samples/4);

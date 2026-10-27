@@ -79,6 +79,10 @@ enum JobState {
 struct Flight {
     end: u32,
     done: Arc<AtomicBool>,
+    timer: Option<(
+        crate::profiling::GpuTimer,
+        mpsc::Receiver<std::result::Result<(), wgpu::BufferAsyncError>>,
+    )>,
 }
 struct RenderJob {
     id: u64,
@@ -89,6 +93,7 @@ struct RenderJob {
     state: JobState,
     cancelled: bool,
     flight: Option<Flight>,
+    gpu_ms: Option<f64>,
 }
 impl RenderJob {
     fn active(&self) -> bool {
@@ -603,6 +608,13 @@ pub fn capture_display(
     handle: u64,
     display: &mut Option<crate::display::Display>,
 ) -> std::result::Result<bool, String> {
+    capture_display_filtered(handle, display, None)
+}
+pub(crate) fn capture_display_filtered(
+    handle: u64,
+    display: &mut Option<crate::display::Display>,
+    jnlm: Option<crate::display::jnlm::Options>,
+) -> std::result::Result<bool, String> {
     let Ok(mut slot) = REGISTRY.try_lock() else {
         return Ok(false);
     };
@@ -650,6 +662,7 @@ pub fn capture_display(
     }
     let [color, normal, albedo, shadow] = &outputs;
     let metadata = crate::display::Metadata::from_trace(&scene.display_trace);
+    display.as_mut().unwrap().set_jnlm(jnlm);
     display
         .as_mut()
         .unwrap()
@@ -1325,10 +1338,10 @@ pub unsafe extern "C" fn mt_context_render(
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
-        if additional == 0 || additional > 4096 - scene.samples {
+        if additional == 0 || additional > 16384 - scene.samples {
             return Err(fail(
                 Status::InvalidArgument,
-                "Total samples must be 1..4096",
+                "Total samples must be 1..16384",
             ));
         }
         context.job = None;
@@ -1799,10 +1812,10 @@ pub unsafe extern "C" fn mt_context_submit(
             (Some(_), Some(link)) => link.target.samples,
             _ => ready(context)?.samples,
         };
-        if additional == 0 || additional > 4096 - base {
+        if additional == 0 || additional > 16384 - base {
             return Err(fail(
                 Status::InvalidArgument,
-                "Total samples must be 1..4096",
+                "Total samples must be 1..16384",
             ));
         }
         context.job = Some(RenderJob {
@@ -1814,6 +1827,7 @@ pub unsafe extern "C" fn mt_context_submit(
             state: JobState::Queued,
             cancelled: false,
             flight: None,
+            gpu_ms: Some(0.),
         });
         registry.next = next;
         unsafe {
@@ -1821,6 +1835,11 @@ pub unsafe extern "C" fn mt_context_submit(
         }
         Ok(())
     })
+}
+/// GPU trace time of the most recently completed job; no readback waits.
+pub(crate) fn job_gpu_time(handle: u64) -> Option<f64> {
+    let slot = REGISTRY.try_lock().ok()?;
+    slot.as_ref()?.contexts.get(&handle)?.job.as_ref()?.gpu_ms
 }
 /// `owner` is the scene a linked context renders; it is needed only to dispatch.
 fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> Result<()> {
@@ -1859,7 +1878,19 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         .as_ref()
         .is_some_and(|f| f.done.load(Ordering::Acquire))
     {
+        if job
+            .flight
+            .as_ref()
+            .and_then(|f| f.timer.as_ref())
+            .is_some_and(|(_, rx)| matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)))
+        {
+            return Ok(());
+        }
         let flight = job.flight.take().unwrap();
+        let measured = flight
+            .timer
+            .and_then(|(timer, _)| timer.mapped_milliseconds(&gpu.queue));
+        job.gpu_ms = job.gpu_ms.zip(measured).map(|(sum, ms)| sum + ms);
         match link {
             Some(link) => link.target.samples = flight.end,
             None => own.as_mut().ok_or("No committed scene")?.samples = flight.end,
@@ -1882,13 +1913,17 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     }
     let count = budget.min(job.requested - job.submitted);
     let start = job.base + job.submitted;
+    let timer = crate::profiling::GpuTimer::realtime(&gpu.device, count, false);
     match (link, owner) {
-        (Some(link), Some(scene)) => scene.dispatch_target(&link.target, start, count)?,
-        (None, _) => own.as_ref().ok_or("No committed scene")?.dispatch_samples(
+        (Some(link), Some(scene)) => {
+            scene.dispatch_target(&link.target, start, count, timer.as_ref())?
+        }
+        (None, _) => own.as_ref().ok_or("No committed scene")?.dispatch_timed(
             start,
             count,
             *render_bounces,
             *render_seed,
+            timer.as_ref(),
         )?,
         (Some(_), None) => return Err("Missing render target scene".into()),
     }
@@ -1900,6 +1935,10 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
     job.flight = Some(Flight {
         end: job.base + job.submitted,
         done,
+        timer: timer.map(|timer| {
+            let rx = timer.map();
+            (timer, rx)
+        }),
     });
     job.state = JobState::Running;
     Ok(())

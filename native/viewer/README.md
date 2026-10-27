@@ -72,7 +72,12 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   or drop a `.gltf` or `.glb` file anywhere in the window. Keep external `.bin`
   files and images beside their `.gltf`. While loading, the previous model stays
   visible; a failed load shows an error and keeps it.
-- **Export…** saves a PNG.
+- **Open → More** opens a folder, a model/environment URL or a local HDR.
+  A URL model loads external resources relative to that URL.
+- **Export…** opens a preview. **Save viewport PNG** saves the current displayed
+  image; **Render PNG** uses an independent Viewport, 1080p, 2K, 4K or Square
+  size, sample budget and optional transparency. You can cancel the render;
+  the interactive image and its accumulated samples are kept.
 - Drag empty space in the top bar to move the window and double-click it to
   zoom. The three window buttons close, minimize or zoom; the bottom-right grip
   resizes.
@@ -80,6 +85,12 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   and **Object**; click the active category to hide the inspector. **[** and **]**
   toggle the scene list and inspector. Section headings collapse. Narrow windows
   hide the scene list.
+- Undo/redo in the top bar (**⌘Z / Ctrl+Z**, **⇧⌘Z / Ctrl+Shift+Z**) covers
+  material, visibility, lighting, camera parameters and render edits. Continuous
+  drags form one step; loading a model discards its previous material/object history.
+  **Reset all** restores these edits and frames the model again.
+- **?** shows keyboard shortcuts; **H** hides the interface. **Code** copies a
+  Rust render setup for use with the native SDK.
 - Sliders and numeric fields are separate. Drag a numeric field left or right,
   or click it to type; Enter or clicking elsewhere commits and Escape cancels.
 
@@ -109,13 +120,15 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   the target. It focuses once the view settles and keeps the current distance
   when the area is empty. Adjusting **Focus (m)** switches to manual focus, and
   **Pick focus point** then focuses on a clicked surface.
-- Set the scene unit to match the model (default metres).
+- **Auto rotate** orbits the model while rendering runs.
+- **Scene unit → Auto** guesses metres, centimetres or millimetres from the
+  model size. Choose a unit explicitly when the guess does not match the model.
 - Projection and field of view persist across local files; examples apply their
-  saved views. F-number and scene unit persist across models.
+  saved views. F-number and explicit scene-unit choices persist across models.
 
 ### Objects
 
-- Search and select objects in the left **Scene** list, or click a surface in
+- Expand groups, search and select objects in the left **Scene** tree, or click a surface in
   the viewport to open its material. **Frame selection** fits the camera to the
   object.
 - The **Object** panel edits world position, local Y rotation and uniform scale
@@ -173,6 +186,9 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   selected time of day (15:00 by default). **Load HDR…** opens a local Radiance
   equirectangular map; **Scene lighting** selects the model's environment when
   available. Imported scene lights remain active when changing environments.
+- **Browse Poly Haven HDRIs** searches the CC0 environment catalog with
+  category filters and 1K, 2K or 4K downloads. Downloads are cached; cancellation
+  or failure keeps the previous environment.
 - **Studio**: eight softbox presets with intensity, rotation, size, ambient fill
   and ambient color. Lights follow the model's bounds; larger softboxes give
   softer shadows at about the same exposure. Changing the preset takes longer
@@ -180,7 +196,12 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   environment.
 - **Key light**: an optional directional light, off by default, with intensity,
   color, azimuth and elevation.
-- **Background**: Environment, Color or Transparent, in either lighting mode.
+- **Background**: Environment, Grounded, Color or Transparent. Grounded projects
+  the environment onto a floor and dome, with automatic or adjustable capture
+  height and radius; Studio uses its ambient backdrop.
+- **Ground shadow** adds a shadow-catcher plane under the model, with adjustable
+  opacity. It works with transparent PNG exports.
+- Color or transparent backgrounds work in either lighting mode.
   A transparent background keeps the lighting and exported PNGs keep alpha. In
   Studio, the Environment background shows the ambient fill.
 
@@ -190,25 +211,31 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   maximum samples, **Res** and denoise controls; its settings button opens
   **Render**. **Space** pauses or resumes models without animation; **D**
   toggles denoising.
-- Interaction renders a lower-resolution, one-sample preview. With **Denoise**
-  enabled, OIDN and DLSS RR both filter these moving previews. OIDN uses its small
-  preview model and its standard model for final convergence. When input stops,
-  the image converges at the selected resolution and settings; export uses that
-  final image and is available after one complete sample. Pausing keeps the last image.
+- Interaction renders a lower-resolution, one-sample preview. When input stops,
+  the image converges at the selected resolution and settings. Pausing keeps the
+  last image; **Save viewport PNG** is available after one complete sample.
 - **Res**: 25%, 50% (default), 75% or 100% of the viewport's pixel size,
   including display scaling up to 2×, updated after resizing settles; or a
   fixed 720p, 1080p, 2K or 4K. The menu shows the output size, which PNG export
   uses. 100% renders four times the pixels of 50% and uses more memory.
-- **Render** panel: 4–4096 maximum samples, 1–16 bounces (default 6), Sobol,
-  Z-Sobol or Random sampling, and clamping (0 disables it). These restart
-  rendering; more samples and bounces take longer.
+- **Render** panel: 4–16384 maximum samples, 1–16 bounces (default 6), Sobol,
+  Z-Sobol or Random sampling, and clamping (0 disables it). Sampling-pattern,
+  clamping and bounce changes restart rendering; more samples and bounces take longer.
 - **Color**: AgX (default), ACES, Cineon, Reinhard or Linear tone mapping,
   exposure (1 is unchanged), contrast, saturation, temperature and tint, for
   both preview and export.
-- **Denoise** is on by default for moving previews and final samples. OIDN uses
-  [oidn-webgpu](../docs/denoising.md#oidn-webgpu) on the rendering GPU; the optional
-  Windows build also offers DLSS RR in **Method**. Toggle it to compare; export
-  uses the latest denoised result when there is one.
+- **Denoise** is on by default. **Method** offers OIDN and JNLM; the optional
+  Windows build also offers DLSS RR. OIDN runs on the rendering GPU, with
+  Standard, Small and Large models and Auto/256/512/1024/2048-pixel tile choices.
+  Large prefilters its guides at extra memory/time cost. Moving OIDN previews
+  keep using Small. JNLM exposes strength, search/patch radius, feature
+  tolerances and pass count. **Reset denoiser settings** restores the selected
+  filter's defaults. PNG rendering uses the selected OIDN or JNLM filter;
+  with DLSS RR selected, it uses OIDN.
+- **Live denoise** filters OIDN/JNLM previews and intermediate samples. Turn it
+  off to filter only the completed final image.
+- **Effects** adds Bloom and Vignette; these recompose the image and export
+  without restarting accumulation.
 - **Ray tracing**: **HWRT** (default) or **Software**. The panel shows the path
   in use, any fallback reason and how many geometries use a software BVH.
 
@@ -262,10 +289,12 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
 - Uploaded and downloaded textures can be up to 4,096 pixels per side and
   shrink to share a 12M-pixel material budget; slot sizes show what is used.
   Displacement images are resized to a square power of two. HDR environments
-  are limited to 4M pixels.
+  above 4M pixels are reduced while keeping their aspect ratio.
 - HWRT can occasionally drop a sample on macOS; choose Software when exact
   output matters. Coplanar overlapping surfaces can differ between backends.
   See [ray tracing backends](../README.md#ray-tracing-backends).
 - Device-loss recovery is not implemented.
+- The egui window presents SDR. Its HDR control is disabled; native SDK window
+  hosts can request HDR on compatible surfaces.
 - Denoising output can differ from browser OIDN. Custom weights are not exposed
   in the viewer.

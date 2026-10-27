@@ -9,6 +9,8 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 #[derive(Clone, Default)]
 pub struct Scene {
     pub cameras: Vec<View>,
+    pub hidden: std::collections::HashSet<usize>,
+    pub nodes: Arc<Vec<crate::scene_tree::Node>>,
     pub lights: Vec<[u32; wire::WORDS]>,
     pub environment: Option<Arc<image::Rgb32FImage>>,
     pub available: bool,
@@ -107,6 +109,7 @@ impl Scene {
         model: &mut mutracer_native_probe::scene_api::viewer_support::Model,
     ) -> Result<Self> {
         let mut result = Self::default();
+        result.nodes = Arc::new(crate::scene_tree::from_gltf(json, model));
         let nodes = json["nodes"].as_array().context("glTF has no nodes")?;
         fn visit(
             index: usize,
@@ -120,6 +123,7 @@ impl Scene {
             let n = nodes.get(index).context("Invalid scene node")?;
             let world = parent * local(n);
             if let Some(i) = n["camera"].as_u64() {
+                Arc::make_mut(&mut out.nodes)[index].camera = Some(out.cameras.len());
                 let c = &json["cameras"][i as usize];
                 let ortho = c["type"] == "orthographic";
                 let fov = (c["perspective"]["yfov"]

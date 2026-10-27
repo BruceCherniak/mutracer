@@ -759,6 +759,54 @@ pub unsafe extern "C" fn mt_scene_set_environment_settings(
         })
     })
 }
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GroundedBackgroundDesc {
+    struct_size: u32,
+    height: f32,
+    radius: f32,
+    ground_height: f32,
+    center: [f32; 2],
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_scene_grounded_background_default(
+    out: *mut GroundedBackgroundDesc,
+) -> i32 {
+    call(std::ptr::null_mut(), 0, || unsafe {
+        output(
+            out,
+            GroundedBackgroundDesc {
+                struct_size: 24,
+                height: 1.6,
+                radius: 32.,
+                ground_height: 0.,
+                center: [0.; 2],
+            },
+        )
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_scene_set_grounded_background(
+    scene: u64,
+    desc: *const GroundedBackgroundDesc,
+    error: *mut c_char,
+    cap: usize,
+) -> i32 {
+    call(error, cap, || {
+        let value = if desc.is_null() {
+            None
+        } else {
+            let d = unsafe { record(desc)? };
+            Some(GroundedBackground {
+                height: d.height,
+                radius: d.radius,
+                ground_height: d.ground_height,
+                center: d.center,
+            })
+        };
+        with_scene(scene, |e| e.scene.set_grounded_background(value))
+    })
+}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_scene_set_default_camera(
     scene: u64,

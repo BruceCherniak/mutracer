@@ -10,7 +10,6 @@ pub use mutracer_native_probe::scene_api::Geometry;
 #[cfg(test)]
 pub use mutracer_native_probe::scene_api::MaterialLayers;
 pub use mutracer_native_probe::scene_api::viewer_support::Descriptor;
-#[cfg(test)]
 pub use mutracer_native_probe::scene_api::viewer_support::material_values;
 pub use mutracer_native_probe::scene_api::viewer_support::{Material, Mesh, Texture};
 #[derive(Clone)]
@@ -134,10 +133,40 @@ impl Model {
         model.0.center = (bounds_min + bounds_max) * 0.5;
         model.0.radius = (bounds_max - bounds_min).length() * 0.5;
         model.0.ground_y = bounds_min.y;
+        model.0.node_indices = (0..model.meshes.len()).collect();
+        model.1.nodes = Arc::new(
+            model
+                .meshes
+                .iter()
+                .enumerate()
+                .map(|(i, m)| crate::scene_tree::Node {
+                    name: m.name.clone(),
+                    meshes: vec![i],
+                    ..Default::default()
+                })
+                .collect(),
+        );
         model.0.node_names = model.0.meshes.iter().map(|m| m.name.clone()).collect();
         model.0.mesh_names = model.0.node_names.clone();
         model.rebuild_picking()?;
         Ok(model)
+    }
+    pub fn guessed_units(&self) -> f32 {
+        let mut min = Vec3::splat(f32::INFINITY);
+        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        for i in 0..self.meshes.len() {
+            let (lo, hi) = self.mesh_bounds(i);
+            min = min.min(lo);
+            max = max.max(hi);
+        }
+        let size = (max - min).max_element();
+        if !(size > 0.) || size <= 200. {
+            1.
+        } else if size <= 20_000. {
+            0.01
+        } else {
+            0.001
+        }
     }
     pub fn camera_for_load(&self, previous: &crate::renderer::Camera) -> crate::renderer::Camera {
         let mut camera = crate::renderer::Camera::fit(self.center, self.radius);
@@ -174,6 +203,7 @@ impl Model {
             environment.name = "Scene lighting".into();
             environment.intensity = 1.;
             environment.rotation = 0.;
+            environment.ground_shadow = false;
             environment.color = [1.; 3];
         } else if environment.model_lighting {
             environment = Environment::default();
@@ -211,17 +241,72 @@ impl Model {
                 environment.background_alpha
             },
         };
-        encoder::SceneData {
+        let visible: Vec<_> = self
+            .meshes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !self.1.hidden.contains(i))
+            .map(|(_, mesh)| mesh.clone())
+            .collect();
+        let mut scene = encoder::SceneData {
             properties: &self.properties,
             geometries: &self.geometries,
             materials: &self.materials,
             textures: &self.textures,
-            meshes: &self.meshes,
+            meshes: &visible,
             lights,
             ies: vec![],
         }
         .to_scene(&env)
-        .expect("Validated imported scene")
+        .expect("Validated imported scene");
+        if environment.ground_shadow {
+            use mutracer_native_probe::scene_api::{Geometry, Mesh, OpenPbrMaterial};
+            let h = self.radius * 6.;
+            let geometry = scene
+                .add_geometry(Geometry::new(
+                    vec![-h, 0., -h, h, 0., -h, h, 0., h, -h, 0., h],
+                    vec![0, 2, 1, 0, 3, 2],
+                ))
+                .expect("Ground geometry");
+            let mut material = OpenPbrMaterial::default();
+            material.values.color = [0.2158605; 3];
+            material.values.roughness = 1.;
+            material.set_uint(51, 1).expect("Shadow catcher property");
+            let material = scene.add_material(material).expect("Ground material");
+            let mut mesh = Mesh::new(geometry, material);
+            mesh.transform =
+                Mat4::from_translation(Vec3::new(self.center.x, self.ground_y, self.center.z));
+            scene.add_mesh(mesh).expect("Ground mesh");
+        }
+        let mut ids: Vec<_> = self
+            .meshes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !self.1.hidden.contains(i))
+            .map(|(i, _)| i as u32)
+            .collect();
+        if environment.ground_shadow {
+            ids.push(self.meshes.len() as u32);
+        }
+        scene
+            .set_indexed_aov_ids(&ids)
+            .expect("Stable viewer object identities");
+        if environment.grounded && environment.background && !environment.studio.enabled {
+            let height = environment
+                .grounded_height
+                .unwrap_or((self.radius * 4.).max(1.6));
+            scene
+                .set_grounded_background(Some(
+                    mutracer_native_probe::scene_api::GroundedBackground {
+                        height,
+                        radius: environment.grounded_radius.unwrap_or(height * 20.),
+                        ground_height: self.ground_y,
+                        center: [self.center.x, self.center.z],
+                    },
+                ))
+                .expect("Ground projection");
+        }
+        scene
     }
     pub fn descriptor(&self, camera: &[u8], size: [u32; 2], environment: &Environment) -> Vec<u8> {
         self.descriptor_with_light(camera, size, environment, &KeyLight::default())
@@ -250,7 +335,7 @@ impl Model {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct KeyLight {
     pub enabled: bool,
     pub color: [f32; 3],
@@ -294,11 +379,37 @@ pub struct Environment {
     pub rotation: f32,
     pub studio: crate::studio::Studio,
     pub background: bool,
+    pub grounded: bool,
+    pub grounded_height: Option<f32>,
+    pub grounded_radius: Option<f32>,
+    pub ground_shadow: bool,
     pub background_color: [f32; 3],
     pub background_alpha: f32,
     pub image: Option<Arc<image::Rgb32FImage>>,
     pub name: String,
     pixel_cache: Arc<std::sync::Mutex<Option<(Box<Environment>, Arc<[f32]>)>>>,
+}
+impl PartialEq for Environment {
+    fn eq(&self, other: &Self) -> bool {
+        self.model_lighting == other.model_lighting
+            && self.intensity == other.intensity
+            && self.color == other.color
+            && self.rotation == other.rotation
+            && self.studio == other.studio
+            && self.grounded == other.grounded
+            && self.grounded_height == other.grounded_height
+            && self.grounded_radius == other.grounded_radius
+            && self.ground_shadow == other.ground_shadow
+            && self.background == other.background
+            && self.background_color == other.background_color
+            && self.background_alpha == other.background_alpha
+            && self.name == other.name
+            && match (&self.image, &other.image) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 impl Default for Environment {
     fn default() -> Self {
@@ -309,6 +420,10 @@ impl Default for Environment {
             rotation: 0.,
             studio: crate::studio::Studio::default(),
             background: true,
+            grounded: false,
+            grounded_height: None,
+            grounded_radius: None,
+            ground_shadow: true,
             background_color: [0.025, 0.025, 0.03],
             background_alpha: 1.,
             image: None,
@@ -341,14 +456,20 @@ impl Environment {
         (w, h, pixels)
     }
     pub fn load(&mut self, path: &Path) -> Result<()> {
-        let img = image::ImageReader::open(path)?
+        let mut img = image::ImageReader::open(path)?
             .with_guessed_format()?
             .decode()?
             .into_rgb32f();
-        ensure!(
-            img.width() as u64 * img.height() as u64 <= 4_194_304,
-            "Environment exceeds 4M pixels"
-        );
+        let pixels = img.width() as u64 * img.height() as u64;
+        if pixels > 4_194_304 {
+            let scale = (4_194_304. / pixels as f64).sqrt();
+            img = image::imageops::resize(
+                &img,
+                (img.width() as f64 * scale).floor().max(1.) as u32,
+                (img.height() as f64 * scale).floor().max(1.) as u32,
+                image::imageops::FilterType::Triangle,
+            );
+        }
         ensure!(
             img.pixels()
                 .all(|p| p.0.iter().all(|v| v.is_finite() && *v >= 0.)),

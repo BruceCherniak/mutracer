@@ -48,7 +48,8 @@ export const HEADER = {
   "MESH_AOV_IDS": 24,
   "MATERIAL_AOV_IDS": 25,
   "ENVIRONMENT_SETTINGS": 26,
-  "RESERVED_END": 27,
+  "GROUNDED_BACKGROUND": 27,
+  "RESERVED_END": 28,
   "WORDS": 32
 } as const;
 export const GEOMETRY = {

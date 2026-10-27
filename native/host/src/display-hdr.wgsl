@@ -285,8 +285,13 @@ output.color = finalColor;
     let a = load_flatBackgroundMaskTex(uv, 0);
     output.color = vec4f(linearToSrgb(a.rgb), clamp(a.a, 0.0, 1.0));
   } else if (params.outputKind == 4u) { output.color = load_shadowCatcherTex(uv, 0); }
-// Native scRGB presentation uses linear values, including values above 1.
-  output.color = vec4f(select(pow((output.color.rgb + 0.055) / 1.055, vec3f(2.4)), output.color.rgb / 12.92, output.color.rgb <= vec3f(0.04045)), output.color.a);
+
+
+let encoded = max(output.color.rgb, vec3f(0.0));
+let displayLinear = select(pow((encoded + 0.055) / 1.055, vec3f(2.4)), encoded / 12.92, encoded <= vec3f(0.04045));
+output.color = vec4f(displayLinear, output.color.a);
+
+
   if ((params.flags & 1u) == 0u) { output.color.a = 1.0; }
   if ((params.flags & 2u) != 0u) { output.color = vec4f(output.color.rgb * output.color.a, output.color.a); }
   textureStore(outputImage, id.xy, output.color);

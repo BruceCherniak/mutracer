@@ -6,28 +6,68 @@ use eframe::egui;
 impl Viewer {
     pub(super) fn panels(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
+        let record = !self.drag.active()
+            && ctx.input(|i| {
+                i.pointer.any_down()
+                    || i.pointer.any_pressed()
+                    || i.pointer.any_released()
+                    || i.events.iter().any(|e| {
+                        matches!(
+                            e,
+                            egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_)
+                        )
+                    })
+            });
+        let before = record.then(|| crate::history::Snapshot::capture(self));
+        self.history.replayed = false;
+        self.history.dragging = ctx.input(|i| i.pointer.any_down());
         self.texture_browser.drop_targets.clear();
-        self.titlebar(root);
-        self.inspector_rail(root);
-        if self.inspector_open {
-            if self.tab == 5 {
-                self.examples_panel(root);
-            } else {
-                self.inspector(root);
+        if !self.hide_ui {
+            self.titlebar(root);
+            self.inspector_rail(root);
+            if self.inspector_open {
+                if self.tab == 5 {
+                    self.examples_panel(root);
+                } else {
+                    self.inspector(root);
+                }
             }
+            // Narrow windows keep the viewport usable; hiding the inspector makes room for the list.
+            if self.scene_open && root.available_width() > 600. {
+                self.scene_panel(root);
+            }
+            self.texture_browser_panel(root);
         }
-        // Narrow windows keep the viewport usable; hiding the inspector makes room for the list.
-        if self.scene_open && root.available_width() > 600. {
-            self.scene_panel(root);
-        }
-        self.texture_browser_panel(root);
         self.viewport(root);
+        self.workflow_dialogs(&ctx);
+        self.environment_browser(&ctx);
 
         let grip = crate::shell::resize_grip(root);
         if self.startup_smoke.is_some() {
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("smoke-grip"), grip));
         }
         if !ctx.egui_wants_keyboard_input() {
+            if ctx.input(|i| i.key_pressed(egui::Key::H)) {
+                self.hide_ui = !self.hide_ui;
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::E)) {
+                self.open_export(&ctx);
+            }
+            if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z)) {
+                self.undo(ctx.input(|i| i.modifiers.shift));
+            }
+            for (key, tab) in [
+                (egui::Key::Num1, 0),
+                (egui::Key::Num2, 1),
+                (egui::Key::Num3, 2),
+                (egui::Key::Num4, 3),
+            ] {
+                if ctx.input(|i| i.key_pressed(key)) {
+                    self.tab = tab;
+                    self.inspector_open = true;
+                    self.hide_ui = false;
+                }
+            }
             if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
                 self.toggle_animation_or_render();
             }
@@ -40,6 +80,10 @@ impl Viewer {
             if ctx.input(|i| i.key_pressed(egui::Key::CloseBracket)) {
                 self.inspector_open = !self.inspector_open;
             }
+        }
+        if let Some(before) = before {
+            let after = crate::history::Snapshot::capture(self);
+            self.history.record(before, after);
         }
     }
     fn toggle_inspector_tab(&mut self, tab: usize) {
@@ -133,35 +177,7 @@ impl Viewer {
                                 .sum::<usize>()
                         ));
                     });
-                egui::ScrollArea::vertical()
-                    .id_salt("objects")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        let query = self.object_query.to_lowercase();
-                        let mut visible = 0;
-                        for (id, mesh) in self.model.0.meshes.iter().enumerate() {
-                            if !mesh.name.to_lowercase().contains(&query) {
-                                continue;
-                            }
-                            visible += 1;
-                            if controls::tree_row(
-                                ui,
-                                &mesh.name,
-                                &self.model.0.materials[mesh.material].name,
-                                self.selected_mesh == Some(id),
-                            )
-                            .clicked()
-                            {
-                                self.selected_mesh = Some(id);
-                                self.selected = mesh.material;
-                                self.tab = 1;
-                                self.inspector_open = true;
-                            }
-                        }
-                        if visible == 0 {
-                            ui.weak("No matching objects");
-                        }
-                    });
+                self.scene_rows(ui);
             });
     }
     fn inspector(&mut self, root: &mut egui::Ui) {
@@ -211,7 +227,7 @@ impl Viewer {
             controls::parameter(
                 ui,
                 "Max samples",
-                controls::Scrub::new(&mut self.settings.max_samples, 4..=4096).logarithmic(true),
+                controls::Scrub::new(&mut self.settings.max_samples, 4..=16384).logarithmic(true),
             );
             controls::parameter(
                 ui,
@@ -243,6 +259,8 @@ impl Viewer {
             self.dirty(Change::Scene);
         }
         controls::section(ui, "Color", |ui| {
+            let mut hdr = false;
+            ui.add_enabled_ui(false,|ui| { controls::toggle(ui,"HDR output",&mut hdr); }).response.on_disabled_hover_text("This viewer window uses an SDR surface. Native SDK window hosts support HDR on compatible displays.");
             controls::select(
                 ui,
                 "Tone mapping",
@@ -291,6 +309,11 @@ impl Viewer {
             controls::select(ui, "Method", self.denoiser_choice.label(), |ui| {
                 ui.selectable_value(
                     &mut self.denoiser_choice,
+                    crate::denoiser::Choice::Jnlm,
+                    "JNLM",
+                );
+                ui.selectable_value(
+                    &mut self.denoiser_choice,
                     crate::denoiser::Choice::Oidn,
                     "OIDN",
                 );
@@ -308,14 +331,118 @@ impl Viewer {
                 }
             });
             if self.denoise {
+                if self.denoiser_choice != crate::denoiser::Choice::Dlss {
+                    controls::toggle(ui, "Live denoise", &mut self.live_denoise);
+                }
                 if self.denoiser_choice == crate::denoiser::Choice::Dlss
                     && self.camera.f_stop > 0.
                     && !self.camera.orthographic
                 {
                     ui.weak("Depth of field uses OIDN");
                 }
+                if self.denoiser_choice == crate::denoiser::Choice::Jnlm {
+                    controls::scalar(ui, "Strength", &mut self.jnlm_settings.strength, 0.1..=3.);
+                    controls::section_open(ui, "More parameters", false, |ui| {
+                        controls::parameter(
+                            ui,
+                            "Search radius",
+                            controls::Scrub::new(&mut self.jnlm_settings.search_radius, 1..=16),
+                        );
+                        controls::parameter(
+                            ui,
+                            "Patch radius",
+                            controls::Scrub::new(&mut self.jnlm_settings.patch_radius, 0..=3),
+                        );
+                        controls::scalar(
+                            ui,
+                            "Albedo tolerance",
+                            &mut self.jnlm_settings.albedo_bandwidth,
+                            0.01..=1.,
+                        );
+                        controls::scalar(
+                            ui,
+                            "Normal tolerance",
+                            &mut self.jnlm_settings.normal_bandwidth,
+                            0.005..=0.5,
+                        );
+                        controls::parameter(
+                            ui,
+                            "Filter passes",
+                            controls::Scrub::new(&mut self.jnlm_settings.iterations, 1..=4),
+                        );
+                    });
+                    if controls::button(ui, "Reset denoiser settings").clicked() {
+                        self.jnlm_settings = Default::default();
+                    }
+                }
+                if self.denoiser_choice == crate::denoiser::Choice::Oidn {
+                    controls::select(ui, "Model", self.oidn_settings.model.label(), |ui| {
+                        for model in [
+                            crate::denoiser::OidnModel::Standard,
+                            crate::denoiser::OidnModel::Small,
+                            crate::denoiser::OidnModel::Large,
+                        ] {
+                            ui.selectable_value(
+                                &mut self.oidn_settings.model,
+                                model,
+                                model.label(),
+                            );
+                        }
+                    });
+                    let tile = self.oidn_settings.max_tile_size;
+                    controls::select(
+                        ui,
+                        "Max tile",
+                        if tile == 0 {
+                            "Auto".into()
+                        } else {
+                            format!("{tile} px")
+                        },
+                        |ui| {
+                            ui.selectable_value(&mut self.oidn_settings.max_tile_size, 0, "Auto");
+                            for tile in [256, 512, 1024, 2048] {
+                                ui.selectable_value(
+                                    &mut self.oidn_settings.max_tile_size,
+                                    tile,
+                                    format!("{tile} px"),
+                                );
+                            }
+                        },
+                    );
+                    if controls::button(ui, "Reset denoiser settings").clicked() {
+                        self.oidn_settings = Default::default();
+                    }
+                }
                 ui.weak(&self.denoise_status);
             }
+        });
+        controls::section_open(ui, "Effects", false, |ui| {
+            controls::scalar(
+                ui,
+                "Bloom",
+                &mut self.display_settings.bloom_intensity,
+                0.0..=1.0,
+            );
+            if self.display_settings.bloom_intensity > 0. {
+                controls::scalar(
+                    ui,
+                    "Threshold",
+                    &mut self.display_settings.bloom_threshold,
+                    0.0..=4.0,
+                );
+                controls::scalar(
+                    ui,
+                    "Radius",
+                    &mut self.display_settings.bloom_radius,
+                    0.0..=1.0,
+                );
+            }
+            controls::scalar(
+                ui,
+                "Vignette",
+                &mut self.display_settings.vignette,
+                0.0..=1.0,
+            );
         });
         controls::section(ui, "Device", |ui| {
             let old = self.backend;
@@ -487,7 +614,7 @@ impl Viewer {
                             diagnostics.cached_pipelines, diagnostics.pipeline_cache_hits
                         ));
                         ui.small(format!("Textures  {}", self.model.textures.len()));
-                        if self.denoise {
+                        if self.denoise && self.live_denoise {
                             ui.weak("Live denoise also runs while interacting.");
                         }
                     }
@@ -939,6 +1066,9 @@ impl Viewer {
                     .truncate(),
                 );
                 ui.horizontal(|ui| {
+                    if controls::button(ui, "Browse Poly Haven HDRIs").clicked() {
+                        self.environments.open = true;
+                    }
                     if controls::button(ui, "Load HDR…").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Radiance HDR", &["hdr"])
@@ -990,7 +1120,11 @@ impl Viewer {
         }
         controls::section(ui, "Background", |ui| {
             let old = if self.environment.background {
-                0
+                if self.environment.grounded && !self.environment.studio.enabled {
+                    3
+                } else {
+                    0
+                }
             } else if self.environment.background_alpha > 0. {
                 1
             } else {
@@ -1010,14 +1144,44 @@ impl Viewer {
                             "Environment"
                         },
                     ),
+                    (3, "Grounded"),
                     (1, "Color"),
                     (2, "Transparent"),
                 ],
             );
             if mode != old {
-                self.environment.background = mode == 0;
+                self.environment.background = mode == 0 || mode == 3;
+                self.environment.grounded = mode == 3;
                 self.environment.background_alpha = if mode == 2 { 0. } else { 1. };
                 changed = true;
+            }
+            if mode == 3 {
+                let mut height = self
+                    .environment
+                    .grounded_height
+                    .unwrap_or((self.model.radius * 4.).max(1.6));
+                let mut radius = self.environment.grounded_radius.unwrap_or(height * 20.);
+                if controls::scalar(ui, "Height", &mut height, 0.1..=50.) {
+                    height = height.clamp(0.001, 1e6);
+                    if self
+                        .environment
+                        .grounded_radius
+                        .is_some_and(|r| r <= height)
+                    {
+                        self.environment.grounded_radius = Some(height * 20.);
+                    }
+                    self.environment.grounded_height = Some(height);
+                    changed = true;
+                }
+                if controls::scalar(ui, "Radius", &mut radius, height + 0.1..=1000.) {
+                    self.environment.grounded_radius = Some(radius.max(height + 0.001));
+                    changed = true;
+                }
+                if controls::button(ui, "Use auto").clicked() {
+                    self.environment.grounded_height = None;
+                    self.environment.grounded_radius = None;
+                    changed = true;
+                }
             }
             if mode == 1 {
                 changed |=
@@ -1038,6 +1202,21 @@ impl Viewer {
                 },
             );
         }
+        controls::section(ui, "Ground shadow", |ui| {
+            let before = self.environment.ground_shadow;
+            controls::toggle(ui, "Ground shadow", &mut self.environment.ground_shadow);
+            if before != self.environment.ground_shadow {
+                self.dirty(Change::Scene);
+            }
+            if self.environment.ground_shadow {
+                controls::scalar(
+                    ui,
+                    "Opacity",
+                    &mut self.display_settings.shadow_catcher_alpha,
+                    0.0..=1.0,
+                );
+            }
+        });
         let mut light_changed = false;
         let was_enabled = self.light.enabled;
         controls::section(ui, "Key light", |ui| {
@@ -1170,6 +1349,7 @@ impl Viewer {
                     changed = true;
                 }
             }
+            controls::toggle(ui, "Auto rotate", &mut self.auto_rotate);
             let before = self.camera.orthographic;
             controls::segmented(
                 ui,
@@ -1259,20 +1439,33 @@ impl Viewer {
                     controls::select(
                         ui,
                         "Scene unit",
-                        match old {
-                            0.001 => "Millimetres",
-                            0.01 => "Centimetres",
-                            0.0254 => "Inches",
-                            _ => "Metres",
+                        if self.auto_units {
+                            "Auto"
+                        } else {
+                            match old {
+                                0.001 => "Millimetres",
+                                0.01 => "Centimetres",
+                                0.0254 => "Inches",
+                                _ => "Metres",
+                            }
                         },
                         |ui| {
+                            if ui.selectable_label(self.auto_units, "Auto").clicked() {
+                                self.auto_units = true;
+                                self.camera.meters_per_unit = self.model.guessed_units();
+                            }
                             for (value, name) in [
                                 (0.001, "Millimetres"),
                                 (0.01, "Centimetres"),
                                 (0.0254, "Inches"),
                                 (1., "Metres"),
                             ] {
-                                ui.selectable_value(&mut self.camera.meters_per_unit, value, name);
+                                if ui
+                                    .selectable_value(&mut self.camera.meters_per_unit, value, name)
+                                    .clicked()
+                                {
+                                    self.auto_units = false;
+                                }
                             }
                         },
                     );
@@ -1307,37 +1500,84 @@ impl Viewer {
             .show(root, |ui| {
                 let available = ui.available_size();
                 self.update_resolution(&ctx, available);
-                let dock_rect = self.render_dock(&ctx, ui.max_rect());
-                let debug_rect = self.debug_overlay(&ctx, ui.max_rect());
-                let view_rect = egui::Area::new(egui::Id::new("view-controls"))
-                    .order(egui::Order::Foreground)
-                    .anchor(
-                        egui::Align2::RIGHT_TOP,
-                        ui.max_rect().right_top() - ctx.content_rect().right_top()
-                            + egui::vec2(-10., 10.),
-                    )
-                    .show(&ctx, |ui| {
-                        theme::panel().inner_margin(6).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                if controls::button(ui, "Fit · F").clicked() {
-                                    self.camera.frame(self.model.center, self.model.radius);
-                                    self.camera_index = None;
-                                    self.dirty(Change::Camera);
-                                }
-                                if let Some(id) = self.selected_mesh {
-                                    if controls::button(ui, "Frame selection").clicked() {
-                                        let (min, max) = self.model.mesh_bounds(id);
-                                        self.camera
-                                            .frame((min + max) * 0.5, (max - min).length() * 0.5);
+                let dock_rect = if self.hide_ui {
+                    egui::Rect::NOTHING
+                } else {
+                    self.render_dock(&ctx, ui.max_rect())
+                };
+                let debug_rect = if self.hide_ui {
+                    egui::Rect::NOTHING
+                } else {
+                    self.debug_overlay(&ctx, ui.max_rect())
+                };
+                let view_rect = if self.hide_ui {
+                    egui::Rect::NOTHING
+                } else {
+                    egui::Area::new(egui::Id::new("view-controls"))
+                        .order(egui::Order::Foreground)
+                        .anchor(
+                            egui::Align2::RIGHT_TOP,
+                            ui.max_rect().right_top() - ctx.content_rect().right_top()
+                                + egui::vec2(-10., 10.),
+                        )
+                        .show(&ctx, |ui| {
+                            theme::panel().inner_margin(6).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    if !self.model.1.cameras.is_empty() {
+                                        let previous = self.camera_index;
+                                        egui::ComboBox::from_id_salt("viewport-camera")
+                                            .width(120.)
+                                            .selected_text(
+                                                self.camera_index
+                                                    .and_then(|i| self.model.1.cameras.get(i))
+                                                    .map_or("Orbit", |c| c.name.as_str()),
+                                            )
+                                            .show_ui(ui, |ui| {
+                                                ui.selectable_value(
+                                                    &mut self.camera_index,
+                                                    None,
+                                                    "Orbit",
+                                                );
+                                                for (i, view) in
+                                                    self.model.1.cameras.iter().enumerate()
+                                                {
+                                                    ui.selectable_value(
+                                                        &mut self.camera_index,
+                                                        Some(i),
+                                                        &view.name,
+                                                    );
+                                                }
+                                            });
+                                        if previous != self.camera_index {
+                                            if let Some(i) = self.camera_index {
+                                                self.model.1.cameras[i]
+                                                    .apply(&mut self.camera, self.model.center);
+                                            }
+                                            self.dirty(Change::Camera);
+                                        }
+                                    }
+                                    if controls::button(ui, "Fit · F").clicked() {
+                                        self.camera.frame(self.model.center, self.model.radius);
                                         self.camera_index = None;
                                         self.dirty(Change::Camera);
                                     }
-                                }
+                                    if let Some(id) = self.selected_mesh {
+                                        if controls::button(ui, "Frame selection").clicked() {
+                                            let (min, max) = self.model.mesh_bounds(id);
+                                            self.camera.frame(
+                                                (min + max) * 0.5,
+                                                (max - min).length() * 0.5,
+                                            );
+                                            self.camera_index = None;
+                                            self.dirty(Change::Camera);
+                                        }
+                                    }
+                                });
                             });
-                        });
-                    })
-                    .response
-                    .rect;
+                        })
+                        .response
+                        .rect
+                };
                 let loading_rect = if self.loading.is_some() {
                     egui::Area::new(egui::Id::new("model-download"))
                         .order(egui::Order::Foreground)
@@ -1429,7 +1669,7 @@ impl Viewer {
                 if self.picking_focus && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                     self.picking_focus = false;
                 }
-                let focus_drag = self.focus.frame(ui, rect, &self.camera);
+                let focus_drag = !self.hide_ui && self.focus.frame(ui, rect, &self.camera);
                 if focus_drag {
                     self.drag = crate::input::ViewportDrag::default();
                 }

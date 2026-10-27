@@ -171,6 +171,17 @@ int main(int argc,char **argv) {
   float *a=render(backend,s,NULL,0,(uint32_t)mi,(uint32_t)m),*b=render(backend,0,mt_scene_builder_bytes(&canonical),clen,(uint32_t)mi,(uint32_t)m),*c=render(backend,0,mt_scene_builder_bytes(&original),olen,0,0);
   REQUIRE(memcmp(a,b,64*48*16)==0);REQUIRE(memcmp(a,c,64*48*16)==0);free(a);free(b);free(c);
   CHECK(mt_scene_material_set_float(s,m,MT_MAT_SPECULAR_ROUGHNESS,.6f,0,0,error,sizeof error));uint32_t kind=0;CHECK(mt_scene_pending_commit_kind(s,&kind,error,sizeof error));REQUIRE(kind==MT_COMMIT_INCREMENTAL);
+  mt_scene_grounded_background grounded;CHECK(mt_scene_grounded_background_default(&grounded));
+  REQUIRE(grounded.height==1.6f && grounded.radius==32.f && grounded.ground_height==0.f);
+  CHECK(mt_scene_set_grounded_background(s,&grounded,error,sizeof error));
+  size_t projected_len=0;CHECK(mt_scene_encode(s,NULL,0,&projected_len,error,sizeof error));
+  uint32_t *projected=malloc(projected_len),*unchanged=malloc(projected_len);REQUIRE(projected&&unchanged);
+  CHECK(mt_scene_encode(s,projected,projected_len,&projected_len,error,sizeof error));
+  uint32_t projection=projected[MT_HEADER_GROUNDED_BACKGROUND];REQUIRE(projection>0 && (size_t)(projection+6)*4<=projected_len);
+  float projection_values[6];memcpy(projection_values,projected+projection,sizeof projection_values);REQUIRE(projection_values[0]==grounded.height && projection_values[1]==grounded.radius);
+  grounded.radius=grounded.height;REQUIRE(mt_scene_set_grounded_background(s,&grounded,error,sizeof error)==MT_ERROR_INVALID_ARGUMENT);
+  CHECK(mt_scene_encode(s,unchanged,projected_len,&projected_len,error,sizeof error));REQUIRE(memcmp(projected,unchanged,projected_len)==0);free(projected);free(unchanged);
+  CHECK(mt_scene_set_grounded_background(s,NULL,error,sizeof error));
   CHECK(mt_scene_remove_mesh(s,mi,error,sizeof error));REQUIRE(mt_scene_set_mesh_transform(s,mi,mesh.world_matrix,error,sizeof error)==MT_ERROR_INVALID_HANDLE);
   CHECK(mt_scene_destroy(s,error,sizeof error));REQUIRE(mt_scene_destroy(s,error,sizeof error)==MT_ERROR_INVALID_HANDLE);
   if(argc>2){

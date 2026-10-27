@@ -138,6 +138,19 @@ int32_t mt_scene_environment_settings_default(mt_scene_environment_settings *out
  * reserved returns INVALID_ARGUMENT and leaves settings unchanged. Commit with
  * set_scene_object + engine_update; existing maps can update incrementally. */
 int32_t mt_scene_set_environment_settings(mt_scene scene, const mt_scene_environment_settings *settings, char *error, size_t capacity);
+/* Visible background-map floor/dome projection. Lighting is unchanged. */
+typedef struct mt_scene_grounded_background {
+  uint32_t struct_size;
+  float height; /* Positive capture height in scene units. Default 1.6. */
+  float radius; /* Finite dome radius > height. Default 32. */
+  float ground_height; /* Floor Y. Default 0. */
+  float center[2]; /* Capture X/Z center. Default {0,0}. */
+} mt_scene_grounded_background;
+MT_SCENE_API_LAYOUT(mt_scene_grounded_background, 24);
+int32_t mt_scene_grounded_background_default(mt_scene_grounded_background *out);
+/* NULL disables projection (default). Invalid dimensions/nonfinite values return
+ * INVALID_ARGUMENT and preserve the scene. Projection applies while a background map is visible. */
+int32_t mt_scene_set_grounded_background(mt_scene scene, const mt_scene_grounded_background *background, char *error, size_t capacity);
 /* NULL camera uses the standard 45-degree perspective default. Engine camera
  * overrides this fallback. Output dimensions and quality remain per-render. */
 int32_t mt_scene_set_default_camera(mt_scene scene, const mt_camera_v4 *camera, char *error, size_t capacity);

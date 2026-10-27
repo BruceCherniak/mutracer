@@ -270,6 +270,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
     const texture = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS);
     textures.push(texture); textureIds.set(texture, i);
   }
+  const grounded = u[H.GROUNDED_BACKGROUND] ? f.slice(u[H.GROUNDED_BACKGROUND], u[H.GROUNDED_BACKGROUND] + 6) : new Float32Array(6);
   const environmentSettings = u[H.ENVIRONMENT_SETTINGS] ? f.slice(u[H.ENVIRONMENT_SETTINGS], u[H.ENVIRONMENT_SETTINGS] + 4) : new Float32Array([1, 0, 1, 0]);
   const environment = scaleEnvironment(nativeFloatImage(u[H.ENVIRONMENT_TEXTURE] ? textures[u[H.ENVIRONMENT_TEXTURE] - 1] : undefined), environmentSettings[0]);
   const background = nativeFloatImage(u[H.BACKGROUND_TEXTURE] ? textures[u[H.BACKGROUND_TEXTURE] - 1] : undefined);
@@ -301,7 +302,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   for (let i = 0; i < u[H.LIGHT_COUNT]; i++) {
     lights.push(decodeLight(bytes, u, f, u[H.LIGHT_OFFSET] + i * L.WORDS, textures, iesProfiles));
   }
-  return {width, height, environment, background, environmentSettings, qualityFlags, environmentDistribution,
+  return {width, height, environment, background, environmentSettings, grounded, qualityFlags, environmentDistribution,
     materials, geometries, meshes, lights, textureIds, backgroundColor: f.slice(H.BACKGROUND_COLOR, H.BACKGROUND_COLOR + 4),
     cameraUniform: sceneCameraParameters(bytes.subarray(u[H.CAMERA_OFFSET] * WORD_BYTES, u[H.CAMERA_OFFSET] * WORD_BYTES + C.WORDS * WORD_BYTES), width, height)};
 }
@@ -387,7 +388,7 @@ function packAtlas(table: MaterialData): Uint8Array {
 }
 function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: FlattendBVH, token: number, hardware?: HardwareScene): Uint8Array {
   const {width, height, environment, background, qualityFlags, environmentDistribution,
-    materials, geometries, meshes, lights, backgroundColor, cameraUniform, environmentSettings} = input;
+    materials, geometries, meshes, lights, backgroundColor, cameraUniform, environmentSettings, grounded} = input;
   const blases = prepared.blases;
   const blas = hardware ? new Uint8Array(hardware.records.buffer) : new Uint8Array(concatBLASBuffers(blases));
   const bvh = new Uint8Array(tlas.buffer.byteLength + blas.byteLength);
@@ -400,7 +401,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const attributes = new Float32Array(geometry.vertexCount * stride);
   packVertexAttributes(geometry, attributes, stride, offsets, 0, geometry.vertexCount);
   const stacks = getTraversalStackSizes(tlas, blases);
-  const constants: Record<string, boolean | number> = {...initialSceneConstants(), USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background,
+  const constants: Record<string, boolean | number> = {...initialSceneConstants(), USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background, USE_GROUNDED_BACKGROUND: !!background && grounded[0] > 0,
     USE_ENVMAP: !!environment, ...sceneTraversalConstants(stacks.tlas, stacks.blas), ...attributeLayout.constants,
     ...wgpuMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
   const features = {hasDisplacement: table.displacementMaps.length > 0,
@@ -421,9 +422,10 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const {lightData, lightWidth, lightHeight, lightUniform} = lighting;
   const rt = makeRayTraceUniform();
   writeEnvironmentSettings(rt, environmentSettings);
+  writeGroundedSettings(rt, grounded);
   rt.views.lightsCount[0] = lights.length;
   if (!background && !(qualityFlags & 4)) rt.views.backgroundColor.set(backgroundColor);
-  rt.views.backgroundFlags[0] = (qualityFlags & 4 ? 0 : 1) | (background ? 2 : 0); rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
+  rt.views.backgroundFlags[0] = (qualityFlags & 4 ? 0 : 1) | (background ? 2 : 0) | (grounded[0] > 0 ? 4 : 0); rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
   rt.views.isEmpty[0] = Number(meshInstancesLength(prepared.instances) === 0); rt.views.bevel[0] = Number(!!(qualityFlags & 1));
   rt.views.dispersionWavelengths[0] = qualityFlags & 2 ? 3 : 1;
   writeTraceLighting(rt.views, lighting);
@@ -741,8 +743,8 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
     || u[3] !== Number(!!(state.qualityFlags & 4))) {
     return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   }
-  const header = u[0] === 2 ? 16 : 12;
-  const settings = u[0] === 2 ? f.slice(12, 16) : new Float32Array([1, 0, 1, 0]);
+  const header = u[0] === 3 ? 24 : u[0] === 2 ? 16 : 12;
+  const settings = u[0] >= 2 ? f.slice(12, 16) : new Float32Array([1, 0, 1, 0]);
   const envLength = u[1] * u[2] * 4;
   const environment = scaleEnvironment(envLength ? {width: u[1], height: u[2], data: f.slice(header, header + envLength)} : undefined, settings[0]);
   const background = u[8] * u[9] ? {width: u[8], height: u[9], data: f.slice(header + envLength)} : undefined;
@@ -752,6 +754,7 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   const rt = makeRayTraceUniform();
   new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   writeEnvironmentSettings(rt, settings);
+  if (u[0] === 3) writeGroundedSettings(rt, f.slice(16, 22));
   if (!background && !u[3]) rt.views.backgroundColor.set(f.slice(4, 8));
   packLightingUniform(rt, lighting);
   pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower,
@@ -1253,6 +1256,11 @@ function scaleEnvironment(image: {width: number; height: number; data: Float32Ar
   const data = image.data.slice();
   for (let i = 0; i < data.length; i += 4) for (let c = 0; c < 3; c++) data[i + c] *= intensity;
   return {width: image.width, height: image.height, data};
+}
+function writeGroundedSettings(rt: ReturnType<typeof makeRayTraceUniform>, values: Float32Array) {
+  rt.views.groundedBackgroundParams.set([values[0], values[1], values[2], Number(values[0] > 0)]);
+  rt.views.backgroundFlags[0] = (rt.views.backgroundFlags[0] & ~4) | (values[0] > 0 ? 4 : 0);
+  rt.views.groundedBackgroundCenter.set([values[3], values[4]]);
 }
 function writeEnvironmentSettings(rt: ReturnType<typeof makeRayTraceUniform>, values: Float32Array) {
   const c = Math.cos(values[1]), s = Math.sin(values[1]);

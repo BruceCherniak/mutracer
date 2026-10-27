@@ -1209,7 +1209,7 @@ fn display_only_aovs_preserve_beauty_and_filter_and_export_without_beauty() {
         settings.channel = channel;
         engine.display().set_settings(settings).unwrap();
         for _ in 0..2000 {
-            if loop_.tick().unwrap() == RenderLoopStatus::Finished {
+            if loop_.tick().unwrap() == RenderLoopStatus::Finished && !loop_.needs_tick() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1378,6 +1378,35 @@ fn display_motion_settles_without_a_final_input_edit_or_beauty_sample() {
     );
     assert_eq!(render.samples(), 0);
     assert_eq!(render.aov_samples_rendered(), 1);
+    assert!(!loop_.needs_tick());
+
+    // An isolated edit must first expose displacement, then request one more
+    // unchanged frame to retire it even without explicit interaction activity.
+    camera.world_matrix[12] = 0.4;
+    engine.set_camera(Some(camera)).unwrap();
+    for _ in 0..2000 {
+        if loop_.tick().unwrap() == RenderLoopStatus::Finished {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let moved = render.read_pixels(PixelKind::Motion).unwrap();
+    assert!(
+        moved
+            .data
+            .chunks_exact(4)
+            .any(|p| p[3] > 0. && p[0].abs() > 1e-3)
+    );
+    assert!(loop_.needs_tick());
+    loop_.tick().unwrap();
+    let settled = render.read_pixels(PixelKind::Motion).unwrap();
+    assert!(
+        settled
+            .data
+            .chunks_exact(4)
+            .all(|p| p[0].abs() < 1e-5 && p[1].abs() < 1e-5)
+    );
+    assert_eq!(render.samples(), 0);
     assert!(!loop_.needs_tick());
 }
 
