@@ -8,6 +8,8 @@ pub(crate) struct Sources {
     pub auxiliary: String,
     pub normalize: String,
     pub frame_resolve: String,
+    pub oidn_composition: [String; 2],
+    pub oidn_display: String,
     pub bloom_levels: usize,
     pub bloom_plan: Vec<(usize, usize, usize, usize, f32, f32)>,
 }
@@ -52,6 +54,9 @@ fn shared_postprocess_sources_validate_and_match_js() {
         &sources.auxiliary,
         &sources.normalize,
         &sources.frame_resolve,
+        &sources.oidn_display,
+        &sources.oidn_composition[0],
+        &sources.oidn_composition[1],
     ] {
         let module = naga::front::wgsl::parse_str(source).unwrap();
         naga::valid::Validator::new(

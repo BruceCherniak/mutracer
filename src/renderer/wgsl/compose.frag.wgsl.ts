@@ -242,16 +242,20 @@ ${output} = vec4f(clamp(compositeAlbedo, vec3f(0.0), vec3f(1.0)), rawAlbedo.a);
 }
 export const compositeDenoiseOutputMain = createCompositeDenoiseColorMain() + createCompositeDenoiseAlbedoMain();
 
-export const compositeDenoiseDisplayMain = /* wgsl */ `
+export function createCompositeDenoiseDisplayMain(sdrEncoding: 'gamma22' | 'srgb' = 'gamma22'): string {
+  return /* wgsl */ `
 let denoised = load_colorTex(uv, 0);
 // Keep the original primary coverage, including transparency. OIDN only
 // filters RGB; filtering coverage separately reintroduces silhouette seams.
 // The built-in filter weights color and coverage together and may replace it.
 let alpha = select(load_composedTex(uv, 0).a, clamp(denoised.a, 0.0, 1.0), denoisedAlpha > 0.5);
 let linear = max(denoised.rgb, vec3f(0.0));
-let encoded = select(pow(linear, vec3f(1.0 / 2.2)), linearToSrgb(linear), hdrOutputEnabled > 0.5);
+let encoded = ${sdrEncoding === 'srgb' ? 'linearToSrgb(linear)' : 'select(pow(linear, vec3f(1.0 / 2.2)), linearToSrgb(linear), hdrOutputEnabled > 0.5)'};
 output.color = vec4f(select(vec3f(0.0), encoded, alpha > 0.0), alpha);
 `;
+}
+
+export const compositeDenoiseDisplayMain = createCompositeDenoiseDisplayMain();
 
 // Shared hit normalization; CPU readback retains its f32 reference path.
 export const hdrResolveWGSL = /* wgsl */ `

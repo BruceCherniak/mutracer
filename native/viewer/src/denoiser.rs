@@ -139,19 +139,21 @@ pub fn configure_full(
         }
     } else {
         if let Some(preview) = render_loop.preview() {
-            preview.set_denoiser(if enabled && live {
+            preview.set_viewer_denoiser(if enabled && live {
                 Some(preview_oidn_options()?)
             } else {
                 None
             })?;
         }
-        render_loop.final_render().set_denoiser(enabled.then(|| {
-            oidn.options(if live {
-                api::DenoiseSchedule::Progressive
-            } else {
-                api::DenoiseSchedule::Converged
-            })
-        }))?;
+        render_loop
+            .final_render()
+            .set_viewer_denoiser(enabled.then(|| {
+                oidn.options(if live {
+                    api::DenoiseSchedule::Progressive
+                } else {
+                    api::DenoiseSchedule::Converged
+                })
+            }))?;
     }
     Ok(())
 }

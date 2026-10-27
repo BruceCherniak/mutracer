@@ -625,6 +625,10 @@ enum DenoisedImage {
         pixels: wgpu::Buffer,
         preview: wgpu::Buffer,
     },
+    DisplayGpu {
+        pixels: wgpu::Buffer,
+        settings: crate::display::Settings,
+    },
     /// A sealed custom GPU filter result.
     Resident(super::GpuDenoiseOutput),
 }
@@ -638,6 +642,7 @@ impl Drop for DenoisedImage {
 }
 #[derive(Default)]
 struct Denoise {
+    display: bool,
     options: Option<DenoiserOptions>,
     custom: super::custom_denoise::Filter,
     custom_aovs: u32,
@@ -867,6 +872,24 @@ fn cancel_denoise(render: &mut RenderState) {
     render.denoise.report = None;
     if let Some(capture) = render.capture.as_mut() {
         capture.original();
+    }
+}
+
+pub(super) fn invalidate_display_denoisers(state: &mut State) {
+    for render in state
+        .renders
+        .values_mut()
+        .filter(|r| r.denoise.display && r.denoise.options.is_some())
+    {
+        // Keep one inference in flight while color controls move. Its settings
+        // stamp rejects obsolete output; dropping it here could queue one job per UI tick.
+        render.denoise.denoised = None;
+        render.denoise.report = None;
+        render.output.invalidate();
+        if let Some(capture) = &mut render.capture {
+            capture.original();
+        }
+        render.denoiser_revision += 1;
     }
 }
 
@@ -1657,6 +1680,11 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
             ),
         };
         render.denoise.worker = None;
+        if matches!(&outcome, Ok(DenoisedImage::DisplayGpu { settings, .. })
+            if *settings != state.display.settings.composition())
+        {
+            return Ok(());
+        }
         render.denoise.report = Some(DenoiseReport {
             samples,
             backend,
@@ -1670,6 +1698,9 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                         DenoisedImage::Cpu(pixels, _) => capture.upload(pixels),
                         DenoisedImage::Gpu { preview, .. } => capture.upload_gpu(preview),
                         DenoisedImage::Resident(output) => capture.upload_gpu(&output.buffer),
+                        DenoisedImage::DisplayGpu { pixels, settings } => {
+                            capture.upload_display_oidn(pixels, *settings)
+                        }
                     }
                     .map_err(|e| error(Status::Error, e.to_string()))?;
                 }
@@ -1733,6 +1764,27 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                     )
                     .map_err(|e| format!("{e:#}"))?,
                 );
+            }
+            if render.denoise.display {
+                let settings = state.display.settings.composition();
+                let capture = render.capture.as_mut().ok_or("Missing display snapshot")?;
+                let inputs = capture
+                    .oidn_display_inputs(&settings)
+                    .map_err(|e| e.to_string())?;
+                let pixels = render
+                    .denoise
+                    .gpu_filter
+                    .as_mut()
+                    .unwrap()
+                    .submit_display(
+                        &state.gpu,
+                        &inputs[0],
+                        &inputs[1],
+                        capture.oidn_normal(),
+                        render.samples,
+                    )
+                    .map_err(|e| e.to_string())?;
+                return Ok(DenoisedImage::DisplayGpu { pixels, settings });
             }
             let (pixels, preview) = render
                 .denoise
@@ -2350,7 +2402,22 @@ impl Render {
     /// OIDN device is kept while the library and backend stay the same;
     /// oidn-webgpu reuses its resources while weights, tiling and size stay the same.
     pub fn set_denoiser(&self, options: Option<DenoiserOptions>) -> Result<()> {
+        self.set_denoiser_domain(options, false)
+    }
+    // Viewer-only plumbing; the installed SDK keeps its HDR denoiser contract.
+    #[cfg(feature = "viewer-support")]
+    #[doc(hidden)]
+    pub fn set_viewer_denoiser(&self, options: Option<DenoiserOptions>) -> Result<()> {
+        self.set_denoiser_domain(options, true)
+    }
+    fn set_denoiser_domain(&self, options: Option<DenoiserOptions>, display: bool) -> Result<()> {
         if let Some(options) = &options {
+            if display && options.backend != DENOISE_OIDN_WEBGPU {
+                return Err(error(
+                    Status::InvalidArgument,
+                    "Viewer display denoising requires oidn-webgpu",
+                ));
+            }
             if options.backend > crate::oidn_webgpu::BACKEND {
                 return Err(error(Status::InvalidArgument, "Unknown denoising backend"));
             }
@@ -2366,7 +2433,10 @@ impl Render {
         }
         self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
-            if render.denoise.custom.0.is_none() && render.denoise.options == options {
+            if render.denoise.custom.0.is_none()
+                && render.denoise.options == options
+                && render.denoise.display == display
+            {
                 return Ok(());
             }
             cancel_denoise(render);
@@ -2385,6 +2455,7 @@ impl Render {
             };
             render.denoiser_revision += 1;
             render.denoise = Denoise {
+                display,
                 options,
                 filter,
                 gpu_filter,
@@ -2805,7 +2876,8 @@ impl Render {
                         let [width, height] = context_size(render.context)?;
                         let pixels = match pixels {
                             DenoisedImage::Cpu(pixels, _) => pixels.clone(),
-                            DenoisedImage::Gpu { pixels: buffer, .. }
+                            DenoisedImage::DisplayGpu { pixels: buffer, .. }
+                            | DenoisedImage::Gpu { pixels: buffer, .. }
                             | DenoisedImage::Resident(super::GpuDenoiseOutput { buffer, .. }) => {
                                 crate::read_average(
                                     &state.gpu.device,
@@ -2824,7 +2896,11 @@ impl Render {
                         return Ok(Image {
                             width,
                             height,
-                            data: flip_rows(&pixels, width, height),
+                            data: if render.denoise.display {
+                                pixels
+                            } else {
+                                flip_rows(&pixels, width, height)
+                            },
                             id_data: None,
                         });
                     }
@@ -3551,3 +3627,7 @@ mod batching_tests {
         assert!(RefineOptions::default().validate().is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "display_oidn_tests.rs"]
+mod display_oidn_tests;

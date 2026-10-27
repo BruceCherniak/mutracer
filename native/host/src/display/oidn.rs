@@ -1,0 +1,124 @@
+//! Browser-style OIDN input composition and display-linear presentation.
+use super::{Display, Settings, effects::Effects, image};
+use crate::{Result, postprocess};
+
+pub(super) struct Filter {
+    composed: wgpu::Texture,
+    albedo: wgpu::Texture,
+    encode: wgpu::ComputePipeline,
+    pub(super) result: Option<(wgpu::Buffer, Settings)>,
+}
+impl Filter {
+    fn new(display: &Display) -> Result<Self> {
+        let device = &display.gpu.device;
+        let source = &postprocess::sources()?.oidn_display;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("OIDN display transfer"),
+            source: wgpu::ShaderSource::Wgsl(source.as_str().into()),
+        });
+        Ok(Self {
+            composed: image(device, display.size, wgpu::TextureFormat::Rgba32Float),
+            albedo: image(device, display.size, wgpu::TextureFormat::Rgba32Float),
+            encode: device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("OIDN display transfer"),
+                layout: None,
+                module: &module,
+                entry_point: Some("present"),
+                compilation_options: Default::default(),
+                cache: None,
+            }),
+            result: None,
+        })
+    }
+    pub(super) fn present(
+        &self,
+        display: &Display,
+        settings: &Settings,
+        premultiply: bool,
+        target: &wgpu::Texture,
+    ) -> bool {
+        let Some((pixels, key)) = &self.result else {
+            return false;
+        };
+        if settings != key || !display.using_denoised || !matches!(settings.output, 0 | 3) {
+            return false;
+        }
+        let device = &display.gpu.device;
+        let params = super::effects::uniform(
+            device,
+            &[
+                display.size[0],
+                display.size[1],
+                0,
+                u32::from(settings.preserve_alpha) | (u32::from(premultiply) << 1),
+            ],
+        );
+        let view = target.create_view(&Default::default());
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("OIDN display bindings"),
+            layout: &self.encode.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: pixels.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.encode);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(display.size[0].div_ceil(8), display.size[1].div_ceil(8), 1);
+        }
+        display.gpu.queue.submit([encoder.finish()]);
+        true
+    }
+}
+impl Display {
+    pub(crate) fn oidn_display_inputs(
+        &mut self,
+        settings: &Settings,
+    ) -> Result<[wgpu::Texture; 2]> {
+        if self.oidn.is_none() {
+            self.oidn = Some(Filter::new(self)?);
+        }
+        let sources = &postprocess::sources()?.oidn_composition;
+        // Progressive filtering always snapshots raw composition, never its previous output.
+        let shown = self.using_denoised;
+        self.using_denoised = false;
+        let mut effects = self.effects.lock().unwrap_or_else(|e| e.into_inner());
+        let effects = effects.get_or_insert_with(|| Effects::new(&self.gpu.device));
+        effects.prepare_composition(&self.gpu.device, sources);
+        let filter = self.oidn.as_ref().unwrap();
+        effects.compose(self, settings, false, &filter.composed);
+        effects.compose_guide(self, settings, &filter.albedo);
+        self.using_denoised = shown;
+        Ok([filter.composed.clone(), filter.albedo.clone()])
+    }
+    pub(crate) fn upload_display_oidn(
+        &mut self,
+        pixels: &wgpu::Buffer,
+        settings: Settings,
+    ) -> Result<()> {
+        if self.oidn.is_none() {
+            self.oidn = Some(Filter::new(self)?);
+        }
+        self.oidn.as_mut().unwrap().result = Some((pixels.clone(), settings));
+        self.using_denoised = true;
+        self.denoise_revision += 1;
+        self.image_revision += 1;
+        Ok(())
+    }
+    pub(crate) fn oidn_normal(&self) -> &wgpu::Buffer {
+        &self.normal
+    }
+}

@@ -32,6 +32,7 @@ pub(crate) struct Denoiser {
     output: wgpu::Buffer,
     normalize: wgpu::ComputePipeline,
     restore: wgpu::ComputePipeline,
+    display_prepare: Option<wgpu::ComputePipeline>,
     #[cfg(test)]
     identity: u64,
 }
@@ -183,6 +184,7 @@ impl Denoiser {
             output,
             normalize: pipeline("normalize"),
             restore: pipeline("restore"),
+            display_prepare: None,
             #[cfg(test)]
             identity: NEXT_PREPARATION.fetch_add(1, Ordering::Relaxed),
         })
@@ -217,12 +219,6 @@ impl Denoiser {
                     .collect::<Vec<_>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
-            wgpu::BindGroupEntry {
-                binding,
-                resource: buffer.as_entire_binding(),
-            }
-        }
         let normalize = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("OIDN accumulation resolve"),
             layout: &self.normalize.get_bind_group_layout(0),
@@ -236,6 +232,100 @@ impl Denoiser {
                 entry(6, &params),
             ],
         });
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("MuTracer OIDN denoising"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.normalize);
+            pass.set_bind_group(0, &normalize, &[]);
+            pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
+        }
+        self.finish(gpu, encoder, &params, Some([sources[1], sources[2]]))
+    }
+
+    pub(crate) fn submit_display(
+        &mut self,
+        gpu: &GpuDevice,
+        color: &wgpu::Texture,
+        albedo: &wgpu::Texture,
+        normal: &wgpu::Buffer,
+        samples: u32,
+    ) -> Result<wgpu::Buffer> {
+        gpu.loss.check()?;
+        if self.display_prepare.is_none() {
+            let module = gpu
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("OIDN composed display inputs"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        crate::postprocess::sources()?.oidn_display.as_str().into(),
+                    ),
+                });
+            self.display_prepare = Some(gpu.device.create_compute_pipeline(
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("OIDN composed display inputs"),
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("prepare"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                },
+            ));
+        }
+        let params = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("OIDN composed input parameters"),
+                contents: &[self.size[0], self.size[1], (samples as f32).to_bits(), 0]
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let pipeline = self.display_prepare.as_ref().unwrap();
+        let views = [
+            color.create_view(&Default::default()),
+            albedo.create_view(&Default::default()),
+        ];
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("OIDN composed input bindings"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&views[1]),
+                },
+                entry(2, normal),
+                entry(3, &params),
+                entry(4, &self.color),
+                entry(5, &self.albedo),
+                entry(6, &self.normal),
+            ],
+        });
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
+        }
+        Ok(self.finish(gpu, encoder, &params, None)?.0)
+    }
+
+    fn finish(
+        &mut self,
+        gpu: &GpuDevice,
+        mut encoder: wgpu::CommandEncoder,
+        params: &wgpu::Buffer,
+        restore_sources: Option<[&wgpu::Buffer; 2]>,
+    ) -> Result<(wgpu::Buffer, wgpu::Buffer)> {
         let retained = |label| {
             gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -247,23 +337,6 @@ impl Denoiser {
             })
         };
         let pixels = retained("Retained OIDN HDR pixels");
-        let preview = retained("OIDN display color");
-        let restore = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("OIDN display normalization"),
-            layout: &self.restore.get_bind_group_layout(0),
-            entries: &[
-                entry(1, sources[1]),
-                entry(2, sources[2]),
-                entry(3, &self.output),
-                entry(4, &preview),
-                entry(5, &params),
-            ],
-        });
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("MuTracer OIDN denoising"),
-            });
         let dispatch = |encoder: &mut wgpu::CommandEncoder,
                         pipeline: &wgpu::ComputePipeline,
                         group: &wgpu::BindGroup| {
@@ -272,7 +345,6 @@ impl Denoiser {
             pass.set_bind_group(0, group, &[]);
             pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
         };
-        dispatch(&mut encoder, &self.normalize, &normalize);
         if let Some(aux) = &mut self.auxiliary {
             let bind = |pipeline: &wgpu::ComputePipeline, buffers: &[(u32, &wgpu::Buffer)]| {
                 gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -291,7 +363,7 @@ impl Denoiser {
                     (1, &self.normal),
                     (2, &aux.encoded[0]),
                     (3, &aux.encoded[1]),
-                    (8, &params),
+                    (8, params),
                 ],
             );
             let decode = bind(
@@ -301,7 +373,7 @@ impl Denoiser {
                     (5, &aux.filtered[1]),
                     (6, &aux.clean[0]),
                     (7, &aux.clean[1]),
-                    (8, &params),
+                    (8, params),
                 ],
             );
             dispatch(&mut encoder, &aux.encode, &encode);
@@ -312,10 +384,35 @@ impl Denoiser {
         }
         self.prepared
             .encode(&mut encoder, DenoiseParams::default().with_input_scale(1.0))?;
-        dispatch(&mut encoder, &self.restore, &restore);
+
+        let preview = if let Some(sources) = restore_sources {
+            let preview = retained("OIDN display color");
+            let restore = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("OIDN display normalization"),
+                layout: &self.restore.get_bind_group_layout(0),
+                entries: &[
+                    entry(1, sources[0]),
+                    entry(2, sources[1]),
+                    entry(3, &self.output),
+                    entry(4, &preview),
+                    entry(5, params),
+                ],
+            });
+            dispatch(&mut encoder, &self.restore, &restore);
+            preview
+        } else {
+            pixels.clone()
+        };
         encoder.copy_buffer_to_buffer(&self.output, 0, &pixels, 0, pixels.size());
         gpu.queue.submit([encoder.finish()]);
         Ok((pixels, preview))
+    }
+}
+
+fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
+    wgpu::BindGroupEntry {
+        binding,
+        resource: buffer.as_entire_binding(),
     }
 }
 

@@ -185,7 +185,7 @@ impl Jnlm {
         let device = &gpu.device;
         let key = (display.image_revision, *settings, premultiply);
         if self.key != Some(key) {
-            effects.prepare_jnlm(device, &self.composition);
+            effects.prepare_composition(device, &self.composition);
             effects.compose(display, settings, false, &self.composed);
             effects.compose_guide(display, settings, &self.albedo_texture);
             let params = |pass: u32| {

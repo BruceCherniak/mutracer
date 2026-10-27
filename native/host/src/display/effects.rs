@@ -67,7 +67,7 @@ impl Effects {
             bloom_runs: 0,
         }
     }
-    pub(super) fn prepare_jnlm(&mut self, device: &wgpu::Device, sources: &[String; 2]) {
+    pub(super) fn prepare_composition(&mut self, device: &wgpu::Device, sources: &[String; 2]) {
         for (slot, source) in [&mut self.linear_pipeline, &mut self.guide_pipeline]
             .into_iter()
             .zip(sources)

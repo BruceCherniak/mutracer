@@ -5,6 +5,7 @@ mod effects;
 #[cfg(test)]
 mod effects_tests;
 pub(crate) mod jnlm;
+mod oidn;
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Metadata {
     has_catcher: bool,
@@ -125,6 +126,7 @@ pub struct Display {
     effects: std::sync::Mutex<Option<effects::Effects>>,
     image_revision: u64,
     denoise_revision: u64,
+    oidn: Option<oidn::Filter>,
     jnlm_options: Option<jnlm::Options>,
     jnlm: std::sync::Mutex<Option<jnlm::Jnlm>>,
 }
@@ -246,6 +248,7 @@ impl Display {
             effects: Default::default(),
             image_revision: 0,
             denoise_revision: 0,
+            oidn: None,
             jnlm_options: None,
             jnlm: Default::default(),
         }
@@ -359,6 +362,9 @@ impl Display {
                 mapped_at_creation: false,
             })
         };
+        if let Some(oidn) = &mut self.oidn {
+            oidn.result = None;
+        }
         let previous = self.denoised.take();
         let snapshot = |source: &wgpu::Buffer,
                         previous: Option<&wgpu::Buffer>,
@@ -406,6 +412,10 @@ impl Display {
     /// Shows the last uploaded denoised image again, for example after a capture
     /// replaced it with newer samples. Returns false when there is none.
     pub fn show_denoised(&mut self) -> bool {
+        if self.oidn.as_ref().is_some_and(|o| o.result.is_some()) {
+            self.using_denoised = true;
+            return true;
+        }
         let Some(denoised) = &self.denoised else {
             return false;
         };
@@ -420,6 +430,9 @@ impl Display {
     pub fn original(&mut self) {
         self.reset_effects();
         self.denoised = None;
+        if let Some(oidn) = &mut self.oidn {
+            oidn.result = None;
+        }
         if !self.using_denoised {
             return;
         }
@@ -641,6 +654,13 @@ impl Display {
         target: &wgpu::Texture,
     ) {
         if self.samples == 0 {
+            return;
+        }
+        if self
+            .oidn
+            .as_ref()
+            .is_some_and(|o| o.present(self, settings, premultiply, target))
+        {
             return;
         }
         if let Some(options) = self

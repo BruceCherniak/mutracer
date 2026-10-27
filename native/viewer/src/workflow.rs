@@ -141,9 +141,9 @@ impl Viewer {
                             .final_render()
                             .set_jnlm_display_filter(Some(jnlm))?;
                     } else {
-                        render_loop
-                            .final_render()
-                            .set_denoiser(Some(oidn.options(api::DenoiseSchedule::Converged)))?;
+                        render_loop.final_render().set_viewer_denoiser(Some(
+                            oidn.options(api::DenoiseSchedule::Converged),
+                        ))?;
                     }
                 }
                 if settings.aovs != 0 {

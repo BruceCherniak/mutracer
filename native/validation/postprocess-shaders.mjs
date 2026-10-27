@@ -41,5 +41,5 @@ const result=spawnSync('cargo',['test','--locked','--manifest-path','native/host
 writeFileSync(resolve(out,'aot-comparison.log'),(result.stdout??'')+(result.stderr??''));
 if(result.error||result.status!==0)throw result.error??Error(`AOT/JS postprocess comparison failed; see ${out}/aot-comparison.log`);
 if(!/test result: ok\. 2 passed; 0 failed;/.test(result.stdout??''))throw Error('Expected both shader/math and native loop policy checks to run');
-writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,shaders:['bloom','auxiliary','normalize','frame_resolve'],bloom:reference.bloom.length,viewer:reference.viewer.length,scales:reference.scales.length,traces:reference.traces.length})+'\n');
+writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,shaders:['bloom','auxiliary','normalize','frame_resolve','oidn_display','oidn_composition[0]','oidn_composition[1]'],bloom:reference.bloom.length,viewer:reference.viewer.length,scales:reference.scales.length,traces:reference.traces.length})+'\n');
 console.log('Shared postprocess shaders, Bloom parameters, viewer math and native loop policies match JS');

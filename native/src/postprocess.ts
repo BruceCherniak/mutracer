@@ -82,7 +82,8 @@ fn decode(@builtin(global_invocation_id) id: vec3u) {
 `;
 }
 
-import {hdrResolveWGSL} from '../../src/renderer/wgsl/compose.frag.wgsl.js';
+import {nativeDisplayEffectsShader} from './display-shader.js';
+import {composeDefine, createCompositeDenoiseDisplayMain, hdrResolveWGSL} from '../../src/renderer/wgsl/compose.frag.wgsl.js';
 const nativeOidnNormalizeShader = `// Generated native bindings around the shared HDR resolve equations.
 ${hdrResolveWGSL}
 struct Params { size: vec2u, samples: u32, flat: u32 }
@@ -136,12 +137,56 @@ fn restore(@builtin(global_invocation_id) id: vec3u) {
 }
 `;
 
+// Composed inputs are top-row first; raw normal accumulation is bottom-row first.
+const nativeOidnDisplayShader = `
+struct Params { size: vec2u, samples: f32, flags: u32 }
+@group(0) @binding(0) var colorImage: texture_2d<f32>;
+@group(0) @binding(1) var albedoImage: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read> accumulatedNormal: array<vec4f>;
+@group(0) @binding(3) var<uniform> prepareParams: Params;
+@group(0) @binding(4) var<storage, read_write> color: array<vec4f>;
+@group(0) @binding(5) var<storage, read_write> albedo: array<vec4f>;
+@group(0) @binding(6) var<storage, read_write> normal: array<vec4f>;
+@compute @workgroup_size(8,8)
+fn prepare(@builtin(global_invocation_id) id: vec3u) {
+  if (any(id.xy >= prepareParams.size)) { return; }
+  let i = id.y * prepareParams.size.x + id.x;
+  let raw = (prepareParams.size.y - 1u - id.y) * prepareParams.size.x + id.x;
+  color[i] = textureLoad(colorImage, id.xy, 0);
+  albedo[i] = textureLoad(albedoImage, id.xy, 0);
+  normal[i] = accumulatedNormal[raw] / prepareParams.samples;
+}
+@group(0) @binding(0) var<storage, read> filtered: array<vec4f>;
+@group(0) @binding(1) var outputImage: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var<uniform> params: Params;
+var<private> toneMappingParams: vec4f;
+var<private> colorGradingParams: vec4f;
+${composeDefine}
+fn load_colorTex(uv: vec2i, level: i32) -> vec4f { return filtered[u32(uv.y) * params.size.x + u32(uv.x)]; }
+fn load_composedTex(uv: vec2i, level: i32) -> vec4f { return load_colorTex(uv, level); }
+struct FSOutput { color: vec4f }
+@compute @workgroup_size(8,8)
+fn present(@builtin(global_invocation_id) id: vec3u) {
+  if (any(id.xy >= params.size)) { return; }
+  let uv = vec2i(id.xy);
+  let denoisedAlpha = 0.0;
+  let hdrOutputEnabled = 0.0;
+  var output: FSOutput;
+${createCompositeDenoiseDisplayMain('srgb')}
+  if ((params.flags & 1u) == 0u) { output.color.a = 1.0; }
+  if ((params.flags & 2u) != 0u) { output.color = vec4f(output.color.rgb * output.color.a, output.color.a); }
+  textureStore(outputImage, id.xy, output.color);
+}
+`;
+
 import frameResolve from './frame-resolve.wgsl.js';
 
 export function postprocessParameters(): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({
     bloom: nativeBloomShader(), auxiliary: nativeOidnAuxiliaryShader(),
     normalize: nativeOidnNormalizeShader, frame_resolve: frameResolve,
+    oidn_composition: [nativeDisplayEffectsShader(false, 'linear'), nativeDisplayEffectsShader(false, 'albedo')],
+    oidn_display: nativeOidnDisplayShader,
     bloom_levels: BLOOM_LEVELS, bloom_plan: BLOOM_PLAN
   }));
 }

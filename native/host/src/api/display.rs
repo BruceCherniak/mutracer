@@ -423,6 +423,9 @@ impl Display {
         if !settings.hdr_output_enabled {
             state.display.hdr_texture = None;
         }
+        if state.display.settings.composition() != settings.composition() {
+            super::render::invalidate_display_denoisers(&mut state);
+        }
         state.display.settings = settings;
         Ok(())
     }

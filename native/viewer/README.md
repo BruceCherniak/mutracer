@@ -231,7 +231,8 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   keep using Small. JNLM exposes strength, search/patch radius, feature
   tolerances and pass count. **Reset denoiser settings** restores the selected
   filter's defaults. PNG rendering uses the selected OIDN or JNLM filter;
-  with DLSS RR selected, it uses OIDN.
+  with DLSS RR selected, it uses OIDN. OIDN and JNLM filter the composed image
+  after tone mapping, including in PNG export.
 - **Live denoise** filters OIDN/JNLM previews and intermediate samples. Turn it
   off to filter only the completed final image.
 - **Effects** adds Bloom and Vignette; these recompose the image and export
@@ -275,7 +276,9 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   changes, moving a light or the environment between zero and nonzero
   intensity, and resource size changes rebuild the scene in the background
   while the previous image stays visible.
-- Color controls and denoising change only the displayed image. Output changes
+- Color controls and denoising change only the displayed image. With OIDN or
+  JNLM enabled, color and effect edits rerun the display filter without tracing
+  new samples. Output changes
   preserve Final samples; auxiliary channels sample separately when needed.
 - During continuous edits, new input waits for the current frame, its preview
   denoising and any scene preparation, then applies the latest state. CPU or GPU contention can still
