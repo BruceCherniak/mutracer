@@ -1,3 +1,4 @@
+import {framePixelStruct} from './layout.js';
 import type {RayTraceInputHooks} from '../../src/renderer/wgsl/rayTrace.compute.js';
 import {GROUP} from './layout.js';
 
@@ -12,23 +13,7 @@ export function nativeFrameInputHooks(): RayTraceInputHooks {
     unclampedColor: '  mtFramePixels[mtFrameIndex].unclampedRadiance = vec4f(liAndAlpha.rgb, 1.0);\n',
     end: '  mtFramePixels[mtFrameIndex].noisyColor = vec4f(liAndAlpha.rgb, 1.0);\n  mtFramePixels[mtFrameIndex].rngState = s0;\n  mtFramePixels[mtFrameIndex].rngDimensions = vec4u(hashedCounter, samplingBounce, pixelSampleIndex, rtUniform.sequenceSeed);\n',
     declarations: /* wgsl */ `
-struct MtFramePixel {
-  noisyColor: vec4f,
-  normalRoughness: vec4f,
-  positionDepth: vec4f,
-  geometricNormal: vec4f,
-  baseColorMetalness: vec4f,
-  transmission: vec4f,
-  roughnessIor: vec4f,
-  absorption: vec4f,
-  identity: vec4u,
-  barycentricsFace: vec4f,
-  unclampedRadiance: vec4f,
-  rngState: vec4u,
-  rngDimensions: vec4u,
-  diffuseAlbedo: vec4f,
-  specularAlbedo: vec4f,
-}
+${framePixelStruct('MtFramePixel')}
 @group(${GROUP.OUTPUT}) @binding(4) var<storage, read_write> mtFramePixels: array<MtFramePixel>;
 var<private> mtFrameIndex: u32;
 var<private> mtFrameCaptured: bool;

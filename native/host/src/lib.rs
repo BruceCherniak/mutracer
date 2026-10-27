@@ -42,6 +42,7 @@ pub mod layout;
 pub mod fuzzing;
 mod material_properties;
 pub mod path_diagnostics;
+mod postprocess;
 pub mod preparation_diagnostics;
 mod profiling;
 mod runtime;
@@ -51,6 +52,8 @@ pub mod settings;
 pub mod status;
 pub mod submission;
 mod tinybvh;
+#[doc(hidden)]
+pub mod viewer_math;
 use status::{Status, classify, fail, rejected};
 use submission::GpuQueue;
 

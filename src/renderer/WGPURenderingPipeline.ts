@@ -1,3 +1,5 @@
+import {hdrResolveWGSL} from './wgsl/compose.frag.wgsl.js';
+import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WGPUAov} from './WGPUAov.js';
 import {aovMask} from './aov.js';
@@ -48,12 +50,7 @@ export const oidnAlbedoSrgbEncodeMain = /* wgsl */ `
 if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
 let index = globalId.x + globalId.y * u32(imageSize.x);
 let raw = textureLoad(in_albedo, vec2u(globalId.xy), 0);
-let linear = clamp(raw.rgb, vec3f(0.0), vec3f(1.0));
-let encoded = select(
-  1.055 * pow(linear, vec3f(1.0 / 2.4)) - 0.055,
-  12.92 * linear,
-  linear <= vec3f(0.0031308)
-);
+let encoded = oidnEncodeAlbedo(raw.rgb);
 out_albedo[index] = vec4f(encoded, raw.a);
 `;
 
@@ -61,12 +58,7 @@ export const oidnAlbedoSrgbDecodeMain = /* wgsl */ `
 if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
 let index = globalId.x + globalId.y * u32(imageSize.x);
 let filtered = in_albedo[index];
-let encoded = clamp(filtered.rgb, vec3f(0.0), vec3f(1.0));
-let linear = select(
-  pow((encoded + 0.055) / 1.055, vec3f(2.4)),
-  encoded / 12.92,
-  encoded <= vec3f(0.04045)
-);
+let linear = oidnDecodeAlbedo(filtered.rgb);
 var result = linear;
 let surfaceCoverage = textureLoad(in_rawAlbedo, vec2i(globalId.xy), 0).a;
 if (preserveSurfaceTexture != 0u) {
@@ -97,7 +89,7 @@ out_albedo[index] = vec4f(result, surfaceCoverage);
 export const oidnNormalSanitizeMain = /* wgsl */ `
 if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
 let index = globalId.x + globalId.y * u32(imageSize.x);
-out_normal[index] = vec4f(clamp(in_normal[index].rgb, vec3f(0.0), vec3f(1.0)), 1.0);
+out_normal[index] = vec4f(oidnSanitizeNormal(in_normal[index].rgb), 1.0);
 `;
 
 export interface WGPURenderingPipelineOptions {
@@ -341,12 +333,14 @@ query, getMemoryBytes: () => query ? query.resolveBuffer.size + query.resultBuff
     inputs: ['colorTex', 'coverageTex'],
     outputs: ['color'],
     uniforms: [{ label: 'flatBackgroundColor', type: 'vec4f', data: [0, 0, 0, 0] }],
+    fsDefine: hdrResolveWGSL,
     fsMain: /* wgsl */ `
 var color = load_colorTex(uv, 0);
 let coverage = clamp(load_coverageTex(uv, 0).a, 0.0, 1.0);
-if (flatBackgroundColor.a > 0.5 && coverage > 0.0) {
-  color = vec4f(color.rgb * coverage, color.a);
-}
+color = vec4f(
+  hdr_flat_component(color.r, coverage, flatBackgroundColor.a > 0.5, true),
+  hdr_flat_component(color.g, coverage, flatBackgroundColor.a > 0.5, true),
+  hdr_flat_component(color.b, coverage, flatBackgroundColor.a > 0.5, true), color.a);
 output.color = color;
 `
   }));
@@ -454,6 +448,7 @@ output.color = color;
       inputs: ['albedo'],
       outputs: ['albedo'],
       uniforms: auxiliaryPassUniforms,
+      csDefine: oidnAuxiliaryDefine,
       csMain: oidnAlbedoSrgbEncodeMain
     }
   ));
@@ -466,6 +461,7 @@ output.color = color;
       uniforms: [...auxiliaryPassUniforms, {
         label: 'preserveSurfaceTexture', type: 'u32', data: 0
       }],
+      csDefine: oidnAuxiliaryDefine,
       csMain: oidnAlbedoSrgbDecodeMain
     }
   ));
@@ -476,6 +472,7 @@ output.color = color;
       inputs: ['normal'],
       outputs: ['normal'],
       uniforms: auxiliaryPassUniforms,
+      csDefine: oidnAuxiliaryDefine,
       csMain: oidnNormalSanitizeMain
     }
   ));

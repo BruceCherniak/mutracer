@@ -252,3 +252,21 @@ let linear = max(denoised.rgb, vec3f(0.0));
 let encoded = select(pow(linear, vec3f(1.0 / 2.2)), linearToSrgb(linear), hdrOutputEnabled > 0.5);
 output.color = vec4f(select(vec3f(0.0), encoded, alpha > 0.0), alpha);
 `;
+
+// Shared hit normalization; CPU readback retains its f32 reference path.
+export const hdrResolveWGSL = /* wgsl */ `
+fn hdr_resolve_component(color: f32, count: f32, hit: f32, minimum_count: f32, rgb: bool) -> f32 {
+if (count <= 0.0) {
+return 0.0;
+}
+let total = max(count, minimum_count);
+let divisor = select(total, hit, (rgb && (hit > 0.0)));
+return (color / divisor);
+}
+fn hdr_flat_component(color: f32, coverage: f32, flat: bool, rgb: bool) -> f32 {
+if ((flat && rgb) && (coverage > 0.0)) {
+return (color * coverage);
+}
+return color;
+}
+`;

@@ -381,9 +381,7 @@ mod tests {
                 sources.albedo,
             ]
             .into_iter()
-            .chain(std::iter::once(
-                include_str!("../oidn-auxiliary.wgsl").to_owned(),
-            )) {
+            {
                 let module = naga::front::wgsl::parse_str(&source).unwrap();
                 naga::valid::Validator::new(
                     naga::valid::ValidationFlags::all(),

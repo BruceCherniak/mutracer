@@ -129,3 +129,12 @@ export function jnlmParameters(width: number, height: number, strength: number,
   return prepareJnlm(width, height, strength, searchRadius, patchRadius,
     albedoBandwidth, normalBandwidth, iterations);
 }
+
+import {postprocessParameters as preparePostprocess} from './postprocess.js';
+export function postprocessParameters(): Uint8Array { return preparePostprocess(); }
+
+import {bloomParameters as prepareBloom} from './postprocess.js';
+export function bloomParameters(radius: number): Uint8Array { return prepareBloom(radius); }
+
+import {viewerParameters as prepareViewer} from './viewer-core.js';
+export function viewerParameters(kind: number, bytes: Uint8Array): Uint8Array { return prepareViewer(kind, bytes); }

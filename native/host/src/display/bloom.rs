@@ -4,18 +4,28 @@ pub(super) struct Bloom {
     layout: wgpu::BindGroupLayout,
     pipelines: [wgpu::ComputePipeline; 4],
     bright: wgpu::Texture,
-    down: [wgpu::Texture; 6],
-    h: [wgpu::Texture; 6],
-    v: [wgpu::Texture; 6],
-    blend: [wgpu::Texture; 5],
+    down: Vec<wgpu::Texture>,
+    h: Vec<wgpu::Texture>,
+    v: Vec<wgpu::Texture>,
+    blend: Vec<wgpu::Texture>,
+    parameters: Option<(u32, [f32; 2])>,
 }
 impl Bloom {
     pub fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
+        let levels = crate::postprocess::sources()
+            .expect("Shared Bloom plan")
+            .bloom_levels;
         let texture = |s| image(device, s, wgpu::TextureFormat::Rgba16Float);
         let scaled = |i: usize| size.map(|n| (n >> i).max(1));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MuTracer bloom"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("bloom.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                crate::postprocess::sources()
+                    .expect("Shared Bloom shader generator")
+                    .bloom
+                    .as_str()
+                    .into(),
+            ),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -81,24 +91,32 @@ impl Bloom {
             layout,
             pipelines,
             bright: texture(size),
-            down: std::array::from_fn(|i| texture(scaled(i + 1))),
-            h: std::array::from_fn(|i| texture(scaled(i + 1))),
-            v: std::array::from_fn(|i| texture(scaled(i))),
-            blend: std::array::from_fn(|i| texture(scaled(i))),
+            parameters: None,
+            down: (0..levels).map(|i| texture(scaled(i + 1))).collect(),
+            h: (0..levels).map(|i| texture(scaled(i + 1))).collect(),
+            v: (0..levels).map(|i| texture(scaled(i))).collect(),
+            blend: (0..levels - 1).map(|i| texture(scaled(i))).collect(),
         }
     }
     pub fn output(&self) -> &wgpu::Texture {
         &self.blend[0]
     }
     pub fn run(
-        &self,
+        &mut self,
         gpu: &GpuDevice,
         encoder: &mut wgpu::CommandEncoder,
         input: &wgpu::Texture,
         settings: &Settings,
     ) {
-        let size = (settings.bloom_radius * 2.).clamp(0.2, 1.);
-        let weight = 1. - (settings.bloom_radius.powf(0.3) * 0.8).clamp(0., 0.8);
+        let radius = settings.bloom_radius.to_bits();
+        if self.parameters.is_none_or(|(last, _)| last != radius) {
+            self.parameters = Some((
+                radius,
+                crate::postprocess::bloom_parameters(settings.bloom_radius)
+                    .expect("Shared Bloom radius"),
+            ));
+        }
+        let [size, weight] = self.parameters.unwrap().1;
         let step = |encoder: &mut wgpu::CommandEncoder,
                     kind: usize,
                     a: &wgpu::Texture,
@@ -149,33 +167,25 @@ impl Bloom {
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(out.width().div_ceil(8), out.height().div_ceil(8), 1);
         };
-        step(encoder, 0, input, input, &self.bright, [0.; 2]);
-        for i in 0..6 {
-            let source = if i == 0 {
-                &self.bright
-            } else {
-                &self.down[i - 1]
-            };
-            step(encoder, 1, source, source, &self.down[i], [0.; 2]);
-        }
-        for i in (0..6).rev() {
+        let textures: Vec<&wgpu::Texture> = std::iter::once(&self.bright)
+            .chain(self.down.iter())
+            .chain(self.h.iter())
+            .chain(self.v.iter())
+            .chain(self.blend.iter())
+            .chain(std::iter::once(input))
+            .collect();
+        for &(kind, a, b, out, dx, dy) in &crate::postprocess::sources()
+            .expect("Shared Bloom plan")
+            .bloom_plan
+        {
             step(
                 encoder,
-                2,
-                &self.down[i],
-                &self.down[i],
-                &self.h[i],
-                [1., 0.],
+                kind,
+                textures[a],
+                textures[b],
+                textures[out],
+                [dx, dy],
             );
-            step(encoder, 2, &self.h[i], &self.h[i], &self.v[i], [0., 1.]);
-        }
-        for i in (0..5).rev() {
-            let source = if i == 4 {
-                &self.v[5]
-            } else {
-                &self.blend[i + 1]
-            };
-            step(encoder, 3, source, &self.v[i], &self.blend[i], [0.; 2]);
         }
     }
 }

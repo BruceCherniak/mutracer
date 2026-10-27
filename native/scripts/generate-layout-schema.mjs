@@ -21,7 +21,34 @@ const quantTS=`export function quantizeDisplacementRange(minimum: number, maximu
   return (lower << ${rounding.rangeShift}) | upper;
 }\n`;
 save('src/renderer/displacementRange.ts', `// ${banner}\n`+quantTS);
-save('native/src/layout.ts',`// ${banner}\nexport const WORD_BYTES = ${schema.WORD_BYTES};\n`+Object.entries(groups).map(([name,fields])=>`export const ${name} = ${JSON.stringify(fields,null,2)} as const;`).join('\n')+"\nexport {quantizeDisplacementRange} from '../../src/renderer/displacementRange.js';\n");
+save('native/src/layout.ts',`// ${banner}\nexport const WORD_BYTES = ${schema.WORD_BYTES};\n`+Object.entries(groups).map(([name,fields])=>`export const ${name} = ${JSON.stringify(fields,null,2)} as const;`).join('\n')+`\nexport function framePixelStruct(name: string): string { return \`struct \${name} {\n${schema.framePixelFields.map(([field,,type])=>`  ${field}: ${type},`).join("\n")}\n}\`; }\n`+"export {quantizeDisplacementRange} from '../../src/renderer/displacementRange.js';\n");
+const framePixelFields=schema.framePixelFields;
+const frameRecord=`// Primary-surface ABI from src/renderer/sceneLayoutSchema.ts.
+/// Packed ${framePixelFields.length*16}-byte primary-surface record, bottom row first. Read using byte
+/// copies or an aligned cast; never write the borrowed GPU buffer. Identity uses
+/// publication-local indices; use TemporalFrame::stable_ids for stable identity.
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FramePixelRecord {
+${framePixelFields.map(([,field,type,doc])=>`    /// ${doc}\n    pub ${field}: [${type==='vec4u'?'u32':'f32'}; 4],`).join('\n')}
+}
+const _: () = {
+    assert!(std::mem::size_of::<FramePixelRecord>() == ${framePixelFields.length*16});
+${framePixelFields.map(([,field],i)=>`    assert!(std::mem::offset_of!(FramePixelRecord, ${field}) == ${i*16});`).join('\n')}
+};
+#[cfg(test)]
+#[test]
+fn resolve_fields_match_every_rust_offset_and_scalar_type() {
+    let module = naga::front::wgsl::parse_str(&crate::postprocess::sources().unwrap().frame_resolve).unwrap();
+    let ty = module.types.iter().find_map(|(_,t)| (t.name.as_deref() == Some("FramePixel")).then_some(t)).unwrap();
+    let naga::TypeInner::Struct {members, span} = &ty.inner else { panic!("FramePixel struct") };
+    assert_eq!(*span as usize, std::mem::size_of::<FramePixelRecord>());
+    assert_eq!(members.len(), ${framePixelFields.length});
+${framePixelFields.map(([name,field,type],i)=>`    assert_eq!(members[${i}].name.as_deref(), Some("${name}"));
+    assert_eq!(members[${i}].offset as usize, std::mem::offset_of!(FramePixelRecord, ${field}));
+    assert!(matches!(module.types[members[${i}].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::${type==='vec4u'?'Uint':'Float'}, width: 4}}));`).join('\n')}
+}
+`;
 const rust=Object.entries(groups).map(([name,fields])=>`pub mod ${name.toLowerCase()} {\n${Object.entries(fields).map(([field,value])=>`    pub const ${field}: usize = ${value};`).join('\n')}\n}`).join('\n');
 function bindingType(layout){
   if(layout.buffer){const type=layout.buffer.type==='uniform'?'wgpu::BufferBindingType::Uniform':`wgpu::BufferBindingType::Storage { read_only: ${layout.buffer.type==='read-only-storage'} }`;return `wgpu::BindingType::Buffer { ty: ${type}, has_dynamic_offset:false,min_binding_size:None }`;}
@@ -31,7 +58,7 @@ function bindingType(layout){
 }
 const bindRust=schema.bindGroups.map(g=>`        super::Group { layout: vec![${g.bindings.map(b=>`wgpu::BindGroupLayoutEntry { binding:${b.layout.binding},visibility:wgpu::ShaderStages::COMPUTE,ty:${bindingType(b.layout)},count:None }`).join(',')}], entries: vec![${g.bindings.map(b=>`super::Binding { binding:${b.layout.binding},kind:super::BindingKind::${b.kind[0].toUpperCase()+b.kind.slice(1)},id:${b.resource} }`).join(',')}] }`).join(',\n');
 const textureRust=schema.textureFormatInfo.map(f=>`        ${f.id} => Some((wgpu::TextureFormat::${({rgba8unorm:"Rgba8Unorm",rgba16float:"Rgba16Float",rgba32float:"Rgba32Float",r32float:"R32Float",rg32float:"Rg32Float"})[f.name]}, ${f.bytes})),`).join('\n');
-save('native/host/src/layout.rs',`// ${banner}\npub const WORD_BYTES: usize = ${schema.WORD_BYTES};\n${rust}\npub(super) fn bind_groups() -> Vec<super::Group> { vec![\n${bindRust}\n] }\npub(super) fn texture_format(format: usize) -> Option<(wgpu::TextureFormat, usize)> {\n    match format {\n${textureRust}\n        _ => None,\n    }\n}\npub fn quantize_displacement_range(minimum: f32, maximum: f32) -> u32 {\n    let lower = ((minimum * ${rounding.rangeScale}.0f32).floor() as i32).clamp(0, ${rounding.rangeScale});\n    let upper = if (maximum - minimum).abs() < ${rounding.rangeEpsilon}f32 { lower } else {\n        ((maximum * ${rounding.rangeScale}.0f32).ceil() as i32).clamp(0, ${rounding.rangeScale})\n    };\n    ((lower << ${rounding.rangeShift}) | upper) as u32\n}\n`);
+save('native/host/src/layout.rs',`// ${banner}\npub const WORD_BYTES: usize = ${schema.WORD_BYTES};\n${rust}\n${frameRecord}\npub(super) fn bind_groups() -> Vec<super::Group> { vec![\n${bindRust}\n] }\npub(super) fn texture_format(format: usize) -> Option<(wgpu::TextureFormat, usize)> {\n    match format {\n${textureRust}\n        _ => None,\n    }\n}\npub fn quantize_displacement_range(minimum: f32, maximum: f32) -> u32 {\n    let lower = ((minimum * ${rounding.rangeScale}.0f32).floor() as i32).clamp(0, ${rounding.rangeScale});\n    let upper = if (maximum - minimum).abs() < ${rounding.rangeEpsilon}f32 { lower } else {\n        ((maximum * ${rounding.rangeScale}.0f32).ceil() as i32).clamp(0, ${rounding.rangeScale})\n    };\n    ((lower << ${rounding.rangeShift}) | upper) as u32\n}\n`);
 // Callers build scene descriptors with the public header; host protocol records,
 // resource IDs and shader layouts stay in the internal header.
 const records=schema.sceneRecords();

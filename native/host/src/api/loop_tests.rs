@@ -7,6 +7,44 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[test]
+fn shared_postprocess_loop_policy_matches_js() {
+    let Ok(path) = std::env::var("MUTRACER_POSTPROCESS_SOURCES") else {
+        return;
+    };
+    let reference: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    for case in reference["scales"].as_array().unwrap() {
+        let a: Vec<f64> = serde_json::from_value(case["args"].clone()).unwrap();
+        assert_eq!(
+            super::render::next_preview_scale(a[0], a[1], a[2], a[3], a[4], a[5]),
+            case["expected"].as_f64().unwrap()
+        );
+    }
+    let base = Instant::now();
+    for trace in reference["traces"].as_array().unwrap() {
+        let mut state = ProgressiveState::default();
+        for event in trace["events"].as_array().unwrap() {
+            state = state.update(
+                event["changed"].as_bool().unwrap(),
+                event["active"].as_bool().unwrap(),
+                base + Duration::from_secs_f64(event["now"].as_f64().unwrap() / 1e3),
+                trace["idleMs"].as_f64().unwrap(),
+            );
+            let expected = &event["expected"];
+            assert_eq!(state.changing, expected["changing"].as_bool().unwrap());
+            assert_eq!(
+                state.previous_changed,
+                expected["previousChanged"].as_bool().unwrap()
+            );
+            let last = state
+                .last_continuous_change
+                .map(|v| v.duration_since(base).as_secs_f64() * 1e3);
+            assert_eq!(last, expected["lastContinuousChange"].as_f64());
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires real GPU"]
 fn coalesced_preview_collects_async_denoising_before_committing_motion() {
     struct HeldFilter {
@@ -839,7 +877,9 @@ fn refill_preserves_frame_ownership_expires_and_cancels_on_input() {
         RenderLoopOptions {
             preview: None,
             final_render: LoopRender::Settings(RenderSettings {
-                max_samples: 512,
+                // This fixture must stay unfinished long enough to observe a
+                // refill lease, even when a tiny GPU scene batches very fast.
+                max_samples: 16384,
                 batch_samples: true,
                 aovs: 1,
                 aov_samples: 3,

@@ -1,7 +1,31 @@
 //! Studio presets share their data and placement convention with the web viewer.
 use glam::{DMat4, DVec3, Vec3};
 use mutracer_native_probe::layout::light as wire;
+use mutracer_native_probe::viewer_math::{studio_ambient, studio_panel};
 use std::sync::OnceLock;
+
+fn placed_panel(args: [f64; 14]) -> [f64; 15] {
+    // Camera-only descriptor updates reuse the rig without waiting on the AOT
+    // scene queue. Bound the cache while sliders visit new lighting settings.
+    thread_local! {
+        static PANELS: std::cell::RefCell<Vec<([u64; 14], [f64; 15])>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key = args.map(f64::to_bits);
+    if let Some(value) =
+        PANELS.with(|c| c.borrow().iter().find(|(k, _)| *k == key).map(|(_, v)| *v))
+    {
+        return value;
+    }
+    let value = studio_panel(args);
+    PANELS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() == 64 {
+            c.remove(0);
+        }
+        c.push((key, value));
+    });
+    value
+}
 
 pub struct Preset {
     pub name: String,
@@ -74,49 +98,34 @@ impl Studio {
         if !self.enabled {
             return vec![];
         }
-        let radius = (radius as f64).max(1e-3);
-        let size = self.size as f64;
         presets()[self.preset]
             .lights
             .iter()
             .map(|panel| {
-                let azimuth = (panel.azimuth + self.rotation as f64).to_radians();
-                let width = panel.width * size * radius;
-                let height = panel.height * size * radius;
-                let distance = panel.distance * radius;
-                let x = DVec3::new(azimuth.cos(), 0., -azimuth.sin());
-                let place = |elevation: f64| {
-                    let z = DVec3::new(
-                        azimuth.sin() * elevation.cos(),
-                        elevation.sin(),
-                        azimuth.cos() * elevation.cos(),
-                    );
-                    let y = z.cross(x);
-                    let position = center.as_dvec3() + z * distance;
-                    (y, z, position)
-                };
-                let mut elevation = panel.elevation.to_radians();
-                let (mut y, mut z, mut position) = place(elevation);
-                for _ in 0..16 {
-                    if position.y - y.y.abs() * height / 2. >= ground_y as f64 + 0.02 * radius {
-                        break;
-                    }
-                    elevation += 2f64.to_radians();
-                    (y, z, position) = place(elevation);
-                }
+                let p = placed_panel([
+                    center.x as f64,
+                    center.y as f64,
+                    center.z as f64,
+                    radius as f64,
+                    panel.azimuth,
+                    panel.elevation,
+                    panel.distance,
+                    panel.width,
+                    panel.height,
+                    panel.power,
+                    self.intensity as f64,
+                    self.rotation as f64,
+                    self.size as f64,
+                    ground_y as f64,
+                ]);
                 let transform = DMat4::from_cols(
-                    x.extend(0.),
-                    y.extend(0.),
-                    z.extend(0.),
-                    position.extend(1.),
+                    DVec3::new(p[3], p[4], p[5]).extend(0.),
+                    DVec3::new(p[6], p[7], p[8]).extend(0.),
+                    DVec3::new(p[9], p[10], p[11]).extend(0.),
+                    DVec3::new(p[12], p[13], p[14]).extend(1.),
                 )
                 .as_mat4();
-                let radiance = std::f64::consts::PI
-                    * 2.
-                    * self.intensity as f64
-                    * panel.power
-                    * panel.distance.powi(2)
-                    / (panel.width * panel.height * size * size);
+                let (width, height, radiance) = (p[0], p[1], p[2]);
                 let mut record = [0; wire::WORDS];
                 record[wire::COLOR..wire::COLOR + 3].fill(1f32.to_bits());
                 record[wire::INTENSITY] = (radiance as f32).to_bits();
@@ -136,13 +145,8 @@ impl Studio {
     }
     pub fn pixels(&self) -> (u32, u32, Vec<f32>) {
         let mut pixels = Vec::with_capacity(64 * 32 * 4);
-        for row in 0..32 {
-            let y = (((row as f64 + 0.5) / 32.) * std::f64::consts::PI).cos();
-            let value = if y >= 0. {
-                0.6 + 0.4 * y
-            } else {
-                0.6 + 0.35 * y
-            } as f32;
+        static AMBIENT: OnceLock<Vec<f32>> = OnceLock::new();
+        for &value in AMBIENT.get_or_init(studio_ambient) {
             for _ in 0..64 {
                 pixels.extend(self.ambient_color.map(|c| value * self.ambient * c));
                 pixels.push(1.);

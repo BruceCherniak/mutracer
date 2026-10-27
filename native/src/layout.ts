@@ -353,4 +353,21 @@ export const OUTPUT_BINDING = {
   "ALBEDO": 2,
   "SHADOW_CATCHER": 3
 } as const;
+export function framePixelStruct(name: string): string { return `struct ${name} {
+  noisyColor: vec4f,
+  normalRoughness: vec4f,
+  positionDepth: vec4f,
+  geometricNormal: vec4f,
+  baseColorMetalness: vec4f,
+  transmission: vec4f,
+  roughnessIor: vec4f,
+  absorption: vec4f,
+  identity: vec4u,
+  barycentricsFace: vec4f,
+  unclampedRadiance: vec4f,
+  rngState: vec4u,
+  rngDimensions: vec4u,
+  diffuseAlbedo: vec4f,
+  specularAlbedo: vec4f,
+}`; }
 export {quantizeDisplacementRange} from '../../src/renderer/displacementRange.js';

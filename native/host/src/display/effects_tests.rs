@@ -365,14 +365,25 @@ fn read_half(gpu: &GpuDevice, texture: &wgpu::Texture) -> Vec<[f64; 4]> {
         };
         if n & 0x8000 == 0 { v } else { -v }
     };
-    mapped
+    let pixels: Vec<[f64; 4]> = mapped
         .chunks_exact(stride as usize)
         .flat_map(|row| {
             row[..texture.width() as usize * 8]
                 .chunks_exact(8)
                 .map(|p| std::array::from_fn(|c| half(&p[c * 2..c * 2 + 2])))
         })
-        .collect()
+        .collect();
+    if let Ok(dir) = std::env::var("MUTRACER_EFFECTS_SNAPSHOT") {
+        static INDEX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let index = INDEX.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join(format!("bloom-{index}.json")),
+            serde_json::to_vec(&pixels).unwrap(),
+        )
+        .unwrap();
+    }
+    pixels
 }
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]

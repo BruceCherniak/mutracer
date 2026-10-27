@@ -353,6 +353,117 @@ pub mod output_binding {
     pub const ALBEDO: usize = 2;
     pub const SHADOW_CATCHER: usize = 3;
 }
+// Primary-surface ABI from src/renderer/sceneLayoutSchema.ts.
+/// Packed 240-byte primary-surface record, bottom row first. Read using byte
+/// copies or an aligned cast; never write the borrowed GPU buffer. Identity uses
+/// publication-local indices; use TemporalFrame::stable_ids for stable identity.
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FramePixelRecord {
+    /// Linear HDR radiance, alpha 1.
+    pub noisy_color: [f32; 4],
+    /// Oriented world shading normal xyz, specular roughness w.
+    pub normal_roughness: [f32; 4],
+    /// World position xyz, linear camera-forward depth w.
+    pub position_depth: [f32; 4],
+    /// Original unflipped geometric normal xyz, zero w.
+    pub geometric_normal: [f32; 4],
+    /// Resolved base color; not a directional diffuse reflectance.
+    pub base_color_metalness: [f32; 4],
+    /// Transmission color RGB, transmission weight w.
+    pub transmission: [f32; 4],
+    /// Roughness xy, incident IOR z and transmitted IOR w.
+    pub roughness_ior: [f32; 4],
+    /// Medium extinction RGB and medium type w.
+    pub absorption: [f32; 4],
+    /// Publication-local instance/primitive indices, thin-wall flag, validity.
+    pub identity: [u32; 4],
+    /// Barycentrics xy, front-face boolean z, resolved material index w.
+    pub barycentrics_face: [f32; 4],
+    /// Radiance before per-sample clamping, alpha 1.
+    pub unclamped_radiance: [f32; 4],
+    /// Final RNG words for reproducibility, opaque to consumers.
+    pub rng_state: [u32; 4],
+    /// Counter, bounce, sample index and seed.
+    pub rng_dimensions: [u32; 4],
+    /// Directional reflectance RGB, zero w; REFLECTANCE validity is required.
+    pub diffuse_albedo: [f32; 4],
+    /// Directional reflectance RGB, zero w; REFLECTANCE validity is required.
+    pub specular_albedo: [f32; 4],
+}
+const _: () = {
+    assert!(std::mem::size_of::<FramePixelRecord>() == 240);
+    assert!(std::mem::offset_of!(FramePixelRecord, noisy_color) == 0);
+    assert!(std::mem::offset_of!(FramePixelRecord, normal_roughness) == 16);
+    assert!(std::mem::offset_of!(FramePixelRecord, position_depth) == 32);
+    assert!(std::mem::offset_of!(FramePixelRecord, geometric_normal) == 48);
+    assert!(std::mem::offset_of!(FramePixelRecord, base_color_metalness) == 64);
+    assert!(std::mem::offset_of!(FramePixelRecord, transmission) == 80);
+    assert!(std::mem::offset_of!(FramePixelRecord, roughness_ior) == 96);
+    assert!(std::mem::offset_of!(FramePixelRecord, absorption) == 112);
+    assert!(std::mem::offset_of!(FramePixelRecord, identity) == 128);
+    assert!(std::mem::offset_of!(FramePixelRecord, barycentrics_face) == 144);
+    assert!(std::mem::offset_of!(FramePixelRecord, unclamped_radiance) == 160);
+    assert!(std::mem::offset_of!(FramePixelRecord, rng_state) == 176);
+    assert!(std::mem::offset_of!(FramePixelRecord, rng_dimensions) == 192);
+    assert!(std::mem::offset_of!(FramePixelRecord, diffuse_albedo) == 208);
+    assert!(std::mem::offset_of!(FramePixelRecord, specular_albedo) == 224);
+};
+#[cfg(test)]
+#[test]
+fn resolve_fields_match_every_rust_offset_and_scalar_type() {
+    let module = naga::front::wgsl::parse_str(&crate::postprocess::sources().unwrap().frame_resolve).unwrap();
+    let ty = module.types.iter().find_map(|(_,t)| (t.name.as_deref() == Some("FramePixel")).then_some(t)).unwrap();
+    let naga::TypeInner::Struct {members, span} = &ty.inner else { panic!("FramePixel struct") };
+    assert_eq!(*span as usize, std::mem::size_of::<FramePixelRecord>());
+    assert_eq!(members.len(), 15);
+    assert_eq!(members[0].name.as_deref(), Some("noisyColor"));
+    assert_eq!(members[0].offset as usize, std::mem::offset_of!(FramePixelRecord, noisy_color));
+    assert!(matches!(module.types[members[0].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[1].name.as_deref(), Some("normalRoughness"));
+    assert_eq!(members[1].offset as usize, std::mem::offset_of!(FramePixelRecord, normal_roughness));
+    assert!(matches!(module.types[members[1].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[2].name.as_deref(), Some("positionDepth"));
+    assert_eq!(members[2].offset as usize, std::mem::offset_of!(FramePixelRecord, position_depth));
+    assert!(matches!(module.types[members[2].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[3].name.as_deref(), Some("geometricNormal"));
+    assert_eq!(members[3].offset as usize, std::mem::offset_of!(FramePixelRecord, geometric_normal));
+    assert!(matches!(module.types[members[3].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[4].name.as_deref(), Some("baseColorMetalness"));
+    assert_eq!(members[4].offset as usize, std::mem::offset_of!(FramePixelRecord, base_color_metalness));
+    assert!(matches!(module.types[members[4].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[5].name.as_deref(), Some("transmission"));
+    assert_eq!(members[5].offset as usize, std::mem::offset_of!(FramePixelRecord, transmission));
+    assert!(matches!(module.types[members[5].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[6].name.as_deref(), Some("roughnessIor"));
+    assert_eq!(members[6].offset as usize, std::mem::offset_of!(FramePixelRecord, roughness_ior));
+    assert!(matches!(module.types[members[6].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[7].name.as_deref(), Some("absorption"));
+    assert_eq!(members[7].offset as usize, std::mem::offset_of!(FramePixelRecord, absorption));
+    assert!(matches!(module.types[members[7].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[8].name.as_deref(), Some("identity"));
+    assert_eq!(members[8].offset as usize, std::mem::offset_of!(FramePixelRecord, identity));
+    assert!(matches!(module.types[members[8].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Uint, width: 4}}));
+    assert_eq!(members[9].name.as_deref(), Some("barycentricsFace"));
+    assert_eq!(members[9].offset as usize, std::mem::offset_of!(FramePixelRecord, barycentrics_face));
+    assert!(matches!(module.types[members[9].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[10].name.as_deref(), Some("unclampedRadiance"));
+    assert_eq!(members[10].offset as usize, std::mem::offset_of!(FramePixelRecord, unclamped_radiance));
+    assert!(matches!(module.types[members[10].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[11].name.as_deref(), Some("rngState"));
+    assert_eq!(members[11].offset as usize, std::mem::offset_of!(FramePixelRecord, rng_state));
+    assert!(matches!(module.types[members[11].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Uint, width: 4}}));
+    assert_eq!(members[12].name.as_deref(), Some("rngDimensions"));
+    assert_eq!(members[12].offset as usize, std::mem::offset_of!(FramePixelRecord, rng_dimensions));
+    assert!(matches!(module.types[members[12].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Uint, width: 4}}));
+    assert_eq!(members[13].name.as_deref(), Some("diffuseAlbedo"));
+    assert_eq!(members[13].offset as usize, std::mem::offset_of!(FramePixelRecord, diffuse_albedo));
+    assert!(matches!(module.types[members[13].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+    assert_eq!(members[14].name.as_deref(), Some("specularAlbedo"));
+    assert_eq!(members[14].offset as usize, std::mem::offset_of!(FramePixelRecord, specular_albedo));
+    assert!(matches!(module.types[members[14].ty].inner, naga::TypeInner::Vector {size: naga::VectorSize::Quad, scalar: naga::Scalar {kind: naga::ScalarKind::Float, width: 4}}));
+}
+
 pub(super) fn bind_groups() -> Vec<super::Group> { vec![
         super::Group { layout: vec![wgpu::BindGroupLayoutEntry { binding:0,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset:false,min_binding_size:None },count:None },wgpu::BindGroupLayoutEntry { binding:1,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset:false,min_binding_size:None },count:None },wgpu::BindGroupLayoutEntry { binding:2,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset:false,min_binding_size:None },count:None },wgpu::BindGroupLayoutEntry { binding:3,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset:false,min_binding_size:None },count:None }], entries: vec![super::Binding { binding:0,kind:super::BindingKind::Buffer,id:1 },super::Binding { binding:1,kind:super::BindingKind::Buffer,id:2 },super::Binding { binding:2,kind:super::BindingKind::Buffer,id:3 },super::Binding { binding:3,kind:super::BindingKind::Buffer,id:4 }] },
         super::Group { layout: vec![wgpu::BindGroupLayoutEntry { binding:0,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),count:None },wgpu::BindGroupLayoutEntry { binding:1,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Texture { sample_type:wgpu::TextureSampleType::Float { filterable:true },view_dimension:wgpu::TextureViewDimension::D2Array,multisampled:false },count:None },wgpu::BindGroupLayoutEntry { binding:3,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset:false,min_binding_size:None },count:None },wgpu::BindGroupLayoutEntry { binding:4,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Texture { sample_type:wgpu::TextureSampleType::Float { filterable:false },view_dimension:wgpu::TextureViewDimension::D2,multisampled:false },count:None },wgpu::BindGroupLayoutEntry { binding:5,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Texture { sample_type:wgpu::TextureSampleType::Float { filterable:false },view_dimension:wgpu::TextureViewDimension::D2,multisampled:false },count:None },wgpu::BindGroupLayoutEntry { binding:6,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Texture { sample_type:wgpu::TextureSampleType::Float { filterable:false },view_dimension:wgpu::TextureViewDimension::D2,multisampled:false },count:None },wgpu::BindGroupLayoutEntry { binding:8,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Texture { sample_type:wgpu::TextureSampleType::Float { filterable:false },view_dimension:wgpu::TextureViewDimension::D2,multisampled:false },count:None },wgpu::BindGroupLayoutEntry { binding:9,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Texture { sample_type:wgpu::TextureSampleType::Float { filterable:false },view_dimension:wgpu::TextureViewDimension::D2,multisampled:false },count:None },wgpu::BindGroupLayoutEntry { binding:10,visibility:wgpu::ShaderStages::COMPUTE,ty:wgpu::BindingType::Texture { sample_type:wgpu::TextureSampleType::Float { filterable:false },view_dimension:wgpu::TextureViewDimension::D2,multisampled:false },count:None }], entries: vec![super::Binding { binding:0,kind:super::BindingKind::Sampler,id:40 },super::Binding { binding:1,kind:super::BindingKind::Texture,id:20 },super::Binding { binding:3,kind:super::BindingKind::Buffer,id:5 },super::Binding { binding:4,kind:super::BindingKind::Texture,id:21 },super::Binding { binding:5,kind:super::BindingKind::Texture,id:22 },super::Binding { binding:6,kind:super::BindingKind::Texture,id:23 },super::Binding { binding:8,kind:super::BindingKind::Texture,id:24 },super::Binding { binding:9,kind:super::BindingKind::Texture,id:25 },super::Binding { binding:10,kind:super::BindingKind::Texture,id:26 }] },

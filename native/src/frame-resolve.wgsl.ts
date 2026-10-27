@@ -1,11 +1,5 @@
-struct FramePixel {
-    noisyColor: vec4f, normalRoughness: vec4f, positionDepth: vec4f,
-    geometricNormal: vec4f, baseColorMetalness: vec4f, transmission: vec4f,
-    roughnessIor: vec4f, absorption: vec4f, identity: vec4u,
-    barycentricsFace: vec4f, unclampedRadiance: vec4f,
-    rngState: vec4u, rngDimensions: vec4u,
-    diffuseAlbedo: vec4f, specularAlbedo: vec4f,
-}
+import {framePixelStruct} from './layout.js';
+export default `${framePixelStruct('FramePixel')}
 @group(0) @binding(0) var<storage, read> pixels: array<FramePixel>;
 @group(0) @binding(1) var color: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var normal: texture_storage_2d<rgba32float, write>;
@@ -95,3 +89,4 @@ fn main(@builtin(global_invocation_id) p: vec3u) {
     textureStore(diffuse, vec2i(p.xy), pixel.diffuseAlbedo);
     textureStore(specular, vec2i(p.xy), pixel.specularAlbedo);
 }
+`;

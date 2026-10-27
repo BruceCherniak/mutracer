@@ -94,3 +94,22 @@ rayTraceUniform.BYTES = uniform.buffer.byteLength;
 return rayTraceUniform;
 }
 export const uniformSizes = {CAMERA_BYTES: 144, LIGHT_BYTES: 64 * 6 * 4 * WORD_BYTES};
+
+// The primary-surface ABI, shared by the trace hook, resolve shader and Rust.
+export const framePixelFields = [
+  ['noisyColor', 'noisy_color', 'vec4f', 'Linear HDR radiance, alpha 1.'],
+  ['normalRoughness', 'normal_roughness', 'vec4f', 'Oriented world shading normal xyz, specular roughness w.'],
+  ['positionDepth', 'position_depth', 'vec4f', 'World position xyz, linear camera-forward depth w.'],
+  ['geometricNormal', 'geometric_normal', 'vec4f', 'Original unflipped geometric normal xyz, zero w.'],
+  ['baseColorMetalness', 'base_color_metalness', 'vec4f', 'Resolved base color; not a directional diffuse reflectance.'],
+  ['transmission', 'transmission', 'vec4f', 'Transmission color RGB, transmission weight w.'],
+  ['roughnessIor', 'roughness_ior', 'vec4f', 'Roughness xy, incident IOR z and transmitted IOR w.'],
+  ['absorption', 'absorption', 'vec4f', 'Medium extinction RGB and medium type w.'],
+  ['identity', 'identity', 'vec4u', 'Publication-local instance/primitive indices, thin-wall flag, validity.'],
+  ['barycentricsFace', 'barycentrics_face', 'vec4f', 'Barycentrics xy, front-face boolean z, resolved material index w.'],
+  ['unclampedRadiance', 'unclamped_radiance', 'vec4f', 'Radiance before per-sample clamping, alpha 1.'],
+  ['rngState', 'rng_state', 'vec4u', 'Final RNG words for reproducibility, opaque to consumers.'],
+  ['rngDimensions', 'rng_dimensions', 'vec4u', 'Counter, bounce, sample index and seed.'],
+  ['diffuseAlbedo', 'diffuse_albedo', 'vec4f', 'Directional reflectance RGB, zero w; REFLECTANCE validity is required.'],
+  ['specularAlbedo', 'specular_albedo', 'vec4f', 'Directional reflectance RGB, zero w; REFLECTANCE validity is required.'],
+] as const;

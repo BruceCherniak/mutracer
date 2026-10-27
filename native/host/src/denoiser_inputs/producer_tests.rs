@@ -282,7 +282,9 @@ fn first_surface_record_and_resolve_have_matching_layouts() {
         std::mem::offset_of!(FramePixelRecord, unclamped_radiance),
         160
     );
-    let module = naga::front::wgsl::parse_str(include_str!("frame-resolve.wgsl")).unwrap();
+    let module =
+        naga::front::wgsl::parse_str(&crate::postprocess::sources().unwrap().frame_resolve)
+            .unwrap();
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),

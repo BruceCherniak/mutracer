@@ -120,7 +120,9 @@ impl Denoiser {
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("OIDN clean auxiliary transfer"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("oidn-auxiliary.wgsl").into()),
+                    source: wgpu::ShaderSource::Wgsl(
+                        crate::postprocess::sources()?.auxiliary.as_str().into(),
+                    ),
                 });
             let pipeline = |entry| {
                 gpu.device
@@ -153,7 +155,7 @@ impl Denoiser {
                 output: (&output).into(),
             },
         )?;
-        let source = include_str!("oidn-normalize.wgsl");
+        let source = crate::postprocess::sources()?.normalize.as_str();
         let shader = gpu
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -408,7 +410,9 @@ mod tests {
     use super::*;
     #[test]
     fn normalization_shader_is_valid_wgsl() {
-        let module = naga::front::wgsl::parse_str(include_str!("oidn-normalize.wgsl")).unwrap();
+        let module =
+            naga::front::wgsl::parse_str(&crate::postprocess::sources().unwrap().normalize)
+                .unwrap();
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),

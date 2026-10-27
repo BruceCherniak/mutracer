@@ -69,6 +69,8 @@ if(gpuValidation){
 }
 await run('host-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--','--test-threads=1'],
  {MUTRACER_TEST_CPU_ONLY:gpuValidation?'0':'1'});
+await run('postprocess-shaders',process.execPath,['native/validation/postprocess-shaders.mjs'],
+ {MUTRACER_NATIVE_OUTPUT:resolve(out,'postprocess-shaders')});
 await run('jnlm-shaders',process.execPath,['native/validation/jnlm-shaders.mjs'],
  {MUTRACER_NATIVE_OUTPUT:resolve(out,'jnlm-shaders')});
 await run('scene-picking',process.execPath,['native/validation/scene-picking.mjs'],

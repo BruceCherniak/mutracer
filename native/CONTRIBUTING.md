@@ -396,6 +396,14 @@ heights and output; archive those differences rather than claiming pixel parity.
 dependencies. eframe/egui-wgpu and tracing share one adapter, device and queue.
 `src/display-shader.ts` generates the display WGSL through the Web generator;
 `scripts/generate-display.mjs --check` detects stale output.
+Bloom and OIDN preparation use the shared TS shader generators through AOT,
+like JNLM; `native/validation/postprocess-shaders.mjs` compares the complete JS
+and AOT packets. Native stores no independent Bloom/OIDN WGSL copies.
+The primary-surface fields live in `src/renderer/sceneLayoutSchema.ts`; the existing
+layout generator emits the Rust record and all field-offset/type assertions.
+The trace hook and AOT resolve generator use that same schema. Solar position
+and studio placement/ambient math also use TS through the existing AOT runtime;
+host clock and callback scheduling remain local Rust adapters.
 The examples catalog is `viewer/src/engine/model-presets.json`, shared by both
 viewers. `scripts/generate-sky.mjs` emits the shared sky WGSL and
 `scripts/generate-viewer-spheres.mjs` converts the web procedural example; both

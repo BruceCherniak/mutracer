@@ -336,17 +336,8 @@ impl Baker {
     }
 }
 fn sun_position(hours: f32) -> (f32, f32) {
-    let latitude = 40f32.to_radians();
-    let compass = |h: f32| {
-        let angle = (15. * (h - 12.)).to_radians();
-        angle.sin().atan2(angle.cos() * latitude.sin()) + std::f32::consts::PI
-    };
-    (
-        (latitude.cos() * (15. * (hours - 12.)).to_radians().cos())
-            .asin()
-            .to_degrees(),
-        50. + (compass(hours) - compass(15.)).to_degrees(),
-    )
+    let [elevation, azimuth] = mutracer_native_probe::viewer_math::sun_position(hours);
+    (elevation, azimuth)
 }
 #[cfg(test)]
 mod tests {
