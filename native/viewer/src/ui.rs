@@ -3,7 +3,7 @@ use crate::{Change, Viewer, scene::Environment};
 use crate::{api, controls, theme};
 use eframe::egui;
 
-fn debug_header(ui: &mut egui::Ui, open: &mut bool, sample_ms: Option<f64>) -> egui::Response {
+fn debug_header(ui: &mut egui::Ui, open: &mut bool, times: &[f64]) -> egui::Response {
     let mut response = ui.add_sized(
         [ui.available_width(), 24.],
         egui::Button::new("").frame(false),
@@ -20,13 +20,44 @@ fn debug_header(ui: &mut egui::Ui, open: &mut bool, sample_ms: Option<f64>) -> e
         egui::FontId::proportional(11.5),
         theme::TEXT,
     );
-    if *open {
-        ui.painter().text(
-            rect.right_center() - egui::vec2(24., 0.),
-            egui::Align2::RIGHT_CENTER,
-            sample_ms.map_or_else(|| "– ms".into(), |ms| format!("{ms:.1} ms")),
-            egui::FontId::monospace(10.5),
-            theme::MUTED,
+    // Keep the timing readout and graph in the header, as in the web viewer.
+    let graph = egui::Rect::from_min_size(
+        egui::pos2(
+            rect.right() - 28. - if *open { 60. } else { 30. },
+            rect.center().y - 8.,
+        ),
+        egui::vec2(if *open { 60. } else { 30. }, 16.),
+    );
+    ui.painter().text(
+        graph.left_center() - egui::vec2(6., 0.),
+        egui::Align2::RIGHT_CENTER,
+        times
+            .last()
+            .map_or_else(|| "– ms".into(), |ms| format!("{ms:.1} ms")),
+        egui::FontId::monospace(10.5),
+        theme::MUTED,
+    );
+    ui.painter()
+        .rect_filled(graph, 3, egui::Color32::from_white_alpha(14));
+    let times = &times[times.len().saturating_sub(40)..];
+    let mut sorted = times.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let max = sorted.get(sorted.len() / 2).copied().unwrap_or(0.).max(1.) * 1.35;
+    for (i, ms) in times
+        .iter()
+        .rev()
+        .take((graph.width() / 1.5) as usize)
+        .enumerate()
+    {
+        let right = graph.right() - i as f32 * 1.5;
+        let height = ((*ms / max).clamp(0., 1.) as f32 * graph.height()).max(1.);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(right - 1., graph.bottom() - height),
+                egui::pos2(right, graph.bottom()),
+            ),
+            0,
+            theme::TEXT,
         );
     }
     let c = rect.right_center() - egui::vec2(9., 0.);
@@ -512,9 +543,16 @@ impl Viewer {
             .show(ctx, |ui| {
                 let margin = if self.debug_open { 10 } else { 6 };
                 theme::panel().inner_margin(margin).show(ui, |ui| {
-                    ui.set_width(if self.debug_open { 270. } else { 76. });
-                    let last_sample_ms = self.target.sample_times.lock().unwrap().back().copied();
-                    if debug_header(ui, &mut self.debug_open, last_sample_ms).changed() {
+                    ui.set_width(if self.debug_open { 270. } else { 160. });
+                    let times: Vec<_> = self
+                        .target
+                        .sample_times
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .copied()
+                        .collect();
+                    if debug_header(ui, &mut self.debug_open, &times).changed() {
                         let path = crate::examples::cache_root();
                         let _ = std::fs::create_dir_all(&path);
                         let _ =
@@ -522,31 +560,6 @@ impl Viewer {
                     }
                     if !self.debug_open {
                         return;
-                    }
-                    let times = self.target.sample_times.lock().unwrap().clone();
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 22.),
-                        egui::Sense::hover(),
-                    );
-                    ui.painter()
-                        .rect_filled(rect, 0, egui::Color32::from_white_alpha(14));
-                    let mut sorted: Vec<_> = times.iter().copied().collect();
-                    sorted.sort_by(f64::total_cmp);
-                    let max = sorted.get(sorted.len() / 2).copied().unwrap_or(1.).max(1.) * 1.35;
-                    for (i, v) in times.iter().rev().enumerate() {
-                        let x = rect.right() - (i + 1) as f32 * 3.;
-                        if x < rect.left() {
-                            break;
-                        }
-                        let height = (*v / max).clamp(0., 1.) as f32 * rect.height();
-                        ui.painter().rect_filled(
-                            egui::Rect::from_min_max(
-                                egui::pos2(x, rect.bottom() - height.max(1.)),
-                                egui::pos2(x + 2., rect.bottom()),
-                            ),
-                            0,
-                            theme::TEXT,
-                        );
                     }
                     if self.debug_open {
                         let channels = [

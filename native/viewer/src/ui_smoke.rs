@@ -223,14 +223,14 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
             },
         ]
     };
-    // Both ends of the Debug header toggle the entire card without selecting
-    // or orbiting the scene beneath it.
+    // The collapsed performance graph and expanded chevron both toggle the card
+    // without selecting or orbiting the scene beneath it.
     frame(
         &mut viewer,
         &ctx,
         &gpu,
         [1200, 800],
-        click(egui::pos2(300., 102.)),
+        click(egui::pos2(375., 102.)),
     )?;
     assert!(viewer.debug_open);
     let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
