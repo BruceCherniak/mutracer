@@ -11,7 +11,8 @@ export default glsl`
 // A one-sample binary shadow test leaves scattered fully dark pixels far
 // from the occluder at low sample counts. Averaging a few light samples per
 // primary hit costs only shadow rays and lets the mask settle much sooner.
-// Candidate dimensions match WGSL lightDim().
+// Candidate dimensions match WGSL lightDim(). sampleLight() draws only the
+// environment and analytic lights, like WGSL's shadow-catcher table.
 const uint SHADOW_CATCHER_LIGHT_SAMPLES = 4u;
 
 uint shadowCatcherLightDim(uint candidate, uint slot) {

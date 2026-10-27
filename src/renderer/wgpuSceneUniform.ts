@@ -41,6 +41,9 @@ export function makeRayTraceUniform() {
     sequenceSeed: new Uint32Array(RayTraceUniformValues, 156, 1),
     zSobolLogSPP: new Uint32Array(RayTraceUniformValues, 160, 1),
     sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1),
+    // Shadow-catcher light table, relative to lightChoiceTexelOffset.
+    shadowCatcherChoiceOffset: new Int32Array(RayTraceUniformValues, 168, 1),
+    shadowCatcherChoiceCount: new Int32Array(RayTraceUniformValues, 172, 1),
     environmentRotation: new Float32Array(RayTraceUniformValues, 176, 16),
     backgroundMapTransform: new Float32Array(RayTraceUniformValues, 240, 4),
     backgroundMapRotation: new Float32Array(RayTraceUniformValues, 256, 16)

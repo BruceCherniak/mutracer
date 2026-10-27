@@ -291,6 +291,7 @@ class WGPURayTracePass {
   private _instancesBuffer?: GPUBuffer;
   private _emissiveCache = new EmissiveTriangleCache();
   private _lightChoices = new LightChoiceBuffer();
+  private _shadowCatcherLightChoices = new LightChoiceBuffer();
   private _lightSamplingData?: Float32Array;
   private _lightSamplingScratch?: Float32Array;
   private _lightSamplingTriangleCount = -1;
@@ -1929,7 +1930,8 @@ class WGPURayTracePass {
   private _updateLightSamplingData() {
     this._constants.LIGHT_CAPABILITIES = lightShaderCapabilities(this._analyticLights.map(light => light.type), this._emissiveTriangles.length);
     const lighting = prepareSceneLightSampling(this._analyticLights, this._emissiveTriangles,
-      this._envImageSource && 'sky' in this._envImageSource ? proceduralEnvironmentPower(this._envImageSource) : estimateEnvironmentPower(this._envImageSource), this._device.limits.maxTextureDimension2D, this._lightChoices, this._lightSamplingScratch);
+      this._envImageSource && 'sky' in this._envImageSource ? proceduralEnvironmentPower(this._envImageSource) : estimateEnvironmentPower(this._envImageSource), this._device.limits.maxTextureDimension2D, this._lightChoices, this._lightSamplingScratch,
+      this._shadowCatcherLightChoices);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
     this._iesProfileTexelOffsets = lighting.profiles.offsets;
     this._lightDomainDiagnostics = lighting.domains;

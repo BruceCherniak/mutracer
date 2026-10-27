@@ -5,7 +5,7 @@ import {makeRayTraceUniform, packWgpuAnalyticLights} from './wgpuSceneUniform.js
 import {normalizeBounces} from './pathLimits.js';
 import {normalizeDirectLightCandidates, DEFAULT_BEVEL_SAMPLES} from './renderingLimits.js';
 import {samplingPatternCode, zSobolLog2SPP, type SamplingPattern} from './sampling.js';
-import {LightChoiceBuffer, buildLightAliasTable, estimateAnalyticLightPower, packEmissiveTriangles, packIESProfiles,
+import {LightChoiceBuffer, buildLightAliasTable, buildShadowCatcherLightAliasTable, estimateAnalyticLightPower, packEmissiveTriangles, packIESProfiles,
   LIGHT_CHOICE_ENVIRONMENT, LIGHT_CHOICE_ANALYTIC, LIGHT_CHOICE_EMISSIVE_TRIANGLE,
   LIGHT_DOMAIN_ENVIRONMENT, LIGHT_DOMAIN_INFINITE, LIGHT_DOMAIN_LOCAL_AND_EMISSIVE,
   type EmissiveTriangle} from './lightSampling.js';
@@ -53,12 +53,17 @@ export function writeTraceSampling(views: TraceViews, sampling: ReturnType<typeo
 // The Web path may reuse its choice/texture scratch allocations. Native consumes
 // exactly the same assembly without a GPU device, canvas or browser light facade.
 export function prepareSceneLightSampling(lights: AnalyticLightState[], emissive: EmissiveTriangle[], environmentPower: number,
-  maxDimension: number, choices = new LightChoiceBuffer(), scratch?: Float32Array) {
+  maxDimension: number, choices = new LightChoiceBuffer(), scratch?: Float32Array, catcherChoices?: LightChoiceBuffer) {
   choices.reserve(1 + lights.length + emissive.length);
   choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, environmentPower);
   for (let i = 0; i < lights.length; i++) choices.push(LIGHT_CHOICE_ANALYTIC, i, estimateAnalyticLightPower(lights[i]));
   for (let i = 0; i < emissive.length; i++) choices.push(LIGHT_CHOICE_EMISSIVE_TRIANGLE, i, emissive[i].area * emissive[i].samplingLuminance);
   const distribution = buildLightAliasTable(choices);
+  // Without emissive triangles the catcher shares the main table; otherwise
+  // its own table follows the main choices in the texture.
+  const catcherDistribution = buildShadowCatcherLightAliasTable(choices, catcherChoices);
+  const shadowCatcherChoiceOffset = catcherDistribution ? choices.count : 0;
+  const shadowCatcherChoiceCount = catcherDistribution ? catcherDistribution.pmfs.length : choices.count;
   const domains = {environment: {count: 0, weight: 0, pmf: 0}, infinite: {count: 0, weight: 0, pmf: 0}, localAndEmissive: {count: 0, weight: 0, pmf: 0}};
   const domainList = [domains.environment, domains.infinite, domains.localAndEmissive];
   const analyticPmfs = new Array<number>(lights.length).fill(0);
@@ -72,7 +77,8 @@ export function prepareSceneLightSampling(lights: AnalyticLightState[], emissive
     else if (type === LIGHT_CHOICE_ANALYTIC) analyticPmfs[source] = pmf;
     else emissive[source].selectionPmf = pmf;
   }
-  const emissiveTexels = emissive.length * 6, profileStart = emissiveTexels + Math.max(choices.count, 1);
+  const choiceTexels = Math.max(choices.count + (catcherDistribution ? shadowCatcherChoiceCount : 0), 1);
+  const emissiveTexels = emissive.length * 6, profileStart = emissiveTexels + choiceTexels;
   const profiles = packIESProfiles(lights, profileStart), totalTexels = Math.max(profileStart + profiles.texelCount, 1);
   const width = Math.min(maxDimension, Math.max(16, Math.ceil(Math.sqrt(totalTexels) / 16) * 16));
   const height = Math.ceil(totalTexels / width);
@@ -81,13 +87,19 @@ export function prepareSceneLightSampling(lights: AnalyticLightState[], emissive
   lightData.fill(0);
   if (emissive.length) packEmissiveTriangles(emissive, lightData);
   new Uint32Array(lightData.buffer).set(distribution.choices, emissiveTexels * 4);
+  if (catcherDistribution && shadowCatcherChoiceCount) {
+    new Uint32Array(lightData.buffer).set(catcherDistribution.choices, (emissiveTexels + choices.count) * 4);
+  }
   lightData.set(profiles.data, profileStart * 4);
   return {lightData, lightWidth: width, lightHeight: height, analyticPmfs, profiles, environmentPmf,
-    choiceCount: choices.count, totalWeight: distribution.totalWeight, emissiveTexels, domains};
+    choiceCount: choices.count, totalWeight: distribution.totalWeight, emissiveTexels, domains,
+    shadowCatcherChoiceOffset, shadowCatcherChoiceCount};
 }
 
-export function writeTraceLighting(views: TraceViews, data: {environmentPmf: number; choiceCount: number; totalWeight: number; lightWidth: number; emissiveTexels: number}) {
+export function writeTraceLighting(views: TraceViews, data: {environmentPmf: number; choiceCount: number; totalWeight: number; lightWidth: number; emissiveTexels: number;
+  shadowCatcherChoiceOffset: number; shadowCatcherChoiceCount: number}) {
   views.envLightPmf[0] = data.environmentPmf; views.lightChoiceCount[0] = data.choiceCount;
+  views.shadowCatcherChoiceOffset[0] = data.shadowCatcherChoiceOffset; views.shadowCatcherChoiceCount[0] = data.shadowCatcherChoiceCount;
   views.lightWeightTotal[0] = data.totalWeight; views.lightSamplingTextureWidth[0] = data.lightWidth;
   views.lightChoiceTexelOffset[0] = data.emissiveTexels;
 }

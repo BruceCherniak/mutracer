@@ -301,6 +301,8 @@ pub mod ray_uniform {
     pub const SEQUENCE_SEED: usize = 156;
     pub const Z_SOBOL_LOG_SPP: usize = 160;
     pub const SAMPLE_SEQUENCE_OFFSET: usize = 164;
+    pub const SHADOW_CATCHER_CHOICE_OFFSET: usize = 168;
+    pub const SHADOW_CATCHER_CHOICE_COUNT: usize = 172;
     pub const ENVIRONMENT_ROTATION: usize = 176;
     pub const BACKGROUND_MAP_TRANSFORM: usize = 240;
     pub const BACKGROUND_MAP_ROTATION: usize = 256;

@@ -15,6 +15,7 @@ import SpotLight from '../scene/SpotLight.js';
 import IESProfile from '../scene/IESProfile.js';
 import type OpenPBRMaterial from '../scene/MaterialState.js';
 
+import { LIGHT_CHOICE_EMISSIVE_TRIANGLE } from './lightConstants.js';
 export * from './lightConstants.js';
 type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
 
@@ -189,6 +190,32 @@ export function buildLightAliasTable(inputs: LightChoiceInput[] | LightChoiceBuf
   for (let i = 0; i < largeCount; i++) { const index = large[i]; floats[index * 4] = 1; ints[index * 4 + 1] = index; }
   for (let i = 0; i < count; i++) { ints[i * 4 + 2] = active.sourceTypes[i]; ints[i * 4 + 3] = active.sourceIndices[i]; }
   return { choices: new Uint32Array(buffer), pmfs, totalWeight };
+}
+
+/**
+ * Builds the table a shadow catcher draws its occlusion tests from: the
+ * environment and analytic lights of `choices` at their relative weights.
+ * Emissive meshes are scene objects, not light already present in the plate
+ * the catcher darkens, so their occlusion is not catcher shadow. Returns
+ * `undefined` when `choices` holds no emissive triangle and the catcher can
+ * share the main table.
+ */
+export function buildShadowCatcherLightAliasTable(
+  choices: LightChoiceBuffer,
+  scratch = new LightChoiceBuffer()
+): LightSamplingDistribution | undefined {
+  let emissive = 0;
+  for (let i = 0; i < choices.count; i++) {
+    if (choices.sourceTypes[i] === LIGHT_CHOICE_EMISSIVE_TRIANGLE) emissive++;
+  }
+  if (!emissive) return undefined;
+  scratch.reserve(choices.count - emissive);
+  for (let i = 0; i < choices.count; i++) {
+    if (choices.sourceTypes[i] !== LIGHT_CHOICE_EMISSIVE_TRIANGLE) {
+      scratch.push(choices.sourceTypes[i], choices.sourceIndices[i], choices.weights[i]);
+    }
+  }
+  return buildLightAliasTable(scratch);
 }
 
 function dominantLocalMaterial(geometry: Geometry, indices: Uint32Array, triangleOffset: number, materialCount: number) {

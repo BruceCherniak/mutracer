@@ -15,13 +15,21 @@ const SHADOW_CATCHER_LIGHT_SAMPLES = 4u;
 fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, Path>) {
   let viewDir = -(*path).ray.d;
 
-  // The unified table also contains emissive mesh lights.
-  if (rtUniform.lightChoiceCount > 0) {
+  // The catcher table holds only the environment and analytic lights, as in
+  // WebGL 2: emissive meshes are scene objects, not light in the plate.
+  if (rtUniform.shadowCatcherChoiceCount > 0) {
     var shadow = 0.0;
     for (var candidate = 0u; candidate < SHADOW_CATCHER_LIGHT_SAMPLES; candidate++) {
       var lightSample: LightSampleRec;
       let lightRnd = vec3f(sample2D(lightDim(candidate, 1u)), sample1D(lightDim(candidate, 0u)));
-      sampleLight(si.position, lightRnd, &lightSample, false);
+      sampleLightChoiceTable(
+        si.position,
+        lightRnd,
+        rtUniform.shadowCatcherChoiceOffset,
+        rtUniform.shadowCatcherChoiceCount,
+        1.0,
+        &lightSample
+      );
       let lightDir = lightSample.direction;
       let cosThetaL = dot(si.normal, lightDir);
       let orientation = dot(si.normal, viewDir) * cosThetaL;

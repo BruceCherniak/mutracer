@@ -417,16 +417,16 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   constants.MATERIAL_CAPABILITIES = ALL_MATERIAL_SHADER_CAPABILITIES;
   constants.LIGHT_CAPABILITIES = ALL_LIGHT_SHADER_CAPABILITIES;
   updateSceneShaderCapabilities(constants);
-  const {lightData, lightWidth, lightHeight, lightUniform, environmentPmf, choiceCount, totalWeight, emissiveTexels}
-    = prepareNativeLightSampling(lights, table, emissive, estimateEnvironmentPower(environment));
+  const lighting = prepareNativeLightSampling(lights, table, emissive, estimateEnvironmentPower(environment));
+  const {lightData, lightWidth, lightHeight, lightUniform} = lighting;
   const rt = makeRayTraceUniform();
   writeEnvironmentSettings(rt, environmentSettings);
   rt.views.lightsCount[0] = lights.length;
   if (!background && !(qualityFlags & 4)) rt.views.backgroundColor.set(backgroundColor);
   rt.views.backgroundFlags[0] = (qualityFlags & 4 ? 0 : 1) | (background ? 2 : 0); rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
   rt.views.isEmpty[0] = Number(meshInstancesLength(prepared.instances) === 0); rt.views.bevel[0] = Number(!!(qualityFlags & 1));
-  rt.views.dispersionWavelengths[0] = qualityFlags & 2 ? 3 : 1; rt.views.lightChoiceCount[0] = choiceCount;
-  writeTraceLighting(rt.views, {environmentPmf, choiceCount, totalWeight, lightWidth, emissiveTexels});
+  rt.views.dispersionWavelengths[0] = qualityFlags & 2 ? 3 : 1;
+  writeTraceLighting(rt.views, lighting);
   writeTargetTrace(rt.views, configuration, width, height, qualityFlags);
   rt.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(constants);
   // Output packet: version, count, width, height, then 8-word resource descriptors
@@ -753,7 +753,7 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   writeEnvironmentSettings(rt, settings);
   if (!background && !u[3]) rt.views.backgroundColor.set(f.slice(4, 8));
-  packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+  packLightingUniform(rt, lighting);
   pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower,
     maps: {environmentWidth: u[1], environmentHeight: u[2], backgroundWidth: u[8], backgroundHeight: u[9]}});
   const parts: Uint8Array[] = [], records: number[][] = [];
@@ -769,9 +769,8 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   return updatePacket(records, parts);
 }
 
-function packLightingUniform(rt: ReturnType<typeof makeRayTraceUniform>, environmentPmf: number, choiceCount: number,
-  totalWeight: number, lightWidth: number, emissiveTexels: number) {
-  writeTraceLighting(rt.views, {environmentPmf, choiceCount, totalWeight, lightWidth, emissiveTexels});
+function packLightingUniform(rt: ReturnType<typeof makeRayTraceUniform>, lighting: Parameters<typeof writeTraceLighting>[1]) {
+  writeTraceLighting(rt.views, lighting);
 }
 // Version1,index,reserved[2], followed by Light[28]. Attachments remain committed.
 export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Array {
@@ -787,7 +786,7 @@ export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Arr
   const lights = state.lights.slice(); lights[u[1]] = light;
   const lighting = prepareNativeLightSampling(lights, state.table, state.emissive, state.environmentPower);
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
-  packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+  packLightingUniform(rt, lighting);
   pendingLighting.set(token, {lights, rt: rt.buffer, environmentPower: state.environmentPower});
   return updatePacket([
     [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0],
@@ -821,7 +820,7 @@ export function sceneLightListParameters(bytes: Uint8Array, token: number): Uint
     table.lightTexturesIndices = committedTextures;
     const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
     rt.views.lightsCount[0] = lights.length;
-    packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+    packLightingUniform(rt, lighting);
     pendingLighting.set(token, {lights, rt: rt.buffer, environmentPower: state.environmentPower, lightTextures});
     return updatePacket([
       [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0],
@@ -942,7 +941,7 @@ export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Arr
     }
     const lighting = prepareNativeLightSampling(state.lights, table, state.emissive, state.environmentPower);
     const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
-    packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+    packLightingUniform(rt, lighting);
     pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower: state.environmentPower, atlas: {table, textureIds}});
     const records: number[][] = [], parts: Uint8Array[] = [], destinations: number[] = [];
     function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number, destination: number) {
@@ -1002,7 +1001,7 @@ function packTransformUpdate(stage: TransformStage, tlas: FlattendBVH, token: nu
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
   rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
-  packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+  packLightingUniform(rt, lighting);
   pendingTransforms.set(token, {meshes, bindings, instances, tlas, emissive, rt: rt.buffer});
   const instanceBytes = new Uint8Array(tlas.instancesBuffer!);
   const paddedBvh = new Uint8Array(Math.max(bvh.length, WGPU_SCENE_BUFFER_MIN_BYTES)); paddedBvh.set(bvh);
@@ -1236,7 +1235,7 @@ function packGeometryUpdate(stage: GeometryStage, tlas: FlattendBVH, token: numb
   const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   rt.views.blasOffset[0] = tlas.buffer.byteLength / 16; rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
-  packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+  packLightingUniform(rt, lighting);
   const geometries = state.geometries.slice(); geometries[sourceIndex] = geometry;
   pendingGeometry.set(token, {meshes, bindings: prepared.instanceBindings, blases: prepared.blases, geometries, emissive, rt: rt.buffer, prepared, instances, tlas, floatPatches: [], uintPatches: []});
   const metadata = nativeLayoutBytes(state.nativeLayout, rt.views.blasOffset[0], rt.views.isEmpty[0] !== 0);
