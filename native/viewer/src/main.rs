@@ -3078,7 +3078,10 @@ fn main() -> Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_decorations(false)
+            .with_decorations(true)
+            .with_fullsize_content_view(true)
+            .with_title_shown(false)
+            .with_titlebar_shown(false)
             .with_resizable(true)
             .with_icon(shell::icon())
             .with_drag_and_drop(true)

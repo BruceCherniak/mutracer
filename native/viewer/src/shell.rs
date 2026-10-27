@@ -1,4 +1,4 @@
-//! Window chrome and shared Web branding. Keep platform operations in egui.
+//! Native window chrome and shared Web branding.
 use crate::{Change, Viewer, theme};
 use eframe::egui::{self, Color32, Sense, Stroke};
 use std::sync::OnceLock;
@@ -44,7 +44,7 @@ fn zoom(ctx: &egui::Context) {
 }
 fn panel_button(ui: &mut egui::Ui, label: &str, right: bool, open: &mut bool) {
     let response = ui.add_sized(
-        [26., 28.],
+        [32., 32.],
         egui::Button::new("").frame(false).fill(if *open {
             theme::ACCENT_SURFACE
         } else {
@@ -73,7 +73,7 @@ fn panel_button(ui: &mut egui::Ui, label: &str, right: bool, open: &mut bool) {
 }
 fn header_button(ui: &mut egui::Ui, label: &str, export: bool, sample: bool) -> egui::Response {
     let response = ui.add_sized(
-        [86., 32.],
+        [if export { 86. } else { 100. }, 32.],
         egui::Button::new("").corner_radius(10).fill(if export {
             theme::ACCENT_SOLID
         } else {
@@ -122,7 +122,7 @@ fn header_button(ui: &mut egui::Ui, label: &str, export: bool, sample: bool) -> 
 }
 
 fn history_button(ui: &mut egui::Ui, redo: bool) -> egui::Response {
-    let response = ui.add_sized([26., 28.], egui::Button::new("").frame(false));
+    let response = ui.add_sized([32., 32.], egui::Button::new("").frame(false));
     let c = response.rect.center();
     let sign = if redo { 1. } else { -1. };
     let color = if ui.is_enabled() {
@@ -178,37 +178,11 @@ impl Viewer {
                 let compact = rect.width() < 1000.;
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.horizontal_centered(|ui| {
+                        ui.spacing_mut().interact_size.y = 32.;
                         ui.spacing_mut().item_spacing.x = 2.;
-                        for (label, color, action) in [
-                            (
-                                "Close window",
-                                Color32::from_rgb(0xff, 0x5f, 0x57),
-                                egui::ViewportCommand::Close,
-                            ),
-                            (
-                                "Minimize window",
-                                Color32::from_rgb(0xfe, 0xbc, 0x2e),
-                                egui::ViewportCommand::Minimized(true),
-                            ),
-                            (
-                                "Zoom window",
-                                Color32::from_rgb(0x28, 0xc8, 0x40),
-                                egui::ViewportCommand::Maximized(
-                                    !ctx.input(|i| i.viewport().maximized.unwrap_or(false)),
-                                ),
-                            ),
-                        ] {
-                            let response =
-                                ui.add_sized([18., 28.], egui::Button::new("").frame(false));
-                            response.widget_info(|| {
-                                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label)
-                            });
-                            ui.painter()
-                                .circle_filled(response.rect.center(), 5., color);
-                            if response.on_hover_text(label).clicked() {
-                                ctx.send_viewport_cmd(action);
-                            }
-                        }
+                        // AppKit owns the traffic lights and rounded window frame.
+                        #[cfg(target_os = "macos")]
+                        ui.add_space(72.);
                         ui.add_space(12.);
                         ui.add(
                             egui::Image::from_texture(&logo(&ctx))
@@ -238,14 +212,25 @@ impl Viewer {
                         panel_button(ui, "Toggle scene panel ([)", false, &mut self.scene_open);
                     });
                 });
-                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(146., 32.));
+                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(100., 32.));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(center), |ui| {
                     ui.horizontal_centered(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.;
-                        if header_button(ui, "Open…", false, false).clicked() {
-                            self.open_model(&ctx);
-                        }
-                        ui.menu_button("More", |ui| {
+                        let open = header_button(ui, "Open", false, false);
+                        let c = open.rect.right_center() - egui::vec2(12., 0.);
+                        ui.painter().add(egui::Shape::line(
+                            vec![
+                                c + egui::vec2(-3., -1.5),
+                                c + egui::vec2(0., 1.5),
+                                c + egui::vec2(3., -1.5),
+                            ],
+                            Stroke::new(1.2, theme::MUTED),
+                        ));
+                        egui::Popup::menu(&open).show(|ui| {
+                            if ui.button("Open files…").clicked() {
+                                ui.close();
+                                self.open_model(&ctx);
+                            }
                             if ui.button("Open folder…").clicked() {
                                 ui.close();
                                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
@@ -281,6 +266,8 @@ impl Viewer {
                 });
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().interact_size.y = 32.;
+                        ui.spacing_mut().button_padding = egui::vec2(8., 6.);
                         panel_button(ui, "Toggle inspector (])", true, &mut self.inspector_open);
                         if ui
                             .add_enabled_ui(self.can_export(), |ui| {
@@ -291,7 +278,11 @@ impl Viewer {
                         {
                             self.open_export(&ctx);
                         }
-                        if ui.button("?").on_hover_text("Keyboard shortcuts").clicked() {
+                        if ui
+                            .add_sized([32., 32.], egui::Button::new("?").frame(false))
+                            .on_hover_text("Keyboard shortcuts")
+                            .clicked()
+                        {
                             self.tools.help_open = true;
                         }
                         if !compact {
@@ -302,7 +293,11 @@ impl Viewer {
                             {
                                 self.tools.code_open = true;
                             }
-                            if ui.button("↺").on_hover_text("Reset all…").clicked() {
+                            if ui
+                                .add_sized([32., 32.], egui::Button::new("↺").frame(false))
+                                .on_hover_text("Reset all…")
+                                .clicked()
+                            {
                                 self.tools.reset_open = true;
                             }
                             let (undo, redo) = self.history.labels();

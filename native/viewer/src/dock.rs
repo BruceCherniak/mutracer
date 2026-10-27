@@ -7,12 +7,14 @@ use std::time::{Duration, Instant};
 enum Action {
     Pause,
     Play,
-    Restart,
+    Focus,
+    Fit,
+    PickFocus,
     Settings,
 }
 fn action(ui: &mut egui::Ui, label: &str, icon: Action) -> egui::Response {
     let response = ui.add_sized(
-        [24., 28.],
+        [28., 28.],
         egui::Button::new("").frame(false).corner_radius(7),
     );
     response.widget_info(|| {
@@ -41,19 +43,28 @@ fn action(ui: &mut egui::Ui, label: &str, icon: Action) -> egui::Response {
                 Stroke::NONE,
             ));
         }
-        Action::Restart => {
-            let points = (0..24)
-                .map(|i| c + egui::Vec2::angled(i as f32 / 23. * 5.2 + 0.5) * 5.5)
-                .collect();
-            p.add(egui::Shape::line(points, stroke));
-            p.add(egui::Shape::line(
-                vec![
-                    c + egui::vec2(6., -6.),
-                    c + egui::vec2(6., -1.),
-                    c + egui::vec2(1., -1.),
-                ],
-                stroke,
-            ));
+        Action::Focus | Action::Fit => {
+            for (x, y) in [(-1., -1.), (1., -1.), (-1., 1.), (1., 1.)] {
+                p.add(egui::Shape::line(
+                    vec![
+                        c + egui::vec2(x * 3., y * 6.),
+                        c + egui::vec2(x * 6., y * 6.),
+                        c + egui::vec2(x * 6., y * 3.),
+                    ],
+                    stroke,
+                ));
+            }
+        }
+        Action::PickFocus => {
+            p.circle_stroke(c, 4., stroke);
+            for v in [
+                egui::vec2(1., 0.),
+                egui::vec2(-1., 0.),
+                egui::vec2(0., 1.),
+                egui::vec2(0., -1.),
+            ] {
+                p.line_segment([c + v * 2., c + v * 7.], stroke);
+            }
         }
         Action::Settings => {
             for (y, x) in [(-4., -2.), (0., 3.), (4., -1.)] {
@@ -64,6 +75,35 @@ fn action(ui: &mut egui::Ui, label: &str, icon: Action) -> egui::Response {
     }
     response.on_hover_text(label)
 }
+fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
+    ui.scope(|ui| {
+        let widgets = &mut ui.visuals_mut().widgets;
+        for widget in [
+            &mut widgets.inactive,
+            &mut widgets.hovered,
+            &mut widgets.active,
+        ] {
+            widget.corner_radius = 3.into();
+            widget.bg_stroke = Stroke::new(1., theme::SUBTLE);
+        }
+        ui.checkbox(value, label)
+    })
+    .inner
+}
+
+fn floating_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(Color32::from_rgba_unmultiplied(26, 27, 31, 219))
+        .corner_radius(24)
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 6],
+            blur: 20,
+            spread: 0,
+            color: Color32::from_black_alpha(55),
+        })
+        .inner_margin(egui::Margin::symmetric(8, 7))
+}
+
 impl Viewer {
     pub(super) fn toggle_animation_or_render(&mut self) {
         if let Some(animation) = &mut self.model.0.animation {
@@ -128,55 +168,137 @@ impl Viewer {
         }
     }
     pub(super) fn render_dock(&mut self, ctx: &egui::Context, viewport: egui::Rect) -> egui::Rect {
-        let available = (viewport.width() - 24.).max(1.);
+        let camera_width = if self.model.1.cameras.is_empty() {
+            44.
+        } else {
+            168.
+        };
+        let available = (viewport.width() - 24. - camera_width - 8.).max(1.);
         let compact = available < 440.;
-        let width = available.min(if compact { 280. } else { 452. });
+        let focus_width = if self.camera.f_stop > 0. && !self.camera.orthographic {
+            44.
+        } else {
+            0.
+        };
+        let inline_width = if self.denoise { 500. } else { 380. } + focus_width;
+        let overflow = available < inline_width;
+        let width = available.min(if compact {
+            292.
+        } else if overflow {
+            380. + focus_width
+        } else {
+            inline_width
+        });
         let height = if compact { 80. } else { 46. }
             + if self.model.0.animation.is_some() {
                 72.
             } else {
                 0.
             };
-        let position = viewport.center_bottom() - egui::vec2(width * 0.5, height + 12.);
+        let offset =
+            viewport.center_bottom() - ctx.content_rect().center_bottom() - egui::vec2(0., 12.);
         egui::Area::new(egui::Id::new("render-dock"))
             .order(egui::Order::Foreground)
             .movable(false)
             .constrain(false)
-            .default_size(egui::vec2(width, height))
-            .fixed_pos(position)
+            .default_size(egui::vec2(width + camera_width + 8., height))
+            .anchor(Align2::CENTER_BOTTOM, offset)
             .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(Color32::from_rgba_unmultiplied(26, 27, 31, 244))
-                    .corner_radius(12)
-                    .inner_margin(egui::Margin::symmetric(8, 7))
-                    .show(ui, |ui| {
-                        ui.set_width(width - 16.);
-                        ui.spacing_mut().item_spacing = egui::vec2(4., 4.);
-                        ui.spacing_mut().interact_size.y = 28.;
-                        ui.spacing_mut().button_padding = egui::vec2(5., 2.);
-                        ui.spacing_mut().icon_width = 13.;
-                        if compact {
-                            ui.horizontal(|ui| {
-                                self.dock_status(ui);
-                            });
-                            ui.horizontal(|ui| {
-                                self.dock_settings(ui, compact);
-                            });
-                        } else {
-                            ui.horizontal(|ui| {
-                                self.dock_status(ui);
-                                ui.separator();
-                                self.dock_settings(ui, compact);
-                            });
-                        }
-                        if self.model.0.animation.is_some() {
-                            ui.separator();
-                            self.animation_controls(ui);
-                        }
+                ui.spacing_mut().item_spacing.x = 8.;
+                ui.horizontal(|ui| {
+                    floating_frame().show(ui, |ui| {
+                        ui.scope_builder(
+                            egui::UiBuilder::new().layout(egui::Layout::top_down(egui::Align::Min)),
+                            |ui| {
+                                ui.set_max_width(width - 16.);
+                                ui.spacing_mut().item_spacing = egui::vec2(4., 4.);
+                                ui.spacing_mut().interact_size.y = 28.;
+                                ui.spacing_mut().button_padding = egui::vec2(5., 2.);
+                                ui.spacing_mut().icon_width = 13.;
+                                let widgets = &mut ui.visuals_mut().widgets;
+                                for widget in [&mut widgets.inactive, &mut widgets.hovered] {
+                                    widget.corner_radius = 9.into();
+                                    widget.bg_stroke = Stroke::NONE;
+                                }
+                                ui.visuals_mut().widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                                ui.visuals_mut().widgets.inactive.weak_bg_fill =
+                                    Color32::TRANSPARENT;
+                                if compact {
+                                    ui.horizontal(|ui| {
+                                        self.dock_status(ui);
+                                    });
+                                    ui.horizontal(|ui| {
+                                        self.dock_settings(ui, overflow);
+                                    });
+                                } else {
+                                    ui.horizontal(|ui| {
+                                        self.dock_status(ui);
+                                        ui.separator();
+                                        self.dock_settings(ui, overflow);
+                                    });
+                                }
+                                if self.model.0.animation.is_some() {
+                                    ui.separator();
+                                    self.animation_controls(ui);
+                                }
+                            },
+                        );
                     });
+                    floating_frame().show(ui, |ui| self.dock_camera(ui));
+                });
             })
             .response
             .rect
+    }
+    fn dock_camera(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().interact_size.y = 28.;
+        ui.spacing_mut().button_padding = egui::vec2(5., 2.);
+        ui.visuals_mut().widgets.inactive.bg_fill = Color32::TRANSPARENT;
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
+        ui.horizontal(|ui| {
+            if !self.model.1.cameras.is_empty() {
+                let previous = self.camera_index;
+                egui::ComboBox::from_id_salt("viewport-camera")
+                    .width(120.)
+                    .selected_text(
+                        self.camera_index
+                            .and_then(|i| self.model.1.cameras.get(i))
+                            .map_or("Orbit", |c| c.name.as_str()),
+                    )
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.camera_index, None, "Orbit");
+                        for (i, view) in self.model.1.cameras.iter().enumerate() {
+                            ui.selectable_value(&mut self.camera_index, Some(i), &view.name);
+                        }
+                    });
+                if previous != self.camera_index {
+                    if let Some(i) = self.camera_index {
+                        self.model.1.cameras[i].apply(&mut self.camera, self.model.center);
+                    }
+                    self.dirty(Change::Camera);
+                }
+            }
+
+            let fit = action(ui, "Fit to model (F)", Action::Fit);
+            if fit.clicked() {
+                self.camera.frame(self.model.center, self.model.radius);
+                self.camera_index = None;
+                self.dirty(Change::Camera);
+            }
+            if let Some(id) = self.selected_mesh {
+                fit.context_menu(|ui| {
+                    if ui.button("Frame selection").clicked() {
+                        let (min, max) = self.model.mesh_bounds(id);
+                        self.camera
+                            .frame((min + max) * 0.5, (max - min).length() * 0.5);
+                        self.camera_index = None;
+                        self.dirty(Change::Camera);
+                        ui.close();
+                    }
+                });
+            }
+        });
     }
     fn animation_controls(&mut self, ui: &mut egui::Ui) {
         let enabled = self.loading.is_none()
@@ -267,23 +389,72 @@ impl Viewer {
         });
     }
     fn dock_status(&mut self, ui: &mut egui::Ui) {
+        if self.camera.f_stop > 0. && !self.camera.orthographic {
+            if self.focus.enabled {
+                let response = action(
+                    ui,
+                    if self.focus.show_frame {
+                        "Hide focus frame"
+                    } else {
+                        "Show focus frame"
+                    },
+                    Action::Focus,
+                );
+                if !self.focus.show_frame {
+                    let c = response.rect.center();
+                    ui.painter().line_segment(
+                        [c - egui::vec2(6., 6.), c + egui::vec2(6., 6.)],
+                        Stroke::new(1.2, theme::MUTED),
+                    );
+                }
+                if response.clicked() {
+                    self.focus.show_frame = !self.focus.show_frame;
+                }
+            } else if action(ui, "Pick focus point", Action::PickFocus).clicked() {
+                self.picking_focus = !self.picking_focus;
+            }
+            ui.separator();
+        }
         let preparing = self.loading.is_some() || self.preparing() || self.candidate.is_some();
         let animating = self.running && self.model.0.animation.as_ref().is_some_and(|a| a.playing);
-        let done = !animating && self.samples >= self.output_target_samples();
-        let label = if self.loading.is_some() {
+        let status = self.target.render_loop.status();
+        let done = !animating && !preparing && status == crate::api::RenderLoopStatus::Finished;
+        let spinning = preparing
+            || self.frame_preview
+            || matches!(
+                status,
+                crate::api::RenderLoopStatus::Compiling | crate::api::RenderLoopStatus::Denoising
+            );
+        let label = if !self.error.is_empty() || status == crate::api::RenderLoopStatus::Error {
+            "Error"
+        } else if self.loading.is_some() {
             "Opening"
         } else if preparing {
             "Preparing"
         } else if !self.running {
             "Paused"
         } else if animating {
-            "Animating"
+            "Playing"
+        } else if status == crate::api::RenderLoopStatus::Denoising {
+            "Denoising"
+        } else if status == crate::api::RenderLoopStatus::Compiling {
+            "Compiling"
         } else if done {
             "Done"
+        } else if self.frame_preview {
+            "Preview"
+        } else if status == crate::api::RenderLoopStatus::Idle {
+            "Starting"
         } else {
             "Converging"
         };
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(26., 28.), Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(26., 28.), Sense::click());
+        response.context_menu(|ui| {
+            if ui.button("Restart rendering").clicked() {
+                self.dirty(Change::Reset);
+                ui.close();
+            }
+        });
         let progress = self.samples as f32 / self.output_target_samples().max(1) as f32;
         response.widget_info(|| {
             egui::WidgetInfo::slider(true, progress as f64 * 100., "Sample progress")
@@ -298,7 +469,7 @@ impl Viewer {
         } else {
             theme::ACCENT
         };
-        let (start, amount) = if preparing {
+        let (start, amount) = if spinning {
             (ui.input(|i| i.time as f32 * 4.), 0.28)
         } else {
             (-std::f32::consts::FRAC_PI_2, progress.clamp(0., 1.))
@@ -322,7 +493,7 @@ impl Viewer {
                 Stroke::new(1.8, color),
             ));
         }
-        if preparing {
+        if spinning {
             ui.ctx().request_repaint_after(Duration::from_millis(32));
         }
         let (rect, _) = ui.allocate_exact_size(egui::vec2(72., 30.), Sense::hover());
@@ -340,33 +511,31 @@ impl Viewer {
             FontId::monospace(10.5),
             theme::SUBTLE,
         );
-        if action(
-            ui,
-            if self.running {
-                if self.model.0.animation.is_some() {
-                    "Pause rendering"
+        if (!done || !self.running)
+            && action(
+                ui,
+                if self.running {
+                    if self.model.0.animation.is_some() {
+                        "Pause rendering"
+                    } else {
+                        "Pause rendering (Space)"
+                    }
                 } else {
-                    "Pause rendering (Space)"
-                }
-            } else {
-                if self.model.0.animation.is_some() {
-                    "Resume rendering"
+                    if self.model.0.animation.is_some() {
+                        "Resume rendering"
+                    } else {
+                        "Resume rendering (Space)"
+                    }
+                },
+                if self.running {
+                    Action::Pause
                 } else {
-                    "Resume rendering (Space)"
-                }
-            },
-            if self.running {
-                Action::Pause
-            } else {
-                Action::Play
-            },
-        )
-        .clicked()
+                    Action::Play
+                },
+            )
+            .clicked()
         {
             self.running = !self.running;
-        }
-        if action(ui, "Restart rendering", Action::Restart).clicked() {
-            self.dirty(Change::Reset);
         }
     }
     fn dock_settings(&mut self, ui: &mut egui::Ui, compact: bool) {
@@ -409,11 +578,53 @@ impl Viewer {
             .show_ui(ui, |ui| self.resolution_choices(ui))
             .response
             .on_hover_text(self.resolution_label());
-        ui.checkbox(&mut self.denoise, "Denoise")
-            .on_hover_text(&self.denoise_status);
-        if action(ui, "Render settings", Action::Settings).clicked() {
-            self.tab = 0;
-            self.inspector_open = true;
+        if compact {
+            let response = action(ui, "Render settings", Action::Settings);
+            egui::Popup::menu(&response).show(|ui| {
+                ui.set_min_width(200.);
+                self.dock_denoise(ui);
+                ui.separator();
+                if ui.button("All render settings…").clicked() {
+                    self.tab = 0;
+                    self.inspector_open = true;
+                    ui.close();
+                }
+            });
+        } else {
+            self.dock_denoise(ui);
+        }
+    }
+    fn dock_denoise(&mut self, ui: &mut egui::Ui) {
+        toggle(ui, &mut self.denoise, "Denoise").on_hover_text(&self.denoise_status);
+        if self.denoise {
+            egui::ComboBox::from_id_salt("dock-denoiser")
+                .width(64.)
+                .selected_text(self.denoiser_choice.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.denoiser_choice,
+                        crate::denoiser::Choice::Oidn,
+                        "OIDN",
+                    );
+                    ui.selectable_value(
+                        &mut self.denoiser_choice,
+                        crate::denoiser::Choice::Jnlm,
+                        "JNLM",
+                    );
+                    ui.add_enabled_ui(self.custom_denoiser.is_some(), |ui| {
+                        ui.selectable_value(
+                            &mut self.denoiser_choice,
+                            crate::denoiser::Choice::Dlss,
+                            "DLSS RR",
+                        );
+                    });
+                })
+                .response
+                .on_hover_text("Denoiser type");
+            if self.denoiser_choice != crate::denoiser::Choice::Dlss {
+                toggle(ui, &mut self.live_denoise, "Live")
+                    .on_hover_text("Denoise while converging, not only the final image");
+            }
         }
     }
 }

@@ -223,6 +223,37 @@ fn viewer_panels_examples_and_debug_use_the_shared_gpu_image() -> Result<()> {
             },
         ]
     };
+    // Both ends of the Debug header toggle the entire card without selecting
+    // or orbiting the scene beneath it.
+    frame(
+        &mut viewer,
+        &ctx,
+        &gpu,
+        [1200, 800],
+        click(egui::pos2(300., 102.)),
+    )?;
+    assert!(viewer.debug_open);
+    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    save(&gpu, &image, &out.join("debug-expanded.png"))?;
+    frame(
+        &mut viewer,
+        &ctx,
+        &gpu,
+        [1200, 800],
+        click(egui::pos2(510., 102.)),
+    )?;
+    assert!(!viewer.debug_open);
+    let image = frame(&mut viewer, &ctx, &gpu, [1200, 800], vec![])?;
+    save(&gpu, &image, &out.join("debug-collapsed.png"))?;
+    assert_eq!(
+        viewer.camera.eye(),
+        camera,
+        "Debug header orbited the viewport"
+    );
+    assert!(
+        viewer.selected_mesh.is_none(),
+        "Debug header selected the underlying model"
+    );
     // Collapse and reopen Examples through its real rail control.
     frame(
         &mut viewer,

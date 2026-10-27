@@ -10,11 +10,13 @@ pub struct Node {
     pub camera: Option<usize>,
     pub light: bool,
     pub unused: bool,
+    pub root_order: usize,
 }
 #[derive(Default)]
 pub struct Tree {
     expanded: HashSet<usize>,
     selection: Option<usize>,
+    initialized: bool,
 }
 struct Row {
     node: usize,
@@ -45,14 +47,32 @@ fn rows(nodes: &[Node], expanded: &HashSet<usize>, query: &str) -> Vec<Row> {
         }
     }
     let mut out = Vec::new();
-    for (i, n) in nodes.iter().enumerate().filter(|(_, n)| n.parent.is_none()) {
-        let _ = n;
+    let mut roots: Vec<_> = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.parent.is_none())
+        .collect();
+    roots.sort_by_key(|(_, node)| node.root_order);
+    for (i, _) in roots {
         walk(i, 0, nodes, expanded, query, &mut out);
     }
     out
 }
 impl Viewer {
     pub(super) fn scene_rows(&mut self, ui: &mut egui::Ui) {
+        if !self.scene_tree.initialized {
+            self.scene_tree.initialized = true;
+            // Match the web tree: reveal the first two levels of authored groups.
+            for (id, node) in self.model.1.nodes.iter().enumerate() {
+                if node.parent.is_none()
+                    || node
+                        .parent
+                        .is_some_and(|p| self.model.1.nodes[p].parent.is_none())
+                {
+                    self.scene_tree.expanded.insert(id);
+                }
+            }
+        }
         let reveal = self.scene_tree.selection != self.selected_mesh;
         if reveal {
             self.scene_tree.selection = self.selected_mesh;
@@ -258,6 +278,17 @@ pub fn from_gltf(
         .map(|(i, n)| Node {
             name: n["name"]
                 .as_str()
+                .filter(|name| !name.is_empty())
+                .or_else(|| {
+                    n["mesh"]
+                        .as_u64()
+                        .and_then(|id| json["meshes"][id as usize]["name"].as_str())
+                })
+                .or_else(|| {
+                    n["camera"]
+                        .as_u64()
+                        .and_then(|id| json["cameras"][id as usize]["name"].as_str())
+                })
                 .map(str::to_owned)
                 .unwrap_or_else(|| format!("Node {}", i + 1)),
             children: n["children"]
@@ -290,6 +321,11 @@ pub fn from_gltf(
         .flatten()
         .filter_map(|v| v.as_u64().map(|i| i as usize))
         .collect();
+    for (order, &id) in pending.iter().enumerate() {
+        if let Some(node) = nodes.get_mut(id) {
+            node.root_order = order;
+        }
+    }
     let mut active = HashSet::new();
     while let Some(id) = pending.pop() {
         if id < nodes.len() && active.insert(id) {
@@ -302,27 +338,60 @@ pub fn from_gltf(
             nodes[i].parent = None;
         }
     }
-    let count = nodes.len();
-    for i in 0..count {
-        if nodes[i].meshes.len() > 1 {
-            let meshes = std::mem::take(&mut nodes[i].meshes);
-            for mesh in meshes {
-                let id = nodes.len();
-                nodes[i].children.push(id);
-                nodes.push(Node {
-                    name: model.materials[model.meshes[mesh].material].name.clone(),
-                    parent: Some(i),
-                    meshes: vec![mesh],
-                    ..Default::default()
-                });
-            }
-        }
-    }
     nodes
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn imported_gltf_keeps_groups_root_order_and_mesh_mapping() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb");
+        let bytes = std::fs::read(&path).unwrap();
+        let mut json = crate::examples::model_json(&bytes).unwrap();
+        json["nodes"] = serde_json::json!([
+            {"name":"Assembly", "children":[1]},
+            {"name":"Nested group", "children":[2,5]},
+            {"mesh":0},
+            {"name":"Other scene", "mesh":1},
+            {"name":"Authored camera", "camera":0},
+            {"name":"Empty group"}
+        ]);
+        json["meshes"][0]["name"] = "Authored mesh".into();
+        let primitive = json["meshes"][0]["primitives"][0].clone();
+        json["meshes"][0]["primitives"]
+            .as_array_mut()
+            .unwrap()
+            .push(primitive);
+        json["cameras"] =
+            serde_json::json!([{"type":"perspective", "perspective":{"yfov":0.5, "znear":0.01}}]);
+        json["scene"] = 0.into();
+        json["scenes"] = serde_json::json!([{"nodes":[4,0]}, {"nodes":[3]}]);
+        let bytes = crate::examples::with_json(&bytes, &json).unwrap();
+        let model = mutracer_native_probe::scene_api::viewer_support::Model::load_bytes(
+            &bytes,
+            Some(&path),
+        )
+        .unwrap();
+        let nodes = from_gltf(&json, &model);
+        let visible = rows(&nodes, &HashSet::from([0, 1]), "");
+        assert_eq!(
+            visible
+                .iter()
+                .map(|r| (r.node, r.depth))
+                .collect::<Vec<_>>(),
+            [(4, 0), (0, 0), (1, 1), (2, 2), (5, 2)]
+        );
+        assert_eq!(nodes[2].name, "Authored mesh");
+        assert_eq!(nodes[2].parent, Some(1));
+        assert_eq!(nodes.len(), 6);
+        assert_eq!(nodes[2].meshes, [0, 1]);
+        assert_eq!(model.node_indices, [2, 2]);
+        assert!(nodes[3].unused);
+        assert!(nodes[5].meshes.is_empty());
+        let scene = crate::model_scene::Scene::load(&json, &path, &mut model.clone()).unwrap();
+        assert_eq!(scene.nodes[4].camera, Some(0));
+    }
+
     #[test]
     fn search_retains_ancestors_and_collapsed_branches_stay_small() {
         let nodes = vec![

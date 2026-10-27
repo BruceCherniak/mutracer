@@ -3,6 +3,49 @@ use crate::{Change, Viewer, scene::Environment};
 use crate::{api, controls, theme};
 use eframe::egui;
 
+fn debug_header(ui: &mut egui::Ui, open: &mut bool, sample_ms: Option<f64>) -> egui::Response {
+    let mut response = ui.add_sized(
+        [ui.available_width(), 24.],
+        egui::Button::new("").frame(false),
+    );
+    let label = if *open { "Hide debug" } else { "Show debug" };
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), *open, label)
+    });
+    let rect = response.rect;
+    ui.painter().text(
+        rect.left_center() + egui::vec2(4., 0.),
+        egui::Align2::LEFT_CENTER,
+        "Debug",
+        egui::FontId::proportional(11.5),
+        theme::TEXT,
+    );
+    if *open {
+        ui.painter().text(
+            rect.right_center() - egui::vec2(24., 0.),
+            egui::Align2::RIGHT_CENTER,
+            sample_ms.map_or_else(|| "– ms".into(), |ms| format!("{ms:.1} ms")),
+            egui::FontId::monospace(10.5),
+            theme::MUTED,
+        );
+    }
+    let c = rect.right_center() - egui::vec2(9., 0.);
+    let direction = if *open { -1. } else { 1. };
+    ui.painter().add(egui::Shape::line(
+        vec![
+            c + egui::vec2(-3., -1.5 * direction),
+            c + egui::vec2(0., 1.5 * direction),
+            c + egui::vec2(3., -1.5 * direction),
+        ],
+        egui::Stroke::new(1.2, theme::MUTED),
+    ));
+    if response.clicked() {
+        *open = !*open;
+        response.mark_changed();
+    }
+    response.on_hover_text(label)
+}
+
 impl Viewer {
     pub(super) fn panels(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
@@ -467,33 +510,19 @@ impl Viewer {
             .order(egui::Order::Foreground)
             .fixed_pos(viewport.left_top() + egui::vec2(10., 10.))
             .show(ctx, |ui| {
-                theme::panel().inner_margin(10).show(ui, |ui| {
-                    ui.set_width(if self.debug_open { 270. } else { 150. });
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button(if self.debug_open {
-                                "Debug −"
-                            } else {
-                                "Debug +"
-                            })
-                            .clicked()
-                        {
-                            self.debug_open = !self.debug_open;
-                            let path = crate::examples::cache_root();
-                            let _ = std::fs::create_dir_all(&path);
-                            let _ = std::fs::write(
-                                path.join("debug.json"),
-                                self.debug_open.to_string(),
-                            );
-                        }
-                        let times = self.target.sample_times.lock().unwrap();
-                        ui.small(
-                            times
-                                .back()
-                                .map(|v| format!("{v:.1} ms"))
-                                .unwrap_or_else(|| "– ms".into()),
-                        );
-                    });
+                let margin = if self.debug_open { 10 } else { 6 };
+                theme::panel().inner_margin(margin).show(ui, |ui| {
+                    ui.set_width(if self.debug_open { 270. } else { 76. });
+                    let last_sample_ms = self.target.sample_times.lock().unwrap().back().copied();
+                    if debug_header(ui, &mut self.debug_open, last_sample_ms).changed() {
+                        let path = crate::examples::cache_root();
+                        let _ = std::fs::create_dir_all(&path);
+                        let _ =
+                            std::fs::write(path.join("debug.json"), self.debug_open.to_string());
+                    }
+                    if !self.debug_open {
+                        return;
+                    }
                     let times = self.target.sample_times.lock().unwrap().clone();
                     let (rect, _) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), 22.),
@@ -1510,80 +1539,12 @@ impl Viewer {
                 } else {
                     self.debug_overlay(&ctx, ui.max_rect())
                 };
-                let view_rect = if self.hide_ui {
-                    egui::Rect::NOTHING
-                } else {
-                    egui::Area::new(egui::Id::new("view-controls"))
-                        .order(egui::Order::Foreground)
-                        .anchor(
-                            egui::Align2::RIGHT_TOP,
-                            ui.max_rect().right_top() - ctx.content_rect().right_top()
-                                + egui::vec2(-10., 10.),
-                        )
-                        .show(&ctx, |ui| {
-                            theme::panel().inner_margin(6).show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    if !self.model.1.cameras.is_empty() {
-                                        let previous = self.camera_index;
-                                        egui::ComboBox::from_id_salt("viewport-camera")
-                                            .width(120.)
-                                            .selected_text(
-                                                self.camera_index
-                                                    .and_then(|i| self.model.1.cameras.get(i))
-                                                    .map_or("Orbit", |c| c.name.as_str()),
-                                            )
-                                            .show_ui(ui, |ui| {
-                                                ui.selectable_value(
-                                                    &mut self.camera_index,
-                                                    None,
-                                                    "Orbit",
-                                                );
-                                                for (i, view) in
-                                                    self.model.1.cameras.iter().enumerate()
-                                                {
-                                                    ui.selectable_value(
-                                                        &mut self.camera_index,
-                                                        Some(i),
-                                                        &view.name,
-                                                    );
-                                                }
-                                            });
-                                        if previous != self.camera_index {
-                                            if let Some(i) = self.camera_index {
-                                                self.model.1.cameras[i]
-                                                    .apply(&mut self.camera, self.model.center);
-                                            }
-                                            self.dirty(Change::Camera);
-                                        }
-                                    }
-                                    if controls::button(ui, "Fit · F").clicked() {
-                                        self.camera.frame(self.model.center, self.model.radius);
-                                        self.camera_index = None;
-                                        self.dirty(Change::Camera);
-                                    }
-                                    if let Some(id) = self.selected_mesh {
-                                        if controls::button(ui, "Frame selection").clicked() {
-                                            let (min, max) = self.model.mesh_bounds(id);
-                                            self.camera.frame(
-                                                (min + max) * 0.5,
-                                                (max - min).length() * 0.5,
-                                            );
-                                            self.camera_index = None;
-                                            self.dirty(Change::Camera);
-                                        }
-                                    }
-                                });
-                            });
-                        })
-                        .response
-                        .rect
-                };
                 let loading_rect = if self.loading.is_some() {
                     egui::Area::new(egui::Id::new("model-download"))
                         .order(egui::Order::Foreground)
                         .fixed_pos(egui::pos2(
                             ui.max_rect().right() - 260.,
-                            view_rect.bottom() + 8.,
+                            ui.max_rect().top() + 10.,
                         ))
                         .show(&ctx, |ui| {
                             theme::panel().inner_margin(10).show(ui, |ui| {
@@ -1677,7 +1638,7 @@ impl Viewer {
                     self.drag.motion(
                         rect,
                         !focus_drag && response.contains_pointer(),
-                        &[dock_rect, debug_rect, view_rect, loading_rect],
+                        &[dock_rect, debug_rect, loading_rect],
                         i,
                     )
                 }) {
@@ -1691,7 +1652,7 @@ impl Viewer {
                 }
                 if let Some(pos) = self.drag.take_click().filter(|p| {
                     rect.contains(*p)
-                        && ![dock_rect, debug_rect, view_rect, loading_rect]
+                        && ![dock_rect, debug_rect, loading_rect]
                             .iter()
                             .any(|rect| rect.contains(*p))
                 }) {
@@ -1724,15 +1685,14 @@ impl Viewer {
                     );
                     ui.scope_builder(
                         egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                            ui.max_rect().left_bottom()
-                                + egui::vec2(
-                                    12.,
-                                    if self.model.animation.is_some() {
-                                        -156.
-                                    } else {
-                                        -80.
-                                    },
-                                ),
+                            egui::pos2(
+                                ui.max_rect().left() + 12.,
+                                if self.hide_ui {
+                                    ui.max_rect().bottom() - 36.
+                                } else {
+                                    dock_rect.top() - 32.
+                                },
+                            ),
                             egui::vec2(ui.available_width() - 24., 24.),
                         )),
                         |ui| {
@@ -1751,7 +1711,7 @@ impl Viewer {
                 }
                 if response.hovered()
                     && !dock_rect.contains(ctx.pointer_hover_pos().unwrap_or(egui::Pos2::ZERO))
-                    && ![debug_rect, view_rect, loading_rect].iter().any(|rect| {
+                    && ![debug_rect, loading_rect].iter().any(|rect| {
                         rect.contains(ctx.pointer_hover_pos().unwrap_or(egui::Pos2::ZERO))
                     })
                 {
