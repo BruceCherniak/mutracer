@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { expect, it } from 'vitest';
 import { Engine, Texture, THREESync, fromTHREEScene, type EquirectBackground } from '../../src/main';
-import { backgroundMapRotation, generateBackgroundMapFromSceneBackground } from '../../src/renderer/envMapCreation';
+import { backgroundMapRotation, backgroundMapTransform, generateBackgroundMapFromSceneBackground } from '../../src/renderer/envMapCreation';
 import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 
 const map = () => new THREE.DataTexture(new Float32Array([2,1,.5,.75]),1,1,THREE.RGBAFormat,THREE.FloatType);
@@ -77,4 +77,44 @@ it('ignores backgroundRotation for colors, hidden backgrounds and the implicit e
   expect(fromTHREEScene(source).background).toEqual([.1,.2,.3,1]);
   source.background = source.environment; source.userData.mutracerHiddenBackground = true;
   expect(fromTHREEScene(source).background).toEqual([0,0,0,0]);
+});
+
+it('synchronizes backgroundIntensity onto texture backgrounds only', () => {
+  const source = new THREE.Scene(), texture = map();
+  source.background = source.environment = texture; source.backgroundIntensity = 2.5;
+  const sync = new THREESync(new Engine({canvas:{width:1,height:1} as HTMLCanvasElement}),{scene:source});
+  sync.update();
+  const bg = sync.scene!.background as EquirectBackground;
+  expect(bg).toMatchObject({type:'Equirect', intensity:2.5, transform:undefined});
+  expect(backgroundMapRotation(bg)).toEqual(backgroundMapRotation());
+  expect(backgroundMapTransform(bg)[2]).toBe(2.5);
+  const light = sync.scene!.lights[0];
+  if (light.type !== 'EnvironmentLight') throw new Error('Expected an environment light');
+  expect(light.intensity).toBe(1);
+  source.backgroundIntensity = .5; source.backgroundRotation.y = .3; sync.update();
+  expect(sync.scene!.background).toBe(bg);
+  expect(backgroundMapTransform(bg)[2]).toBe(.5);
+  expect(bg.transform).toBeDefined();
+  source.backgroundIntensity = 1; sync.update();
+  expect(sync.scene!.background).toBe(bg); expect(bg.intensity).toBeUndefined();
+  source.backgroundRotation.y = 0; sync.update();
+  expect(sync.scene!.background).toBe(bg.map);
+  source.backgroundIntensity = 3;
+  source.userData.mutracerGroundedSkybox = {texture,height:1.6,radius:30}; sync.update();
+  expect(backgroundMapTransform(sync.scene!.background)[2]).toBe(1);
+  delete source.userData.mutracerGroundedSkybox; source.background = new THREE.Color(.1,.2,.3); sync.update();
+  expect(sync.scene!.background).toEqual([.1,.2,.3,1]);
+  sync.dispose();
+});
+
+it('clamps negative equirect intensity without rebuilding background pixels', () => {
+  const bg: EquirectBackground = {type:'Equirect', map:new Texture({width:1,height:1,data:new Float32Array([2,1,.5,.75])})};
+  const pixels = generateBackgroundMapFromSceneBackground(bg);
+  expect(Array.from(backgroundMapTransform(bg))).toEqual([1,0,1,0]);
+  bg.intensity = -2;
+  expect(backgroundMapTransform(bg)[2]).toBe(0);
+  expect(generateBackgroundMapFromSceneBackground(bg)).toBe(pixels);
+  const detector = new SceneChangeDetector(), scene = {meshes:[],lights:[],background:bg};
+  detector.detect(scene); detector.commit(); bg.intensity = 4;
+  expect(detector.detect(scene).background).toBe(true);
 });

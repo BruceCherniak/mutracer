@@ -101,11 +101,13 @@ later wrap edits synchronize automatically. Displacement uses the same modes.
 
 `scene.environmentIntensity` scales environment lighting (`0` disables it);
 ambient lights and explicit backgrounds keep their own brightness.
-`scene.environmentRotation` and `scene.backgroundRotation` independently rotate
-environment lighting and explicit texture backgrounds. All three synchronize
-automatically; rotations preserve Euler order. An unset background follows the
-environment. `mutracerGroundedSkybox` uses only its own `rotation` (default `0`),
-ignoring `scene.backgroundRotation`.
+`scene.backgroundIntensity` scales an explicit texture background; colors are
+unaffected. `scene.environmentRotation` and `scene.backgroundRotation`
+independently rotate environment lighting and explicit texture backgrounds. All
+of these synchronize automatically; rotations preserve Euler order. An unset
+background follows the environment. `mutracerGroundedSkybox` uses only its own
+`rotation` (default `0`) and `intensity` (default `1`), ignoring
+`scene.backgroundRotation` and `scene.backgroundIntensity`.
 
 Thin-film ranges keep their endpoint order, including minimum greater than
 maximum, and retain the converter's 0–20 µm endpoint clamp. The converter uses

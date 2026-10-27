@@ -1211,12 +1211,16 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
               : convertDataTexture(scene.background as THREE.DataTexture, store.equirectTextures)
           : undefined;
 
-  // Grounded skyboxes own their level-ground yaw; Three.js backgroundRotation
-  // applies only to the explicit equirectangular background.
+  // Grounded skyboxes own their level-ground yaw and intensity; Three.js
+  // backgroundRotation and backgroundIntensity apply only to the explicit
+  // equirectangular background.
   const rotation = scene.backgroundRotation;
-  if (background instanceof Texture && rotation && (rotation.x !== 0 || rotation.y !== 0 || rotation.z !== 0)) {
+  const rotated = !!rotation && (rotation.x !== 0 || rotation.y !== 0 || rotation.z !== 0);
+  const intensity = scene.backgroundIntensity ?? 1;
+  if (background instanceof Texture && (rotated || intensity !== 1)) {
     background = {type: 'Equirect', map: background,
-      transform: scene.matrix.clone().makeRotationFromEuler(rotation).elements.slice()};
+      transform: rotated ? scene.matrix.clone().makeRotationFromEuler(rotation).elements.slice() : undefined,
+      intensity: intensity !== 1 ? intensity : undefined};
   }
 
   const oldBackground = store.background;

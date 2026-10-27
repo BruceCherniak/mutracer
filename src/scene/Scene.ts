@@ -22,6 +22,8 @@ export interface EquirectBackground {
   map: Texture;
   /** Map-to-world rotation, column-major. Default identity; translation and positive axis scale are ignored. */
   transform?: Mat4;
+  /** Nonnegative background RGB multiplier. Default `1`; lighting and alpha are unchanged. */
+  intensity?: number;
 }
 
 /**

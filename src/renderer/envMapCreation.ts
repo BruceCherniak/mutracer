@@ -42,9 +42,9 @@ export function backgroundMapRotation(background?: SceneBackground): Float32Arra
 
 /** Cosine/sine of inverse-lookup yaw and radiance scale; independent of lighting. */
 export function backgroundMapTransform(background?: SceneBackground): Float32Array {
-  const grounded = background && !Array.isArray(background) && 'type' in background && background.type === 'GroundedSkybox' ? background : undefined;
-  const angle = grounded?.rotation ?? 0;
-  return new Float32Array([Math.cos(angle), Math.sin(angle), Math.max(0, grounded?.intensity ?? 1), 0]);
+  const described = background && !Array.isArray(background) && 'type' in background ? background : undefined;
+  const angle = described?.type === 'GroundedSkybox' ? described.rotation ?? 0 : 0;
+  return new Float32Array([Math.cos(angle), Math.sin(angle), Math.max(0, described?.intensity ?? 1), 0]);
 }
 
 const backgroundImages = new WeakMap<Texture, {image: Texture['image']; version: number; result: EnvironmentSource}>();
