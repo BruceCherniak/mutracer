@@ -51,7 +51,7 @@ import type { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { numberArraysEqual } from './util.js';
 import Camera from '../scene/Camera.js';
 import {
-  generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform
+  generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform, backgroundMapRotation
 } from './envMapCreation.js';
 import { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
 import Geometry from '../scene/Geometry.js';
@@ -1847,6 +1847,7 @@ class WGPURayTracePass {
 
   setBackground(background?: SceneBackground) {
     this._rtUniform.views.backgroundMapTransform.set(backgroundMapTransform(background));
+    this._rtUniform.views.backgroundMapRotation.set(backgroundMapRotation(background));
     this._constants.USE_BACKGROUND = !!background;
     const backgroundImage =
       background && !Array.isArray(background)

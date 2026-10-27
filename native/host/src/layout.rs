@@ -303,7 +303,8 @@ pub mod ray_uniform {
     pub const SAMPLE_SEQUENCE_OFFSET: usize = 164;
     pub const ENVIRONMENT_ROTATION: usize = 176;
     pub const BACKGROUND_MAP_TRANSFORM: usize = 240;
-    pub const BYTES: usize = 256;
+    pub const BACKGROUND_MAP_ROTATION: usize = 256;
+    pub const BYTES: usize = 320;
 }
 pub mod uniform_size {
     pub const CAMERA_BYTES: usize = 144;

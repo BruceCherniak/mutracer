@@ -14,6 +14,7 @@ export default createShaderMixin({
     envMapDistribution: Shader.uniform('sampler2D'),
     backgroundMap: Shader.uniform('sampler2D'),
     backgroundMapTransform: Shader.uniform('vec4', [1,0,1,0]),
+    backgroundMapRotation: Shader.uniform('mat3', [1,0,0, 0,1,0, 0,0,1]),
     groundedBackgroundParams: Shader.uniform('vec4'),
     groundedBackgroundCenter: Shader.uniform('vec2')
   },
@@ -197,7 +198,7 @@ vec4 sampleBackgroundFromRay(vec3 origin, vec3 d) {
 #ifdef USE_BACKGROUND
   vec4 t = backgroundMapTransform;
   d = vec3(t.x * d.x - t.y * d.z, d.y, t.y * d.x + t.x * d.z);
-  vec4 backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(d));
+  vec4 backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(transpose(backgroundMapRotation) * d));
   return vec4(backgroundSample.rgb * t.z, backgroundSample.a);
 #else
   return textureLinear(backgroundMap, environmentUv(d));

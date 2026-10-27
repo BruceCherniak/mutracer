@@ -44,9 +44,15 @@ async function run() {
         source.userData.mutracerGroundedSkybox={texture:baked,height:1.6,radius:30,center:[.4,-.3]};
         const expected=await capture();
         source.userData.mutracerGroundedSkybox={texture:groundMap,height:1.6,radius:30,center:[.4,-.3],rotation:Math.PI/2,intensity};
-        record(`grounded rotation and intensity ${intensity}`,expected,await capture());
+        source.backgroundRotation.set(.3,.7,-.2,'ZYX');
+        record(`grounded rotation and intensity ${intensity}, ignoring backgroundRotation`,expected,await capture());
         baked.dispose();
       }
+      source.userData.mutracerGroundedSkybox={texture:groundMap,height:1.6,radius:30};
+      source.backgroundRotation.set(0,0,0);
+      const expected=await capture();
+      source.backgroundRotation.set(.2,.8,-.4,'YXZ');
+      record('grounded default yaw ignores backgroundRotation',expected,await capture());
       groundMap.dispose();
     } else if (location.search.includes('rotation')) {
       mesh.material.dispose(); mesh.material=webgl?new THREE.MeshStandardMaterial({roughness:1}):new THREE.MeshPhysicalMaterial({roughness:.5,metalness:1,anisotropy:.5}); mesh.geometry.computeTangents();
@@ -54,18 +60,24 @@ async function run() {
       camera.matrixAutoUpdate=false; mesh.matrixAutoUpdate=false;
       const base=new THREE.Matrix4().makeTranslation(0,0,2);
       render.bounces=webgl?3:1;
-      for (const kind of ['lighting','background','explicit background']) {
+      for (const kind of ['lighting','background','explicit background','backgroundRotation']) {
         const baseMesh=kind==='lighting'?new THREE.Matrix4():new THREE.Matrix4().makeTranslation(100,0,0);
-        source.background=kind==='lighting'?new THREE.Color(0,0,0):kind==='explicit background'?original:null;
+        source.background=kind==='lighting'?new THREE.Color(0,0,0):kind==='explicit background'||kind==='backgroundRotation'?original:null;
         const rotations=webgl&&kind==='lighting'?[new THREE.Euler(0,Math.PI/2,0),new THREE.Euler(0,.7,0)]:[new THREE.Euler(0,Math.PI/2,0),new THREE.Euler(.3,.7,-.2,'ZYX')];
         for (const euler of rotations) {
           const inverse=new THREE.Matrix4().makeRotationFromEuler(euler).invert();
-          source.environmentRotation.set(0,0,0);
+          source.environmentRotation.set(0,0,0); source.backgroundRotation.set(0,0,0);
           mesh.matrix.copy(kind==='explicit background'?baseMesh:inverse.clone().multiply(baseMesh));
           camera.matrix.copy(kind==='explicit background'?base:inverse.clone().multiply(base));
           const expected=await capture();
-          mesh.matrix.copy(baseMesh); camera.matrix.copy(base); source.environmentRotation.copy(euler);
+          mesh.matrix.copy(baseMesh); camera.matrix.copy(base);
+          if (kind==='backgroundRotation') source.backgroundRotation.copy(euler);
+          else source.environmentRotation.copy(euler);
           record(`${kind} rotation ${euler.order} ${euler.y}`,expected,await capture());
+          if (kind==='backgroundRotation') {
+            source.backgroundRotation.set(0,0,0); camera.matrix.copy(inverse.clone().multiply(base));
+            record(`backgroundRotation reset ${euler.order}`,expected,await capture());
+          }
         }
       }
     } else for (const intensity of [0,.5,2]) {

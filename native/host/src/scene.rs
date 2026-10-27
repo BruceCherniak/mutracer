@@ -1324,7 +1324,10 @@ impl PreparedState {
         })?;
         let w = Words(&packet);
         let (shader, camera, trace) = (w.u(1), w.u(2), w.u(3));
-        if camera != 144 || trace != 256 || packet.len() != 16 + camera + trace + shader {
+        if camera != 144
+            || trace != crate::layout::ray_uniform::BYTES
+            || packet.len() != 16 + camera + trace + shader
+        {
             return Err("Invalid native render target packet".into());
         }
         let camera_bytes = packet[16..16 + camera].to_vec();

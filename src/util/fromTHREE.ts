@@ -20,7 +20,7 @@ import SpotLight from '../scene/SpotLight.js';
 import IESProfile from '../scene/IESProfile.js';
 import Camera from '../scene/Camera.js';
 import type { ColorRGB, ColorRGBA } from '../types.js';
-import type { GroundedSkyboxBackground, Scene, SceneLight } from '../scene/Scene.js';
+import type { Scene, SceneLight } from '../scene/Scene.js';
 import { mat4 } from '../math.js';
 import { generateVertexNormals, updateBoundingBox, updateDynamicTangents } from './geometry.js';
 import { THREEDeformation, isDeformingMesh } from './threeDeformation.js';
@@ -1189,7 +1189,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const groundedTexture = grounded && (grounded.texture instanceof Texture ? grounded.texture : convertDataTexture(grounded.texture, store.equirectTextures));
   const hideEnvironmentBackground =
     scene.userData.mutracerHiddenBackground === true;
-  let background: GroundedSkyboxBackground | ColorRGBA | Texture | undefined =
+  let background: Scene['background'] =
     hideEnvironmentBackground
       ? [0, 0, 0, 0]
       : grounded && groundedTexture
@@ -1211,11 +1211,20 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
               : convertDataTexture(scene.background as THREE.DataTexture, store.equirectTextures)
           : undefined;
 
+  // Grounded skyboxes own their level-ground yaw; Three.js backgroundRotation
+  // applies only to the explicit equirectangular background.
+  const rotation = scene.backgroundRotation;
+  if (background instanceof Texture && rotation && (rotation.x !== 0 || rotation.y !== 0 || rotation.z !== 0)) {
+    background = {type: 'Equirect', map: background,
+      transform: scene.matrix.clone().makeRotationFromEuler(rotation).elements.slice()};
+  }
+
   const oldBackground = store.background;
   if (Array.isArray(background) && Array.isArray(oldBackground) && snapshotsEqual(background, oldBackground)) {
     background = oldBackground;
   } else if (background && oldBackground && !Array.isArray(background) && !Array.isArray(oldBackground)
-    && !(background instanceof Texture) && !(oldBackground instanceof Texture)) {
+    && !(background instanceof Texture) && !(oldBackground instanceof Texture)
+    && background.type === oldBackground.type) {
     // Compare by values, ignoring the newly constructed wrapper's identity.
     if (snapshotsEqual(snapshotFields(background).slice(1), snapshotFields(oldBackground).slice(1))) background = oldBackground;
     else { Object.assign(oldBackground, background); background = oldBackground; }

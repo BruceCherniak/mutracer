@@ -5,7 +5,7 @@
 // Convert image data from the RGBE format to a 32-bit floating point format
 // See https://www.cg.tuwien.ac.at/research/theses/matkovic/node84.html for a description of the RGBE format
 
-import type { ColorRGBA, WritableArrayLike } from '../types.js';
+import type { ColorRGBA, Mat4, WritableArrayLike } from '../types.js';
 import Texture, {
   isTextureDataSource,
   type TextureDataSource
@@ -17,17 +17,27 @@ import { isProceduralSkyImage } from '../scene/skyParameters.js';
 import type { EnvironmentSource, EnvironmentMapSource, ProceduralEnvironmentSource } from './envMapDistribution.js';
 
 /** Rotation only: translation does not affect a light at infinity. */
-export function environmentRotation(lights: readonly SceneLight[]): Float32Array {
+function mapRotation(transform?: Mat4): Float32Array {
   const matrix = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
-  const light = lights.find(light => light.type === 'EnvironmentLight');
-  if (light?.type === 'EnvironmentLight') {
+  if (transform) {
     for (let column = 0; column < 3; column++) {
       const offset = column * 4;
-      const length = Math.hypot(light.transform[offset], light.transform[offset+1], light.transform[offset+2]);
-      if (length > 0) for (let row = 0; row < 3; row++) matrix[offset+row] = light.transform[offset+row] / length;
+      const length = Math.hypot(transform[offset], transform[offset+1], transform[offset+2]);
+      if (length > 0) for (let row = 0; row < 3; row++) matrix[offset+row] = transform[offset+row] / length;
     }
   }
   return matrix;
+}
+
+export function environmentRotation(lights: readonly SceneLight[]): Float32Array {
+  const light = lights.find(light => light.type === 'EnvironmentLight');
+  return mapRotation(light?.type === 'EnvironmentLight' ? light.transform : undefined);
+}
+
+/** Map-to-world orientation for explicit equirect backgrounds; grounded yaw is packed separately. */
+export function backgroundMapRotation(background?: SceneBackground): Float32Array {
+  return mapRotation(background && !Array.isArray(background) && 'type' in background && background.type === 'Equirect'
+    ? background.transform : undefined);
 }
 
 /** Cosine/sine of inverse-lookup yaw and radiance scale; independent of lighting. */

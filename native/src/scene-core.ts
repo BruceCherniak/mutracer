@@ -201,10 +201,10 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     const shader = frameInputs ? frameShader() : variant ? productionShader(shaderId, {...state.shader,
       features: {...state.shader.features, hasAlpha},
       constants: {...constants, SAMPLING_PATTERN: configuration.sampling.code, BEVEL_SAMPLES: configuration.bevelSamples}}) : new Uint8Array(0);
-    const result = new Uint8Array(4 * WORD_BYTES + camera.byteLength + 256 + shader.byteLength);
-    new Uint32Array(result.buffer, 0, 4).set([1, shader.byteLength, camera.byteLength, 256]);
+    const result = new Uint8Array(4 * WORD_BYTES + camera.byteLength + rt.buffer.byteLength + shader.byteLength);
+    new Uint32Array(result.buffer, 0, 4).set([1, shader.byteLength, camera.byteLength, rt.buffer.byteLength]);
     result.set(camera, 4 * WORD_BYTES); result.set(new Uint8Array(rt.buffer), 4 * WORD_BYTES + camera.byteLength);
-    result.set(shader, 4 * WORD_BYTES + camera.byteLength + 256);
+    result.set(shader, 4 * WORD_BYTES + camera.byteLength + rt.buffer.byteLength);
     return result;
   } catch (error) { return sceneErrorPacket(ERROR_CODE.CONFIGURE, error); }
 }

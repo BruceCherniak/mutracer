@@ -1110,7 +1110,7 @@ impl GpuScene {
             (res::CAMERA, 144, self.buffers[&res::CAMERA].usage()),
             (
                 res::TRACE_UNIFORM,
-                256,
+                layout::ray_uniform::BYTES as u64,
                 self.buffers[&res::TRACE_UNIFORM].usage(),
             ),
             (res::COLOR, pixels * 16, self.buffers[&res::COLOR].usage()),

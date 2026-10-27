@@ -28,6 +28,7 @@ export type { JNLMOptions } from './renderer/jnlm.js';
 // Scene description
 export type {
   AnalyticLight,
+  EquirectBackground,
   GroundedSkyboxBackground,
   Scene,
   SceneBackground,

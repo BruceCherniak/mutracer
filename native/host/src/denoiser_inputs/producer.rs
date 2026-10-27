@@ -153,7 +153,10 @@ impl FrameProducer {
     ) -> Result<(Arc<GpuFrame>, ProducerDependency)> {
         metadata.validate()?;
         scene.gpu.loss.check()?;
-        if self.device != scene.gpu.frame_device || camera.len() != 144 || trace.len() != 256 {
+        if self.device != scene.gpu.frame_device
+            || camera.len() != 144
+            || trace.len() != crate::layout::ray_uniform::BYTES
+        {
             return Err("Frame producer device/camera/trace mismatch".into());
         }
         if f32::from_le_bytes(camera[128..132].try_into()?) != 0.0 {

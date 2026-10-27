@@ -320,7 +320,9 @@ fn sampleSceneBackground(ray: Ray) -> vec4f {
     let d = groundedBackgroundDirection(ray.o, ray.d);
     let t = rtUniform.backgroundMapTransform;
     let backgroundDirection = vec3f(t.x * d.x - t.y * d.z, d.y, t.y * d.x + t.x * d.z);
-    let backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(backgroundDirection));
+    let rotation = rtUniform.backgroundMapRotation;
+    let mapDirection = transpose(mat3x3f(rotation[0].xyz, rotation[1].xyz, rotation[2].xyz)) * backgroundDirection;
+    let backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(mapDirection));
     bg = vec4f(backgroundSample.rgb * t.z, backgroundSample.a);
   }
   else if (USE_BACKGROUND) {

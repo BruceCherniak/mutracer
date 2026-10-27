@@ -10,7 +10,7 @@ const PIXELS_PER_LIGHT = 6;
 
 export function makeRayTraceUniform() {
   // Created from https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
-  const RayTraceUniformValues = new ArrayBuffer(256);
+  const RayTraceUniformValues = new ArrayBuffer(320);
   const RayTraceUniformViews = {
     outputSize: new Float32Array(RayTraceUniformValues, 0, 2),
     sampleCount: new Float32Array(RayTraceUniformValues, 8, 1),
@@ -42,12 +42,14 @@ export function makeRayTraceUniform() {
     zSobolLogSPP: new Uint32Array(RayTraceUniformValues, 160, 1),
     sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1),
     environmentRotation: new Float32Array(RayTraceUniformValues, 176, 16),
-    backgroundMapTransform: new Float32Array(RayTraceUniformValues, 240, 4)
+    backgroundMapTransform: new Float32Array(RayTraceUniformValues, 240, 4),
+    backgroundMapRotation: new Float32Array(RayTraceUniformValues, 256, 16)
   };
   // Fixed runtime trip bounds discourage thin-film loop unrolling. Keep 4 for
   // 2 polarizations/substrates and 3 channels, independent of BSDF budgets.
   RayTraceUniformViews.loopUnrollGuard[0] = 4;
   RayTraceUniformViews.environmentRotation.set([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+  RayTraceUniformViews.backgroundMapRotation.set([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
   RayTraceUniformViews.backgroundMapTransform.set([1,0,1,0]);
   RayTraceUniformViews.bevel[0] = 1;
   RayTraceUniformViews.dispersionWavelengths[0] = 3;
