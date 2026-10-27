@@ -6,13 +6,18 @@ use mutracer_native_probe::layout::light as light_wire;
 use mutracer_native_probe::layout::{header as h, texture as tex};
 use std::{path::Path, sync::Arc};
 
+pub use mutracer_native_probe::scene_api::Geometry;
+#[cfg(test)]
+pub use mutracer_native_probe::scene_api::MaterialLayers;
 pub use mutracer_native_probe::scene_api::viewer_support::Descriptor;
 #[cfg(test)]
 pub use mutracer_native_probe::scene_api::viewer_support::material_values;
 pub use mutracer_native_probe::scene_api::viewer_support::{Material, Mesh, Texture};
-pub use mutracer_native_probe::scene_api::{Geometry, MaterialLayers};
 #[derive(Clone)]
-pub struct Model(pub mutracer_native_probe::scene_api::viewer_support::Model);
+pub struct Model(
+    pub mutracer_native_probe::scene_api::viewer_support::Model,
+    pub crate::model_scene::Scene,
+);
 impl std::ops::Deref for Model {
     type Target = mutracer_native_probe::scene_api::viewer_support::Model;
     fn deref(&self) -> &Self::Target {
@@ -26,9 +31,154 @@ impl std::ops::DerefMut for Model {
 }
 impl Model {
     pub fn load(path: &Path) -> Result<Self> {
-        Ok(Self(
-            mutracer_native_probe::scene_api::viewer_support::Model::load(path)?,
-        ))
+        let bytes = std::fs::read(path)?;
+        let mut json = crate::examples::model_json(&bytes)?;
+        // The viewer handles punctual lights, including their required extension.
+        if let Some(required) = json
+            .get_mut("extensionsRequired")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            required.retain(|e| e != "KHR_lights_punctual");
+        }
+        let bytes = crate::examples::with_json(&bytes, &json)?;
+        let mut model = mutracer_native_probe::scene_api::viewer_support::Model::load_bytes(
+            &bytes,
+            Some(path),
+        )?;
+        model
+            .warnings
+            .retain(|w| !w.ends_with("KHR_lights_punctual"));
+        let scene = crate::model_scene::Scene::load(&json, path, &mut model)?;
+        Ok(Self(model, scene))
+    }
+
+    pub fn spheres() -> Result<Self> {
+        let mut model = Self::load(&crate::default_model())?;
+        let bytes = include_bytes!("../assets/spheres.bin");
+        let mut offset = 16;
+        let mut arrays = Vec::new();
+        for index in 0..4 {
+            let count =
+                u32::from_le_bytes(bytes[index * 4..index * 4 + 4].try_into().unwrap()) as usize;
+            arrays.push(&bytes[offset..offset + count]);
+            offset += count;
+        }
+        let floats = |index: usize| {
+            arrays[index]
+                .chunks_exact(4)
+                .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+                .collect::<Vec<_>>()
+        };
+        let positions = floats(0);
+        let min = positions
+            .chunks_exact(3)
+            .map(Vec3::from_slice)
+            .fold(Vec3::splat(f32::INFINITY), Vec3::min);
+        let max = positions
+            .chunks_exact(3)
+            .map(Vec3::from_slice)
+            .fold(Vec3::splat(f32::NEG_INFINITY), Vec3::max);
+        model.0.geometries = Arc::new(vec![Geometry {
+            positions: positions.into(),
+            normals: floats(1).into(),
+            uv: [floats(2).into(), Arc::from([])],
+            indices: arrays[3]
+                .chunks_exact(4)
+                .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+                .collect(),
+            material_indices: Arc::from([]),
+            colors: Arc::from([]),
+            tangents: Arc::from([]),
+            min,
+            max,
+        }]);
+        let entries: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../assets/spheres.json"))?;
+        let template = model.0.materials.last().unwrap().clone();
+        model.0.textures = Arc::new(vec![]);
+        model.0.materials.clear();
+        model.0.properties.clear();
+        model.0.meshes.clear();
+        model.0.animation = None;
+        let mut bounds_min = Vec3::splat(f32::INFINITY);
+        let mut bounds_max = Vec3::splat(f32::NEG_INFINITY);
+        for (index, entry) in entries.iter().enumerate() {
+            let mut material = template.clone();
+            material.name = entry["name"].as_str().unwrap().into();
+            crate::material_presets::apply_values(
+                &mut material,
+                entry["values"].as_object().unwrap(),
+            );
+            let mut values = [0.; 16];
+            for (i, v) in entry["transform"].as_array().unwrap().iter().enumerate() {
+                values[i] = v.as_f64().unwrap() as f32;
+            }
+            let transform = Mat4::from_cols_array(&values);
+            bounds_min = bounds_min.min(transform.transform_point3(min));
+            bounds_max = bounds_max.max(transform.transform_point3(max));
+            model.0.meshes.push(Mesh {
+                name: material.name.clone(),
+                material: index,
+                geometry: 0,
+                transform,
+                materials: vec![],
+                instances: None,
+            });
+            model.0.materials.push(material);
+            model
+                .0
+                .properties
+                .push(std::collections::BTreeMap::from([(73, [1, 0, 0])]));
+        }
+        model.0.name = "Material spheres".into();
+        model.0.center = (bounds_min + bounds_max) * 0.5;
+        model.0.radius = (bounds_max - bounds_min).length() * 0.5;
+        model.0.ground_y = bounds_min.y;
+        model.0.node_names = model.0.meshes.iter().map(|m| m.name.clone()).collect();
+        model.0.mesh_names = model.0.node_names.clone();
+        model.rebuild_picking()?;
+        Ok(model)
+    }
+    pub fn camera_for_load(&self, previous: &crate::renderer::Camera) -> crate::renderer::Camera {
+        let mut camera = crate::renderer::Camera::fit(self.center, self.radius);
+        camera.fov = previous.fov;
+        camera.orthographic = previous.orthographic;
+        camera.f_stop = previous.f_stop;
+        camera.meters_per_unit = previous.meters_per_unit;
+        camera.frame(self.center, self.radius);
+        if let Some(preset) = &self.1.preset {
+            if let (Some(eye), Some(target)) = (
+                crate::model_scene::vector(&preset["camera"]["position"]),
+                crate::model_scene::vector(&preset["camera"]["target"]),
+            ) {
+                let offset = Vec3::new(self.center.x, self.ground_y, self.center.z);
+                camera.set_view(eye + offset, target + offset);
+                camera.fov = preset["camera"]["fov"].as_f64().unwrap_or(35.) as f32;
+                camera.orthographic = false;
+            } else if preset["category"] == "research" {
+                if let Some(view) = self.1.cameras.first() {
+                    view.apply(&mut camera, self.center);
+                }
+            }
+        }
+        camera
+    }
+    pub fn environment_for_load(&self, previous: &Environment) -> Environment {
+        let mut environment = previous.clone();
+        if self.1.available && self.1.authored {
+            environment.studio.enabled = false;
+            environment.model_lighting = true;
+            environment.image = Some(self.1.environment.clone().unwrap_or_else(|| {
+                Arc::new(image::Rgb32FImage::from_pixel(1, 1, image::Rgb([0.; 3])))
+            }));
+            environment.name = "Scene lighting".into();
+            environment.intensity = 1.;
+            environment.rotation = 0.;
+            environment.color = [1.; 3];
+        } else if environment.model_lighting {
+            environment = Environment::default();
+        }
+        environment
     }
     fn scene_object(
         &self,
@@ -39,6 +189,7 @@ impl Model {
         let mut lights = environment
             .studio
             .records(self.center, self.radius, self.ground_y);
+        lights.extend(self.1.lights.iter().copied());
         if light.enabled {
             lights.push(light.record());
         }
@@ -137,6 +288,7 @@ impl KeyLight {
 
 #[derive(Clone)]
 pub struct Environment {
+    pub model_lighting: bool,
     pub intensity: f32,
     pub color: [f32; 3],
     pub rotation: f32,
@@ -151,15 +303,16 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         Self {
+            model_lighting: false,
             intensity: 1.,
-            color: [0.8, 0.88, 1.],
+            color: [1.; 3],
             rotation: 0.,
             studio: crate::studio::Studio::default(),
             background: true,
             background_color: [0.025, 0.025, 0.03],
             background_alpha: 1.,
             image: None,
-            name: "Built-in environment".into(),
+            name: "Procedural sky".into(),
             pixel_cache: Arc::new(std::sync::Mutex::new(None)),
         }
     }
@@ -561,5 +714,21 @@ fn scene_api_matches_saved_legacy_viewer_encoding() {
             ),
             std::fs::read(Path::new(&path).join("viewer-scene.bin")).unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod example_tests {
+    #[test]
+    fn procedural_example_uses_the_browser_geometry_and_layers() {
+        let model = super::Model::spheres().unwrap();
+        assert_eq!(model.meshes.len(), 7);
+        assert_eq!(model.geometries[0].positions.len(), 97 * 49 * 3);
+        assert_eq!(model.geometries[0].indices.len() / 3, 9024);
+        assert!(model.textures.is_empty());
+        assert!((model.materials[2].transmission - 1.).abs() < 1e-6);
+        assert!(!model.materials[2].layers.thin_walled);
+        assert!((model.materials[6].layers.subsurface_weight - 1.).abs() < 1e-6);
+        assert!(model.radius.is_finite() && model.radius > 0.);
     }
 }

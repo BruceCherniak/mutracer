@@ -685,46 +685,9 @@ impl Display {
         self.read_image(&self.texture)
     }
     pub(crate) fn read_image(&self, texture: &wgpu::Texture) -> Result<Vec<u8>> {
-        let stride = (self.size[0] * 4).div_ceil(256) * 256;
-        let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Display export readback"),
-            size: stride as u64 * self.size[1] as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: None,
-                },
-            },
-            wgpu::Extent3d {
-                width: self.size[0],
-                height: self.size[1],
-                depth_or_array_layers: 1,
-            },
-        );
-        self.gpu.queue.submit([encoder.finish()]);
-        let (tx, rx) = std::sync::mpsc::channel();
-        buffer.map_async(wgpu::MapMode::Read, .., move |r| {
-            let _ = tx.send(r);
-        });
-        self.gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(30)),
-        })?;
-        rx.recv_timeout(std::time::Duration::from_secs(5))??;
-        let mapped = buffer.get_mapped_range(..)?;
-        Ok(mapped
-            .chunks_exact(stride as usize)
-            .flat_map(|row| row[..self.size[0] as usize * 4].iter().copied())
-            .collect())
+        read_image(&self.gpu, texture)
     }
+
     /// Explicit export/diagnostic readback; presentation never calls this.
     pub fn read_linear(&self) -> Result<Vec<f32>> {
         Ok(crate::read_average(
@@ -1069,4 +1032,48 @@ mod tests {
         }
         assert_eq!(display.read_linear().unwrap(), pixels);
     }
+}
+
+/// Straight RGBA8 readback, including auxiliary images with no beauty capture.
+pub(crate) fn read_image(gpu: &GpuDevice, texture: &wgpu::Texture) -> Result<Vec<u8>> {
+    let size = [texture.width(), texture.height()];
+    let stride = (size[0] * 4).div_ceil(256) * 256;
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Display export readback"),
+        size: stride as u64 * size[1] as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit([encoder.finish()]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+        let _ = tx.send(r);
+    });
+    gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: Some(std::time::Duration::from_secs(30)),
+    })?;
+    rx.recv_timeout(std::time::Duration::from_secs(5))??;
+    let mapped = buffer.get_mapped_range(..)?;
+    Ok(mapped
+        .chunks_exact(stride as usize)
+        .flat_map(|row| row[..size[0] as usize * 4].iter().copied())
+        .collect())
 }

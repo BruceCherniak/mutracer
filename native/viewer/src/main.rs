@@ -6,6 +6,7 @@ mod denoiser;
 mod dlss;
 mod dock;
 mod edit_bench;
+mod examples;
 mod focus;
 mod focus_smoke;
 mod geometry_smoke;
@@ -13,6 +14,7 @@ mod input;
 mod live_denoise_smoke;
 mod material_presets;
 mod metrics;
+mod model_scene;
 mod package_smoke;
 mod parity_smoke;
 mod picking;
@@ -20,11 +22,14 @@ mod renderer;
 mod resolution;
 mod scene;
 mod shell;
+mod sky;
 mod studio;
 mod studio_smoke;
 mod textures;
 mod theme;
 mod ui;
+#[cfg(test)]
+mod ui_smoke;
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
 use mutracer_native_probe::api;
@@ -34,7 +39,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::Duration,
 };
@@ -63,6 +68,8 @@ struct Target {
     preparations: Arc<AtomicU32>,
     errors: Arc<Mutex<Vec<String>>>,
     _events: api::Subscription,
+    sample_times: Arc<Mutex<std::collections::VecDeque<f64>>>,
+    _sample_events: Vec<api::Subscription>,
 }
 #[derive(Default)]
 struct InputActivity(api::SyncActivity);
@@ -119,7 +126,23 @@ impl Target {
             api::EngineEvent::Error { message } => reported.lock().unwrap().push(message.clone()),
             _ => {}
         });
+        let sample_times = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let sample_events = [render_loop.preview().unwrap(), render_loop.final_render()]
+            .into_iter()
+            .map(|render| {
+                let times = sample_times.clone();
+                render.on_sample(move |event| {
+                    let mut times = times.lock().unwrap();
+                    times.push_back(event.frame_time_ms);
+                    if times.len() > 80 {
+                        times.pop_front();
+                    }
+                })
+            })
+            .collect();
         Ok(Self {
+            sample_times,
+            _sample_events: sample_events,
             engine,
             render_loop,
             activity,
@@ -272,6 +295,7 @@ struct Viewer {
     drag: input::ViewportDrag,
     environment: Environment,
     light: KeyLight,
+    sky: sky::Sky,
     size: [u32; 2],
     resolution: resolution::Resolution,
     settings: RenderSettings,
@@ -280,8 +304,10 @@ struct Viewer {
     samples: u32,
     display_settings: mutracer_native_probe::display::Settings,
     applied_display: Option<api::DisplaySettings>,
-    aovs_enabled: bool,
     aov_display: api::AovDisplayOptions,
+    debug_open: bool,
+    preview_enabled: bool,
+    preview_scale: f32,
     applied_denoise: Option<(bool, bool)>,
     selected: usize,
     selected_mesh: Option<usize>,
@@ -292,7 +318,11 @@ struct Viewer {
     object_query: String,
     loading: Option<std::sync::mpsc::Receiver<Result<Model>>>,
     loading_name: String,
-    queued_load: Option<PathBuf>,
+    load_cancel: Arc<AtomicBool>,
+    load_progress: Option<std::sync::mpsc::Receiver<String>>,
+    examples: examples::Browser,
+    camera_index: Option<usize>,
+    pending_environment: Option<Environment>,
     running: bool,
     change: Change,
     candidate: Option<(Model, Camera)>,
@@ -322,8 +352,31 @@ impl Viewer {
         Self::new_on_device(path, None)
     }
     fn new_on_device(path: &Path, gpu: Option<eframe::egui_wgpu::RenderState>) -> Result<Self> {
-        let model = Model::load(path)?;
-        let camera = Camera::fit(model.0.center, model.0.radius);
+        let mut model = if gpu.is_some() && path == default_model() {
+            Model::spheres()?
+        } else {
+            Model::load(path)?
+        };
+        let mut camera = Camera::fit(model.0.center, model.0.radius);
+        if gpu.is_some() && path == default_model() {
+            let preset = examples::catalog()
+                .iter()
+                .find(|p| p["id"] == "spheres")
+                .unwrap()
+                .clone();
+            let offset = glam::Vec3::new(model.center.x, model.ground_y, model.center.z);
+            camera.set_view(
+                model_scene::vector(&preset["camera"]["position"]).unwrap() + offset,
+                model_scene::vector(&preset["camera"]["target"]).unwrap() + offset,
+            );
+            model.1.preset = Some(preset);
+        }
+        let mut examples = examples::Browser::default();
+        examples.current = model
+            .1
+            .preset
+            .as_ref()
+            .map(|p| examples::text(p, "id").to_owned());
         let metrics = metrics::Metrics::from_env();
         let size = if metrics.is_some() {
             [1280, 720]
@@ -379,6 +432,7 @@ impl Viewer {
             drag: input::ViewportDrag::default(),
             environment: Environment::default(),
             light: KeyLight::default(),
+            sky: sky::Sky::new(gpu.as_ref()),
             size,
             resolution: resolution::Resolution::new(if relative_resolution {
                 Some(0.5)
@@ -391,8 +445,12 @@ impl Viewer {
             samples: 0,
             display_settings: mutracer_native_probe::display::Settings::default(),
             applied_display: None,
-            aovs_enabled: false,
+
             aov_display: Default::default(),
+            debug_open: std::fs::read_to_string(examples::cache_root().join("debug.json"))
+                .is_ok_and(|v| v == "true"),
+            preview_enabled: true,
+            preview_scale: 0.5,
             applied_denoise: None,
             selected,
             selected_mesh: None,
@@ -403,7 +461,11 @@ impl Viewer {
             object_query: String::new(),
             loading: None,
             loading_name: String::new(),
-            queued_load: None,
+            load_cancel: Arc::new(AtomicBool::new(false)),
+            load_progress: None,
+            examples,
+            camera_index: None,
+            pending_environment: None,
             running: true,
             change: Change::Scene,
             last_commit_full: true,
@@ -458,8 +520,12 @@ impl Viewer {
         !self.preparing()
             && self.change == Change::None
             && self.pending_model.is_none()
-            && self.final_render().status() == api::RenderStatus::Finished
-            && !self.final_render().denoising()
+            && (if self.output_mask() != 0 {
+                self.target.render_loop.status() == api::RenderLoopStatus::Finished
+            } else {
+                self.final_render().status() == api::RenderStatus::Finished
+                    && !self.final_render().denoising()
+            })
             && !self.frame_preview
             && self.frame_samples == self.samples
     }
@@ -497,50 +563,100 @@ impl Viewer {
     /// The finished image composed with `settings`, straight alpha, top row first.
     fn read_rgba(&self, settings: &mutracer_native_probe::display::Settings) -> Result<Vec<u8>> {
         let display = self.target.engine.display();
-        display.set_settings(display_settings(settings))?;
+        let previous = display.settings();
+        let mut settings = display_settings(settings);
+        settings.aov = self.aov_display;
+        display.set_settings(settings)?;
         let result = display.read_rgba8(self.final_render());
-        display.set_settings(display_settings(&self.display_settings))?;
+        display.set_settings(previous)?;
         Ok(result?.2)
     }
     fn load(&mut self, path: PathBuf, ctx: &egui::Context) {
-        self.texture_browser.new_model();
-        if self.loading.is_some() {
-            self.queued_load = Some(path);
-            return;
+        self.start_load(Some(path), None, ctx);
+    }
+    fn load_preset(&mut self, id: &str, ctx: &egui::Context) {
+        if let Some(preset) = examples::catalog()
+            .iter()
+            .find(|p| examples::text(p, "id") == id)
+            .cloned()
+        {
+            self.start_load(None, Some(preset), ctx);
         }
-        self.loading_name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+    }
+    fn start_load(
+        &mut self,
+        path: Option<PathBuf>,
+        preset: Option<serde_json::Value>,
+        ctx: &egui::Context,
+    ) {
+        self.texture_browser.new_model();
+        self.load_cancel.store(true, Ordering::Relaxed);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.load_cancel = cancel.clone();
+        self.loading_name = preset
+            .as_ref()
+            .map(|p| examples::text(p, "name").to_owned())
+            .unwrap_or_else(|| {
+                path.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        self.examples.progress = format!("Loading {}…", self.loading_name);
         self.error.clear();
         let (send, receive) = std::sync::mpsc::channel();
+        let (progress, updates) = std::sync::mpsc::channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(|| Model::load(&path))
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Model> {
+                    let path = match path {
+                        Some(path) => path,
+                        None if preset.as_ref().unwrap()["url"].is_null() => default_model(),
+                        None => examples::download(preset.as_ref().unwrap(), &cancel, |message| {
+                            let _ = progress.send(message);
+                            ctx.request_repaint();
+                        })?,
+                    };
+                    examples::check_cancel(&cancel)?;
+                    let _ = progress.send("Preparing model…".into());
+                    ctx.request_repaint();
+                    let mut model = if preset.as_ref().is_some_and(|p| p["url"].is_null()) {
+                        Model::spheres()?
+                    } else {
+                        Model::load(&path)?
+                    };
+                    examples::check_cancel(&cancel)?;
+                    if let Some(preset) = preset {
+                        model.0.name = examples::text(&preset, "name").into();
+                        model.1.preset = Some(preset);
+                    }
+                    Ok(model)
+                }))
                 .unwrap_or_else(|_| Err(anyhow::anyhow!("Invalid model data")));
             let _ = send.send(result);
             ctx.request_repaint();
         });
         self.loading = Some(receive);
+        self.load_progress = Some(updates);
     }
-    fn receive_model(&mut self, ctx: &egui::Context) {
+    fn receive_model(&mut self, _ctx: &egui::Context) {
+        if let Some(updates) = &self.load_progress {
+            for message in updates.try_iter() {
+                self.examples.progress = message;
+            }
+        }
         let Some(result) = self.loading.as_ref().and_then(|r| r.try_recv().ok()) else {
             return;
         };
         self.loading = None;
-        if let Some(next) = self.queued_load.take() {
-            self.load(next, ctx);
-            return;
-        }
+        self.examples.progress.clear();
+        self.load_progress = None;
         match result {
             Ok(model) => {
-                let mut camera = Camera::fit(model.0.center, model.0.radius);
-                camera.fov = self.camera.fov;
-                camera.orthographic = self.camera.orthographic;
-                camera.f_stop = self.camera.f_stop;
-                camera.meters_per_unit = self.camera.meters_per_unit;
-                camera.frame(model.0.center, model.0.radius);
+                let camera = model.camera_for_load(&self.camera);
                 if let Some(retired) = self.candidate.replace((model, camera)) {
                     std::thread::spawn(move || drop(retired));
                 }
@@ -568,7 +684,9 @@ impl Viewer {
     }
     fn push_bytes(&mut self, bytes: Arc<Vec<u8>>, size: [u32; 2], held: bool) -> Result<()> {
         let mut settings = render_settings(&self.settings, size, held);
-        settings.aovs = if self.aovs_enabled { 127 } else { 0 };
+        settings.aovs = self.output_mask();
+        let aovs = self.output_mask();
+        let preview_scale = self.preview_resolution_scale(size);
         let target = self.replacement.as_mut().unwrap_or(&mut self.target);
         target.final_render().set_settings(settings)?;
         target
@@ -576,7 +694,9 @@ impl Viewer {
             .preview()
             .unwrap()
             .set_settings(api::RenderSettings {
-                aovs: if self.aovs_enabled { 127 } else { 0 },
+                aovs,
+                aov_samples: 1,
+                size: api::RenderSize::Scale(preview_scale),
                 sampling_pattern: target.final_render().settings()?.sampling_pattern,
                 seed: self.settings.seed,
                 clamping: self.settings.clamping,
@@ -590,8 +710,56 @@ impl Viewer {
         self.error.clear();
         Ok(())
     }
+    fn preview_resolution_scale(&self, size: [u32; 2]) -> f64 {
+        let full = self.resolution.full;
+        if full == [0; 2] {
+            self.preview_scale as f64
+        } else {
+            (full[0] as f64 * self.preview_scale as f64 / size[0] as f64)
+                .min(full[1] as f64 * self.preview_scale as f64 / size[1] as f64)
+                .clamp(0.01, 1.)
+        }
+    }
+    fn output_target_samples(&self) -> u32 {
+        let mask = self.output_mask();
+        if mask == 0 {
+            self.settings.max_samples
+        } else if mask & 31 == 0 {
+            1
+        } else {
+            16
+        }
+    }
+    fn output_mask(&self) -> u32 {
+        match self.display_settings.output {
+            5..=11 => 1 << (self.display_settings.output - 5),
+            _ => 0,
+        }
+    }
+    fn display_samples(&self, render: &api::Render) -> u32 {
+        if self.output_mask() != 0 {
+            render.aov_samples_rendered()
+        } else {
+            render.samples()
+        }
+    }
     fn tick(&mut self, ctx: &egui::Context) -> Result<()> {
         self.receive_textures();
+        if let Some(result) = self.sky.poll(
+            ctx,
+            self.gpu.is_some()
+                && self.environment.name == "Procedural sky"
+                && !self.environment.studio.enabled,
+            self.environment.image.is_none(),
+        ) {
+            match result {
+                Ok(image) => {
+                    self.environment.image = Some(image);
+                    self.dirty(Change::Environment);
+                }
+                Err(e) => self.error = format!("Could not bake sky: {e:#}"),
+            }
+        }
         if self.texture_browser.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -622,6 +790,21 @@ impl Viewer {
                     .map(|target| target.engine.device_loss_notifier()),
             ),
         );
+        let enabled = self.preview_enabled;
+        for target in [Some(&mut self.target), self.replacement.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            let fallback = enabled.then(|| target.render_loop.preview().unwrap().clone());
+            target.final_render().set_fallback(fallback.as_deref())?;
+            target.render_loop.set_select(move |info| {
+                if enabled && info.changing {
+                    api::Selection::Preview
+                } else {
+                    api::Selection::Final
+                }
+            });
+        }
         for target in [Some(&self.target), self.replacement.as_ref()]
             .into_iter()
             .flatten()
@@ -629,22 +812,27 @@ impl Viewer {
             target.activity.lock().unwrap().set_active(held);
             let mut settings = target.final_render().settings()?;
             settings.allow_multiple_samples_per_frame = !held;
-            let aovs = if self.aovs_enabled { 127 } else { 0 };
-            let aovs_changed = settings.aovs != aovs;
+            let aovs = self.output_mask();
             settings.aovs = aovs;
             if let Some(preview) = target.render_loop.preview() {
                 let mut preview_settings = preview.settings()?;
-                let preview_aovs_changed = preview_settings.aovs != aovs;
                 preview_settings.aovs = aovs;
+                preview_settings.aov_samples = 1;
+                preview_settings.size =
+                    api::RenderSize::Scale(self.preview_resolution_scale(self.size));
                 preview.set_settings(preview_settings)?;
-                if preview_aovs_changed {
-                    preview.restart()?;
-                }
             }
             target.final_render().set_settings(settings)?;
-            if aovs_changed {
-                target.final_render().restart()?;
+        }
+        let mut display = display_settings(&self.display_settings);
+        display.aov = self.aov_display;
+        let display_changed = self.applied_display != Some(display);
+        if display_changed {
+            self.target.engine.display().set_settings(display)?;
+            if let Some(replacement) = &self.replacement {
+                replacement.engine.display().set_settings(display)?;
             }
+            self.applied_display = Some(display);
         }
         if let Some((receive, _, _)) = &self.scene_build {
             match receive.try_recv() {
@@ -721,7 +909,8 @@ impl Viewer {
                 // Live preview owns its camera until the filtered image is ready.
                 // This host-side batch collection must also collect inference;
                 // RenderLoop cannot poll it while `holding` skips its tick.
-                let filtered = !self.denoise
+                let filtered = self.output_mask() != 0
+                    || !self.denoise
                     || !preview
                     || !complete
                     || render.samples() == 0
@@ -749,8 +938,15 @@ impl Viewer {
                         .as_ref()
                         .map(|(m, c)| (m.clone(), c.clone()))
                         .unwrap_or_else(|| (self.model.clone(), self.camera.clone()));
-                    let (environment, light, size) =
-                        (self.environment.clone(), self.light.clone(), self.size);
+                    let environment = if candidate.is_some() {
+                        model.environment_for_load(&self.environment)
+                    } else {
+                        self.environment.clone()
+                    };
+                    if candidate.is_some() {
+                        self.pending_environment = Some(environment.clone());
+                    }
+                    let (light, size) = (self.light.clone(), self.size);
                     let mut descriptor = self.descriptor.take();
                     let (send, receive) = std::sync::mpsc::channel();
                     let ctx = ctx.clone();
@@ -773,7 +969,13 @@ impl Viewer {
                     });
                     self.scene_build = Some((receive, candidate, size));
                 }
-                Change::Reset => self.final_render().restart()?,
+                Change::Reset => {
+                    if self.output_mask() != 0 {
+                        self.final_render().restart_aovs()?
+                    } else {
+                        self.final_render().restart()?
+                    }
+                }
                 _ => self.push(held)?,
             }
             self.change = Change::None;
@@ -801,15 +1003,9 @@ impl Viewer {
             self.applied_denoise = Some((denoise, temporal));
             self.denoise_status.clear();
         }
-        let mut display = display_settings(&self.display_settings);
-        display.aov = self.aov_display;
-        let display_changed = self.applied_display != Some(display);
-        if display_changed {
-            self.target.engine.display().set_settings(display)?;
-            if let Some(replacement) = &self.replacement {
-                replacement.engine.display().set_settings(display)?;
-            }
-            self.applied_display = Some(display);
+        self.target.render_loop.coalesce_scene_updates = self.denoise && self.preview_enabled;
+        if let Some(target) = &mut self.replacement {
+            target.render_loop.coalesce_scene_updates = self.denoise && self.preview_enabled;
         }
         let status = if holding {
             ctx.request_repaint_after(Duration::from_millis(1));
@@ -829,7 +1025,8 @@ impl Viewer {
             }
             let preview_done = self.target.render_loop.preview().unwrap().collect()?;
             let final_done = self.final_render().collect()?;
-            let denoised = denoise && self.final_render().denoise_current()?;
+            let denoised =
+                self.output_mask() == 0 && denoise && self.final_render().denoise_current()?;
             if let Some(presented) = self.target.engine.display().present(self.final_render())? {
                 self.present_frame(ctx, presented, presented.fallback)?;
             }
@@ -838,7 +1035,8 @@ impl Viewer {
             }
             // Wait for the batch in flight and the filter, unless denoising failed.
             let render = self.final_render();
-            if denoise
+            if self.output_mask() == 0
+                && denoise
                 && !denoised
                 && render.samples() > 0
                 && render.denoise_report().is_none_or(|r| r.error.is_none())
@@ -868,6 +1066,27 @@ impl Viewer {
             std::thread::spawn(move || drop(retired));
             self.texture_browser.new_model();
             self.camera = camera;
+            if let Some(environment) = self.pending_environment.take() {
+                self.environment = environment;
+            }
+            self.examples.current = self
+                .model
+                .1
+                .preset
+                .as_ref()
+                .map(|p| examples::text(p, "id").to_owned());
+            self.camera_index = if self
+                .model
+                .1
+                .preset
+                .as_ref()
+                .is_some_and(|p| p["category"] == "research")
+                && !self.model.1.cameras.is_empty()
+            {
+                Some(0)
+            } else {
+                None
+            };
             self.selected = self.model.0.meshes[0].material;
             self.selected_mesh = None;
             self.picking_focus = false;
@@ -890,10 +1109,10 @@ impl Viewer {
                         .target
                         .render_loop
                         .presented_render()
-                        .is_some_and(|r| r.samples() > 0);
+                        .is_some_and(|r| self.display_samples(r) > 0);
             }
         }
-        self.samples = self.final_render().samples();
+        self.samples = self.display_samples(self.final_render());
         if !self.target.preparing() {
             self.last_commit_full =
                 self.final_render().last_commit()? == Some(api::CommitKind::Full);
@@ -969,11 +1188,15 @@ impl Viewer {
             // A loop tick can present a completed preview and then commit the
             // next input. Its source is already restarted; retain the CPU copy
             // collected before that commit, just as the GPU texture is retained.
-            if render.samples() == 0 && self.texture.is_some() {
+            if self.display_samples(render) == 0 && self.texture.is_some() {
                 return Ok(());
             }
             let (width, height, rgba) = display.read_rgba8(render)?;
-            let pixels = bottom_first(render.read_pixels(api::PixelKind::Hdr)?);
+            let pixels = if render.samples() > 0 {
+                bottom_first(render.read_pixels(api::PixelKind::Hdr)?)
+            } else {
+                vec![]
+            };
             let image =
                 egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba);
             match &mut self.texture {
@@ -1018,7 +1241,9 @@ impl Viewer {
         Ok(())
     }
     fn can_export(&self) -> bool {
-        !self.preparing() && self.change == Change::None && self.final_render().samples() > 0
+        !self.preparing()
+            && self.change == Change::None
+            && self.display_samples(self.final_render()) > 0
     }
     fn input_files(&mut self, ctx: &egui::Context) {
         let paths = ctx.input(|i| {
@@ -1195,6 +1420,7 @@ impl eframe::App for Viewer {
 }
 impl Drop for Viewer {
     fn drop(&mut self) {
+        self.load_cancel.store(true, Ordering::Relaxed);
         // Renderer teardown can wait for a pending background commit.
         if let Some(gate) = &self.submission_gate {
             gate.resume();

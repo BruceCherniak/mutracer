@@ -18,7 +18,7 @@ impl ViewportDrag {
         &mut self,
         rect: Rect,
         can_start: bool,
-        excluded: Rect,
+        excluded: &[Rect],
         input: &InputState,
     ) -> Vec<(bool, Vec2)> {
         self.click = None;
@@ -32,7 +32,7 @@ impl ViewportDrag {
                     modifiers,
                 } if can_start
                     && rect.contains(pos)
-                    && !excluded.contains(pos)
+                    && !excluded.iter().any(|rect| rect.contains(pos))
                     && self.active.is_none()
                     && matches!(
                         button,
@@ -99,9 +99,7 @@ mod tests {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let rect = Rect::from_min_max(egui::pos2(10., 10.), egui::pos2(300., 300.));
                     let response = ui.interact(rect, ui.id().with("viewport"), egui::Sense::drag());
-                    motion = ui.input(|i| {
-                        drag.motion(rect, response.contains_pointer(), Rect::NOTHING, i)
-                    });
+                    motion = ui.input(|i| drag.motion(rect, response.contains_pointer(), &[], i));
                 });
             },
         );
@@ -138,7 +136,7 @@ mod tests {
             |ui| {
                 let rect = Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(300., 200.));
                 let dock = Rect::from_min_max(egui::pos2(40., 160.), egui::pos2(260., 200.));
-                assert!(ui.input(|i| drag.motion(rect, true, dock, i)).is_empty());
+                assert!(ui.input(|i| drag.motion(rect, true, &[dock], i)).is_empty());
                 assert!(drag.take_click().is_none());
             },
         );

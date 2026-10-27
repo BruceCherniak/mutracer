@@ -1,4 +1,5 @@
 import {packAovScene} from '../../src/renderer/aovScene.js';
+import {AovPrimitiveCache} from '../../src/renderer/AovPrimitiveCache.js';
 import {AovHistory} from '../../src/renderer/aov.js';
 import {decodeCamera} from './camera-core.js';
 /// <reference lib="esnext" />
@@ -212,7 +213,7 @@ export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8
   catch (error) { retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error);}
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  releaseNativeScene(token); releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
+  aovCaches.delete(token); releaseNativeScene(token); releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
@@ -1326,6 +1327,11 @@ export function geometryKernelReference(bytes: Uint8Array, withBounds: number): 
   return encodeGeometryKernelHints(hints,counts);
 }
 
+// Per-retained-scene identity data; camera and rigid transforms do not change
+// primitive correspondence or geometry content signatures.
+const aovCaches = new Map<number, {primitives: AovPrimitiveCache;
+  signatures: Map<Geometry, {version: number; topology: number; value: Uint32Array}>;
+  hardware?: HardwareScene; hardwareIds?: Uint32Array}>();
 /** Snapshot current stable identities and transforms for an independent AOV target. */
 export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array {
   try {
@@ -1333,31 +1339,41 @@ export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array
     if(!state || bytes.byteLength!==136) throw new Error('Invalid AOV request');
     const u=new Uint32Array(bytes.buffer,bytes.byteOffset,2);
     const camera=decodeCamera(bytes.subarray(8));
-    let primitiveIds: Uint32Array | undefined;
+    let cache=aovCaches.get(token);
+    if(!cache){cache={primitives:new AovPrimitiveCache(),signatures:new Map()};aovCaches.set(token,cache);}
+    let primitiveIds: Uint32Array;
     if(state.hardware){
-      primitiveIds=new Uint32Array(state.prepared.geometry.indexArray.length/3);
-      for(const geometry of state.hardware.geometries){
-        for(let t=0;t<geometry.indexCount/3;t++)primitiveIds[geometry.indexOffset/3+t]=t;
+      if(cache.hardware!==state.hardware || !cache.hardwareIds){
+        cache.hardware=state.hardware;
+        cache.hardwareIds=new Uint32Array(state.prepared.geometry.indexArray.length/3);
+        for(const geometry of state.hardware.geometries){
+          for(let t=0;t<geometry.indexCount/3;t++)cache.hardwareIds[geometry.indexOffset/3+t]=t;
+        }
       }
+      primitiveIds=cache.hardwareIds;
+    } else {
+      primitiveIds=cache.primitives.get({blases:state.blases,geometries:state.prepared.geometries},state.tlas);
     }
     const packed=packAovScene({...state.prepared, instances:state.instances, blases:state.blases},state.tlas,camera,u[0],u[1],new AovHistory(),primitiveIds);
     const words=packed.words, floats=new Float32Array(words.buffer);
     floats.set(packed.frame.viewProjection);
     // Content revisions survive full publications. Hash shared geometry once,
     // even when one mesh contributes many linear or packed instances.
-    const geometrySignatures=new Map<Geometry,Uint32Array>();
+    const geometrySignatures=cache.signatures;
+    const currentGeometries=new Set(state.meshes.map(mesh=>mesh.geometry));
+    for(const geometry of geometrySignatures.keys())if(!currentGeometries.has(geometry))geometrySignatures.delete(geometry);
     const objectSignatures=new Map<number,Uint32Array>();
     for(const mesh of state.meshes){
-      let signature=geometrySignatures.get(mesh.geometry);
-      if(!signature){
+      let cached=geometrySignatures.get(mesh.geometry);
+      if(!cached || cached.version!==mesh.geometry.version || cached.topology!==mesh.geometry.topologyVersion){
         let topology=2166136261,vertices=2166136261;
         for(const value of mesh.geometry.indexArray)topology=Math.imul(topology^value,16777619)>>>0;
         const position=new Float32Array(mesh.geometry.position.array);
         for(const value of new Uint32Array(position.buffer))vertices=Math.imul(vertices^value,16777619)>>>0;
-        signature=new Uint32Array([topology,vertices,position.length]);
-        geometrySignatures.set(mesh.geometry,signature);
+        cached={version:mesh.geometry.version,topology:mesh.geometry.topologyVersion,value:new Uint32Array([topology,vertices,position.length])};
+        geometrySignatures.set(mesh.geometry,cached);
       }
-      objectSignatures.set(mesh.aovId,signature);
+      objectSignatures.set(mesh.aovId,cached.value);
     }
     for(let i=0;i<packed.frame.instances.length;i++) {
       const instance=packed.frame.instances[i],offset=52+i*24;

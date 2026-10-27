@@ -131,8 +131,7 @@ fn quaternion(v: &[f32]) -> Result<Quat> {
     Ok(q.normalize())
 }
 fn valid_transform(matrix: Mat4) -> bool {
-    let d = matrix.determinant();
-    matrix.is_finite() && d.is_finite() && d.abs() >= 1e-12
+    crate::scene::invertible_affine(&matrix.to_cols_array())
 }
 impl Animation {
     pub fn load(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Result<Option<Self>> {

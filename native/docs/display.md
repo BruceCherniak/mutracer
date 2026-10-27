@@ -32,7 +32,12 @@ then select the matching `Channel` / `MT_CHANNEL_*` value. A missing render bit
 reports `InvalidState` / `MT_ERROR_INVALID_STATE` on composition, even when a
 custom denoiser requests the same output. An enabled output awaiting sampling
 keeps the current presentation; export reports `InvalidState` until it is ready.
-Selection never enables tracing.
+Selection never enables a missing output. With `RenderLoop::tick` /
+`mt_render_loop_tick`, an enabled AOV channel samples independently of beauty and
+denoising; the loop's progress reports that channel. Direct `Render::refine` and
+`converge` retain their beauty-rendering behavior. ID and Motion use one center
+sample; other AOVs stop at `aov_samples`. Switching back to Final resumes its
+accumulation and retained denoising.
 
 ```rust
 let mut settings = engine.display().settings();

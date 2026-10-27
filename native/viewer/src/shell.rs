@@ -1,5 +1,5 @@
 //! Window chrome and shared Web branding. Keep platform operations in egui.
-use crate::{Change, Viewer, default_model, theme};
+use crate::{Change, Viewer, theme};
 use eframe::egui::{self, Color32, Sense, Stroke};
 use std::sync::OnceLock;
 
@@ -204,15 +204,12 @@ impl Viewer {
                         panel_button(ui, "Toggle scene panel ([)", false, &mut self.scene_open);
                     });
                 });
-                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(180., 32.));
+                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(86., 32.));
                 ui.scope_builder(egui::UiBuilder::new().max_rect(center), |ui| {
                     ui.horizontal_centered(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.;
                         if header_button(ui, "Open…", false, false).clicked() {
                             self.open_model(&ctx);
-                        }
-                        if header_button(ui, "Sample", false, true).clicked() {
-                            self.load(default_model(), &ctx);
                         }
                     });
                 });

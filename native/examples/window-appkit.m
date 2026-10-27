@@ -4,6 +4,9 @@ static NSWindow *nativeWindow;
 void *mt_example_window_create(void) {
   [NSApplication sharedApplication];
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+  // This host pumps events itself instead of calling -run, which normally
+  // completes application launch before the first window is presented.
+  [NSApp finishLaunching];
   nativeWindow=[[NSWindow alloc] initWithContentRect:NSMakeRect(100,100,160,120)
     styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
   [nativeWindow setReleasedWhenClosed:NO];

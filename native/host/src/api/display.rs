@@ -692,6 +692,11 @@ impl Display {
         let result = (|| {
             let composed = self.compose(render, false)?.unwrap();
             let state = self.engine.live()?;
+            if composed.settings.channel.aov_kind().is_some() {
+                let rgba = crate::display::read_image(&self.engine.inner.gpu, &composed.texture)
+                    .map_err(|e| error(Status::Error, e.to_string()))?;
+                return Ok((composed.presented.width, composed.presented.height, rgba));
+            }
             let capture = Self::complete(&state, composed.id)?;
             let rgba = if composed.premultiplied {
                 capture.read_rgba(&composed.settings.composition())

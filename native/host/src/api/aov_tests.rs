@@ -1169,3 +1169,322 @@ fn aov_pipeline_failure_returns_an_error_and_preserves_beauty() {
     assert_eq!(before, render.read_pixels(PixelKind::Hdr).unwrap().data);
     println!("Beauty remains byte-identical and usable after the AOV pipeline attempt");
 }
+
+#[test]
+#[ignore = "requires real GPU"]
+fn display_only_aovs_preserve_beauty_and_filter_and_export_without_beauty() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = aov_engine(aov_test_backend());
+    engine.display().set_size(24, 16).unwrap();
+    engine.set_scene(&tests::lit_scene()).unwrap();
+    let mut loop_ = RenderLoop::new(
+        &engine,
+        RenderLoopOptions {
+            preview: None,
+            final_render: LoopRender::Settings(RenderSettings {
+                max_samples: 4,
+                aov_samples: 3,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let render = loop_.final_render().clone();
+    // Auxiliary-only startup must export without dispatching a beauty sample.
+    for channel in [
+        Channel::Depth,
+        Channel::Position,
+        Channel::Roughness,
+        Channel::DiffuseAlbedo,
+        Channel::SpecularAlbedo,
+        Channel::Id,
+        Channel::Motion,
+    ] {
+        let kind = channel.aov_kind().unwrap();
+        let mut settings = render.settings().unwrap();
+        settings.aovs = kind.aov_mask();
+        render.set_settings(settings).unwrap();
+        let mut settings = engine.display().settings();
+        settings.channel = channel;
+        engine.display().set_settings(settings).unwrap();
+        for _ in 0..2000 {
+            if loop_.tick().unwrap() == RenderLoopStatus::Finished {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(loop_.status(), RenderLoopStatus::Finished, "{channel:?}");
+        assert_eq!(render.samples(), 0, "{channel:?} advanced beauty");
+        assert_eq!(
+            render.aov_samples_rendered(),
+            if kind.aov_mask() & 31 == 0 { 1 } else { 3 }
+        );
+        assert_eq!(
+            engine.display().read_rgba8(&render).unwrap().2.len(),
+            24 * 16 * 4
+        );
+        assert!(
+            render
+                .get_output_texture(OutputKind::Display)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            render
+                .get_output_texture(OutputKind::Hdr)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!loop_.needs_tick());
+        if channel == Channel::Motion {
+            let image = render.read_pixels(PixelKind::Motion).unwrap();
+            assert!(
+                image
+                    .data
+                    .chunks_exact(4)
+                    .all(|p| p[0].abs() < 1e-5 && p[1].abs() < 1e-5)
+            );
+        }
+    }
+    let mut display = engine.display().settings();
+    display.channel = Channel::Final;
+    engine.display().set_settings(display).unwrap();
+    let mut settings = render.settings().unwrap();
+    settings.aovs = 0;
+    render.set_settings(settings).unwrap();
+    render
+        .set_denoiser(Some(DenoiserOptions {
+            backend: 5,
+            schedule: DenoiseSchedule::Converged,
+            ..Default::default()
+        }))
+        .unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let hdr = render.read_pixels(PixelKind::Hdr).unwrap().data;
+    let filtered = render.read_pixels(PixelKind::Denoised).unwrap().data;
+    for channel in [
+        Channel::Depth,
+        Channel::Id,
+        Channel::Position,
+        Channel::Final,
+    ] {
+        let mut settings = render.settings().unwrap();
+        settings.aovs = channel.aov_kind().map_or(0, |k| k.aov_mask());
+        render.set_settings(settings).unwrap();
+        let mut display = engine.display().settings();
+        display.channel = channel;
+        engine.display().set_settings(display).unwrap();
+        for _ in 0..2000 {
+            if loop_.tick().unwrap() == RenderLoopStatus::Finished {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(render.samples(), 4);
+        assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap().data, hdr);
+        assert_eq!(
+            render.read_pixels(PixelKind::Denoised).unwrap().data,
+            filtered
+        );
+        assert_eq!(render.denoise_report().unwrap().samples, 4);
+        render.restart_aovs().unwrap();
+        assert_eq!(render.aov_samples_rendered(), 0);
+        assert_eq!(render.samples(), 4);
+        assert_eq!(
+            render.read_pixels(PixelKind::Denoised).unwrap().data,
+            filtered
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn display_motion_settles_without_a_final_input_edit_or_beauty_sample() {
+    use std::sync::{Arc, Mutex};
+    struct Activity(SyncActivity);
+    impl LoopSync for Activity {
+        fn update(&mut self) {}
+        fn activity(&self) -> &SyncActivity {
+            &self.0
+        }
+        fn activity_mut(&mut self) -> &mut SyncActivity {
+            &mut self.0
+        }
+    }
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = aov_engine(aov_test_backend());
+    engine.display().set_size(24, 16).unwrap();
+    engine.set_scene(&tests::lit_scene()).unwrap();
+    let activity: SharedSync = Arc::new(Mutex::new(Activity(Default::default())));
+    let settings = RenderSettings {
+        aovs: 64,
+        max_samples: 4,
+        ..Default::default()
+    };
+    let mut loop_ = RenderLoop::new(
+        &engine,
+        RenderLoopOptions {
+            preview: None,
+            final_render: LoopRender::Settings(settings),
+            idle_ms: 0.,
+            syncs: vec![activity.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let render = loop_.final_render().clone();
+    let mut display = engine.display().settings();
+    display.channel = Channel::Motion;
+    engine.display().set_settings(display).unwrap();
+    let mut camera = Camera::default();
+    camera.world_matrix = glam::Mat4::from_translation(glam::Vec3::new(0., 0., 3.)).to_cols_array();
+    engine.set_camera(Some(camera)).unwrap();
+    for _ in 0..2000 {
+        if loop_.tick().unwrap() == RenderLoopStatus::Finished {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    activity.lock().unwrap().set_active(true);
+    camera.world_matrix[12] = 0.2;
+    engine.set_camera(Some(camera)).unwrap();
+    for _ in 0..2000 {
+        if loop_.tick().unwrap() == RenderLoopStatus::Finished {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let moving = render.read_pixels(PixelKind::Motion).unwrap();
+    assert!(
+        moving
+            .data
+            .chunks_exact(4)
+            .any(|p| p[3] > 0. && p[0].abs() > 1e-3),
+        "No valid moving history"
+    );
+    activity.lock().unwrap().set_active(false);
+    loop_.tick().unwrap();
+    let still = render.read_pixels(PixelKind::Motion).unwrap();
+    assert!(
+        still
+            .data
+            .chunks_exact(4)
+            .all(|p| p[0].abs() < 1e-5 && p[1].abs() < 1e-5)
+    );
+    assert!(
+        still.data.chunks_exact(4).any(|p| p[3] > 0.),
+        "Stationary history became invalid"
+    );
+    assert_eq!(render.samples(), 0);
+    assert_eq!(render.aov_samples_rendered(), 1);
+    assert!(!loop_.needs_tick());
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn aov_targets_use_the_requested_sampling_variant_and_reuse_it() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let backend = aov_test_backend();
+    let descriptor = tests::lit_scene();
+    let camera_offset = u32::from_le_bytes(
+        descriptor[crate::layout::header::CAMERA_OFFSET * 4
+            ..crate::layout::header::CAMERA_OFFSET * 4 + 4]
+            .try_into()
+            .unwrap(),
+    ) as usize
+        * 4;
+    let mut expected = vec![];
+    for pattern in [
+        SamplingPattern::Sobol,
+        SamplingPattern::ZSobol,
+        SamplingPattern::Random,
+    ] {
+        let settings = RenderSettings {
+            sampling_pattern: pattern,
+            max_samples: 4,
+            aovs: 1,
+            aov_samples: 4,
+            ..Default::default()
+        };
+        let raw_settings = settings.l0(settings.sample_cap(4), 0);
+        let mut handle = 0;
+        let mut error = [0i8; 1024];
+        assert_eq!(
+            unsafe {
+                crate::context::mt_context_create_with_backend(
+                    backend as u32,
+                    &mut handle,
+                    error.as_mut_ptr(),
+                    error.len(),
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                crate::context::mt_context_commit_with_settings(
+                    handle,
+                    descriptor.as_ptr(),
+                    descriptor.len(),
+                    &raw_settings,
+                    error.as_mut_ptr(),
+                    error.len(),
+                )
+            },
+            0
+        );
+        let image = {
+            let query = crate::context::aov_query(handle).unwrap();
+            let words = query
+                .metadata(&descriptor[camera_offset..camera_offset + 128])
+                .unwrap();
+            let mut output = crate::aov::Output::new(&query, 1, &words, None).unwrap();
+            output.render(&query, 4, 1).unwrap();
+            output.read(4).unwrap().data
+        };
+        expected.push(image);
+        assert_eq!(
+            unsafe { crate::context::mt_context_destroy(handle, error.as_mut_ptr(), error.len()) },
+            0
+        );
+    }
+    assert_ne!(
+        expected[0], expected[2],
+        "Fixture must distinguish sampling patterns"
+    );
+    let engine = aov_engine(backend);
+    engine.display().set_size(16, 12).unwrap();
+    engine.set_scene(&descriptor).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 4,
+            aovs: 1,
+            aov_samples: 4,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for index in [0, 1, 2, 1, 0] {
+        let mut settings = render.settings().unwrap();
+        settings.sampling_pattern = [
+            SamplingPattern::Sobol,
+            SamplingPattern::ZSobol,
+            SamplingPattern::Random,
+        ][index];
+        render.set_settings(settings).unwrap();
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        let actual = render.read_pixels(PixelKind::Depth).unwrap().data;
+        let mismatches = actual
+            .iter()
+            .zip(&expected[index])
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(
+            mismatches, 0,
+            "Target sampling pattern {index} differs from a freshly prepared scene"
+        );
+    }
+}

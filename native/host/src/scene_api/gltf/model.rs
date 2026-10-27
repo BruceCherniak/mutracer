@@ -586,7 +586,7 @@ impl Model {
         );
         let transform = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
         ensure!(
-            transform.is_finite() && transform.determinant().abs() >= 1e-12,
+            crate::scene::invertible_affine(&transform.to_cols_array()),
             "Node transform must be finite and invertible"
         );
         if let Some(mesh) = node.mesh() {
@@ -850,7 +850,7 @@ impl Model {
                 for (instance, local) in instances.into_iter().enumerate() {
                     let matrix = transform * local;
                     ensure!(
-                        matrix.is_finite() && matrix.determinant().abs() >= 1e-12,
+                        crate::scene::invertible_affine(&matrix.to_cols_array()),
                         "Invalid instance transform"
                     );
                     self.node_names.push(node.name().unwrap_or("").into());

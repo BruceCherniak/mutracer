@@ -649,6 +649,12 @@ pub(super) struct RenderState {
     adaptive: Adaptive,
 }
 impl RenderState {
+    pub(super) fn aov_samples_for_display(&self) -> u32 {
+        self.aov.as_ref().map_or(0, |a| a.samples)
+    }
+    pub(super) fn published_size(&self) -> [u32; 2] {
+        self.published.as_ref().map_or([0; 2], |k| k.size)
+    }
     pub(super) fn visualize_aov(
         &mut self,
         kind: PixelKind,
@@ -661,7 +667,9 @@ impl RenderState {
                 "AOV is not enabled on the selected render",
             ));
         }
-        if self.capture_key != self.published || self.needs_capture {
+        if self.aov.as_ref().is_none_or(|a| {
+            a.generation != self.input_generation || a.samples == 0 || a.mask & kind.aov_mask() == 0
+        }) {
             return Err(error(
                 Status::InvalidState,
                 "AOV for the captured image is not ready",
@@ -825,6 +833,35 @@ fn cancel_denoise(render: &mut RenderState) {
 pub(super) struct Readiness {
     pub(super) complete: bool,
     pub(super) presentable: bool,
+}
+fn aov_samples(render: &RenderState, mask: u32, scene: u64, camera: u64) -> u32 {
+    if !render.current(scene, camera) || render.settings.aovs & mask == 0 {
+        return 0;
+    }
+    render
+        .aov
+        .as_ref()
+        .filter(|a| a.generation == render.input_generation && a.mask & mask != 0)
+        .map_or(0, |a| a.samples)
+}
+pub(super) fn display_readiness(state: &State, id: u64) -> Readiness {
+    if let Some(kind) = state.display.settings.channel.aov_kind() {
+        let complete = !state.device_failed
+            && state.renders.get(&id).is_some_and(|r| {
+                aov_samples(
+                    r,
+                    kind.aov_mask(),
+                    state.scene_revision,
+                    state.camera_revision,
+                ) > 0
+            });
+        Readiness {
+            complete,
+            presentable: complete,
+        }
+    } else {
+        readiness(state, id)
+    }
 }
 pub(super) fn readiness(state: &State, id: u64) -> Readiness {
     if state.device_failed {
@@ -1341,12 +1378,19 @@ fn update_aovs(render: &mut RenderState) -> Result<()> {
     if render.samples == 0 {
         return Ok(());
     }
+    render_aovs(
+        render,
+        mask,
+        render.samples.min(render.settings.aov_samples),
+    )
+}
+fn render_aovs(render: &mut RenderState, mask: u32, samples: u32) -> Result<()> {
     let query =
         context::aov_query(render.context).map_err(|e| error(Status::Error, e.to_string()))?;
     if render
         .aov
         .as_ref()
-        .is_none_or(|a| a.generation != render.input_generation)
+        .is_none_or(|a| a.generation != render.input_generation || a.mask != mask)
     {
         let words = query
             .metadata(&render.aov_camera)
@@ -1360,11 +1404,7 @@ fn update_aovs(render: &mut RenderState) -> Result<()> {
         .aov
         .as_mut()
         .unwrap()
-        .render(
-            &query,
-            render.samples.min(render.settings.aov_samples),
-            mask,
-        )
+        .render(&query, samples, mask)
         .map_err(|e| error(Status::Error, e.to_string()))
 }
 /// Polls the batch and accounts completed samples.
@@ -2021,8 +2061,126 @@ impl Render {
         &self.engine
     }
     /// Browser `_complete`: a captured image of the current inputs.
+    #[cfg(test)]
     pub(super) fn complete(&self) -> bool {
         readiness(&self.engine.lock(), self.id).complete
+    }
+    pub(super) fn display_complete(&self) -> bool {
+        display_readiness(&self.engine.lock(), self.id).complete
+    }
+    pub(super) fn display_samples(&self) -> u32 {
+        self.get(|state, r| {
+            if let Some(kind) = state.display.settings.channel.aov_kind() {
+                aov_samples(
+                    r,
+                    kind.aov_mask(),
+                    state.scene_revision,
+                    state.camera_revision,
+                )
+            } else if r.current(state.scene_revision, state.camera_revision) {
+                r.samples
+            } else {
+                0
+            }
+        })
+        .unwrap_or(0)
+    }
+    pub(super) fn display_finished(&self) -> bool {
+        self.get(|state, r| {
+            if let Some(kind) = state.display.settings.channel.aov_kind() {
+                aov_samples(
+                    r,
+                    kind.aov_mask(),
+                    state.scene_revision,
+                    state.camera_revision,
+                ) >= if kind.aov_mask() & 31 == 0 {
+                    1
+                } else {
+                    r.settings.aov_samples
+                }
+            } else {
+                r.current(state.scene_revision, state.camera_revision)
+                    && r.status == RenderStatus::Finished
+            }
+        })
+        .unwrap_or(false)
+    }
+    pub(super) fn refine_display(&self, stationary: bool) -> Result<RenderStatus> {
+        let channel = self.engine.lock().display.settings.channel;
+        let Some(kind) = channel.aov_kind() else {
+            return self.refine();
+        };
+        self.engine.poll_device();
+        self.with(|state, id| {
+            let Some(key) = desired(state, &state.renders[&id]) else {
+                return Ok(RenderStatus::Idle);
+            };
+            if !commit(state, id, key, false)? {
+                return Ok(if state.renders[&id].error {
+                    RenderStatus::Error
+                } else if state.gpu.compilation.active.load(Ordering::Acquire) > 0 {
+                    RenderStatus::Compiling
+                } else {
+                    RenderStatus::Preparing
+                });
+            }
+            // Finish previously dispatched beauty work; auxiliary display never
+            // dispatches more beauty samples or starts another denoising job.
+            if !collect(state, id)? {
+                return Ok(RenderStatus::Converging);
+            }
+            let r = state.renders.get_mut(&id).unwrap();
+            let mask = kind.aov_mask();
+            if r.settings.aovs & mask == 0 {
+                return Err(error(Status::InvalidState, "Displayed AOV is not enabled"));
+            }
+            let target = if mask & 31 == 0 {
+                1
+            } else {
+                r.settings.aov_samples
+            };
+            let count = r
+                .aov
+                .as_ref()
+                .filter(|a| a.generation == r.input_generation && a.mask == mask)
+                .map_or(0, |a| a.samples);
+            if count < target {
+                let started = Instant::now();
+                render_aovs(r, mask, (count + 1).min(target))?;
+                if stationary && kind == PixelKind::Motion {
+                    let query = context::aov_query(r.context)
+                        .map_err(|e| error(Status::Error, e.to_string()))?;
+                    r.aov
+                        .as_mut()
+                        .unwrap()
+                        .settle_motion(&query)
+                        .map_err(|e| error(Status::Error, e.to_string()))?;
+                }
+                r.output.invalidate();
+                state.sample_events.push((
+                    id,
+                    SampleEvent {
+                        samples: count + 1,
+                        is_first_frame: count == 0,
+                        frame_time_ms: started.elapsed().as_secs_f64() * 1000.,
+                    },
+                ));
+            } else if stationary && kind == PixelKind::Motion {
+                let query = context::aov_query(r.context)
+                    .map_err(|e| error(Status::Error, e.to_string()))?;
+                r.aov
+                    .as_mut()
+                    .unwrap()
+                    .settle_motion(&query)
+                    .map_err(|e| error(Status::Error, e.to_string()))?;
+                r.output.invalidate();
+            }
+            Ok(if count + 1 >= target {
+                RenderStatus::Finished
+            } else {
+                RenderStatus::Converging
+            })
+        })
     }
     pub(super) fn fallback_id(&self) -> Option<u64> {
         self.get(|_, r| r.fallback).flatten()
@@ -2067,9 +2225,7 @@ impl Render {
                 render.adaptive.frame = None;
                 render.adaptive.fast_frames = 0;
             }
-            if settings.aovs != render.settings.aovs
-                || settings.aov_samples < render.settings.aov_samples
-            {
+            if settings.aov_samples < render.settings.aov_samples {
                 render.aov = None;
             }
             render.settings = settings;
@@ -2440,7 +2596,8 @@ impl Render {
         Ok(ConvergeResult { samples: target })
     }
     /// Borrows an output texture without CPU readback or waiting for another sample.
-    /// `None` before a complete captured image; Display also needs a previous compose.
+    /// `None` before a complete image; Display also needs a previous compose.
+    /// A composed auxiliary image does not require a beauty sample.
     /// HDR resolves lazily and is independent of denoising. Textures support
     /// TEXTURE_BINDING and COPY_SRC; HDR is unfilterable unless the host enabled
     /// float32 filtering. Do not retain, write or destroy the handle. It is valid
@@ -2452,6 +2609,18 @@ impl Render {
                     Status::InvalidState,
                     "Display composition is already running",
                 ));
+            }
+            if kind == super::OutputKind::Display
+                && state.display.settings.channel.aov_kind().is_some()
+            {
+                if !display_readiness(state, id).complete {
+                    return Ok(None);
+                }
+                return Ok(state.renders[&id]
+                    .output
+                    .latest
+                    .as_ref()
+                    .and_then(|(_, image)| image.clone()));
             }
             if !readiness(state, id).complete {
                 return Ok(None);
@@ -2582,6 +2751,16 @@ impl Render {
             Ok(render.samples > 0 && denoised_samples(render) == render.samples)
         })
     }
+    /// Discards this render's auxiliary samples without changing beauty or
+    /// denoising. The next auxiliary RenderLoop tick samples them again.
+    pub fn restart_aovs(&self) -> Result<()> {
+        self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            render.aov = None;
+            render.output.invalidate();
+            Ok(())
+        })
+    }
     /// Discards only this render's accumulation and denoised image.
     pub fn restart(&self) -> Result<()> {
         self.with(|state, id| {
@@ -2611,7 +2790,20 @@ impl Render {
             Ok(())
         })
     }
-    /// Complete samples of the current inputs; 0 while preparing or stale.
+    /// Complete samples of the enabled auxiliary outputs for the current scene
+    /// and camera. Default 0; independent of beauty samples and denoising.
+    pub fn aov_samples_rendered(&self) -> u32 {
+        self.get(|state, r| {
+            aov_samples(
+                r,
+                r.settings.aovs,
+                state.scene_revision,
+                state.camera_revision,
+            )
+        })
+        .unwrap_or(0)
+    }
+    /// Complete beauty samples of the current inputs; 0 while preparing or stale.
     pub fn samples(&self) -> u32 {
         self.get(|state, r| {
             if r.current(state.scene_revision, state.camera_revision) {
@@ -2754,7 +2946,8 @@ impl Render {
     pub fn denoising(&self) -> bool {
         self.get(|_, r| r.denoise.worker.is_some()).unwrap_or(false)
     }
-    /// Subscribes to completed batches of this render.
+    /// Subscribes to completed batches of this render, including auxiliary
+    /// batches when RenderLoop displays an enabled AOV channel.
     pub fn on_sample(&self, listener: impl FnMut(&SampleEvent) + Send + 'static) -> Subscription {
         self.engine.on_sample(self.id, listener)
     }

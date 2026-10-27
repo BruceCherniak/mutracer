@@ -34,6 +34,16 @@ This runtime is not part of the npm library.
 
 The viewer uses the native SDK glTF importer; see its [codec notices](../THIRD_PARTY_NOTICES.md#native-gltf-codecs).
 
+## Example downloads and EXR environments
+
+Example models and thumbnails are downloaded on demand and retain the licenses
+and attribution linked in each catalog entry; they are not bundled with the app.
+URL resolution uses [url 2.5.8](https://github.com/servo/rust-url) under
+MIT/Apache-2.0. EXR environments use
+[exr 1.74.2](https://github.com/johannesvollmer/exrs) and its decoding dependencies.
+Their copyright notices and selected license texts accompany the app in
+[EXR-Downloads.txt](./LICENSES/EXR-Downloads.txt).
+
 ## Poly Haven texture downloads
 
 The viewer downloads CC0 textures from [Poly Haven](https://polyhaven.com/textures).

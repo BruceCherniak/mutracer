@@ -10,7 +10,11 @@ impl Viewer {
         self.titlebar(root);
         self.inspector_rail(root);
         if self.inspector_open {
-            self.inspector(root);
+            if self.tab == 5 {
+                self.examples_panel(root);
+            } else {
+                self.inspector(root);
+            }
         }
         // Narrow windows keep the viewport usable; hiding the inspector makes room for the list.
         if self.scene_open && root.available_width() > 600. {
@@ -18,6 +22,7 @@ impl Viewer {
         }
         self.texture_browser_panel(root);
         self.viewport(root);
+
         let grip = crate::shell::resize_grip(root);
         if self.startup_smoke.is_some() {
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("smoke-grip"), grip));
@@ -37,6 +42,11 @@ impl Viewer {
             }
         }
     }
+    fn toggle_inspector_tab(&mut self, tab: usize) {
+        let active = self.inspector_open && self.tab == tab;
+        self.inspector_open = !active;
+        self.tab = tab;
+    }
     fn inspector_rail(&mut self, root: &mut egui::Ui) {
         egui::Panel::right("inspector_rail")
             .exact_size(60.)
@@ -47,20 +57,37 @@ impl Viewer {
                 ui.spacing_mut().button_padding.x = 2.;
                 use controls::Icon;
                 for (tab, name, icon) in [
+                    (5, "Examples", Icon::Examples),
                     (2, "Lighting", Icon::Lighting),
                     (1, "Material", Icon::Material),
                     (4, "Camera", Icon::Camera),
                     (0, "Render", Icon::Render),
                     (3, "Object", Icon::Object),
                 ] {
-                    if controls::category(ui, name, icon, self.inspector_open && self.tab == tab)
-                        .clicked()
-                    {
-                        self.inspector_open = !(self.inspector_open && self.tab == tab);
-                        self.tab = tab;
+                    let selected = self.inspector_open && self.tab == tab;
+                    if controls::category(ui, name, icon, selected).clicked() {
+                        self.toggle_inspector_tab(tab);
                     }
                 }
             });
+    }
+    fn examples_panel(&mut self, root: &mut egui::Ui) {
+        let ctx = root.ctx().clone();
+        let mut chosen = None;
+        egui::Panel::right("examples")
+            .resizable(true)
+            .default_size(360.)
+            .min_size(290.)
+            .max_size(540.)
+            .show_separator_line(false)
+            .frame(theme::panel().inner_margin(12))
+            .show(root, |ui| {
+                ui.heading("Examples");
+                chosen = self.examples.contents(ui);
+            });
+        if let Some(id) = chosen {
+            self.load_preset(&id, &ctx);
+        }
     }
     fn scene_panel(&mut self, root: &mut egui::Ui) {
         egui::Panel::left("scene")
@@ -290,83 +317,6 @@ impl Viewer {
                 ui.weak(&self.denoise_status);
             }
         });
-        controls::section_open(ui, "Output", false, |ui| {
-            controls::toggle(ui, "AOV channels", &mut self.aovs_enabled);
-            if !self.aovs_enabled && self.display_settings.output >= 5 {
-                self.display_settings.output = 0;
-            }
-            let channels = [
-                (0, "Final"),
-                (1, "Normal"),
-                (2, "Albedo"),
-                (5, "Depth"),
-                (6, "Position"),
-                (7, "Roughness"),
-                (8, "Diffuse reflectance"),
-                (9, "Specular reflectance"),
-                (10, "ID"),
-                (11, "Motion"),
-            ];
-            let label = channels
-                .iter()
-                .find(|(v, _)| *v == self.display_settings.output)
-                .map_or("Final", |(_, label)| *label);
-            controls::select(ui, "Channel", label, |ui| {
-                for (mode, name) in channels {
-                    if mode < 5 || self.aovs_enabled {
-                        ui.selectable_value(&mut self.display_settings.output, mode, name);
-                    }
-                }
-            });
-            if self.aovs_enabled {
-                ui.weak("Adds surface tracing and GPU memory.");
-                match self.display_settings.output {
-                    5 => {
-                        controls::scalar(
-                            ui,
-                            "Depth range",
-                            &mut self.aov_display.depth_range[1],
-                            0.01..=10000.,
-                        );
-                    }
-                    6 => {
-                        controls::scalar(
-                            ui,
-                            "Position scale",
-                            &mut self.aov_display.position_scale,
-                            0.001..=10000.,
-                        );
-                    }
-                    11 => {
-                        controls::scalar(
-                            ui,
-                            "Motion scale",
-                            &mut self.aov_display.motion_scale,
-                            0.01..=1000.,
-                        );
-                    }
-                    10 => {
-                        let components = [
-                            (api::AovIdComponent::Object, "Object"),
-                            (api::AovIdComponent::Instance, "Instance"),
-                            (api::AovIdComponent::Material, "Material"),
-                            (api::AovIdComponent::Primitive, "Primitive"),
-                        ];
-                        let label = components[self.aov_display.id_component as usize].1;
-                        controls::select(ui, "ID component", label, |ui| {
-                            for (value, name) in components {
-                                ui.selectable_value(
-                                    &mut self.aov_display.id_component,
-                                    value,
-                                    name,
-                                );
-                            }
-                        });
-                    }
-                    _ => {}
-                }
-            }
-        });
         controls::section(ui, "Device", |ui| {
             let old = self.backend;
             controls::select(
@@ -384,6 +334,167 @@ impl Viewer {
             }
             ui.weak(&self.backend_status);
         });
+    }
+    fn debug_overlay(&mut self, ctx: &egui::Context, viewport: egui::Rect) -> egui::Rect {
+        egui::Area::new(egui::Id::new("debug-overlay"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(viewport.left_top() + egui::vec2(10., 10.))
+            .show(ctx, |ui| {
+                theme::panel().inner_margin(10).show(ui, |ui| {
+                    ui.set_width(if self.debug_open { 270. } else { 150. });
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(if self.debug_open {
+                                "Debug −"
+                            } else {
+                                "Debug +"
+                            })
+                            .clicked()
+                        {
+                            self.debug_open = !self.debug_open;
+                            let path = crate::examples::cache_root();
+                            let _ = std::fs::create_dir_all(&path);
+                            let _ = std::fs::write(
+                                path.join("debug.json"),
+                                self.debug_open.to_string(),
+                            );
+                        }
+                        let times = self.target.sample_times.lock().unwrap();
+                        ui.small(
+                            times
+                                .back()
+                                .map(|v| format!("{v:.1} ms"))
+                                .unwrap_or_else(|| "– ms".into()),
+                        );
+                    });
+                    let times = self.target.sample_times.lock().unwrap().clone();
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 22.),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter()
+                        .rect_filled(rect, 0, egui::Color32::from_white_alpha(14));
+                    let mut sorted: Vec<_> = times.iter().copied().collect();
+                    sorted.sort_by(f64::total_cmp);
+                    let max = sorted.get(sorted.len() / 2).copied().unwrap_or(1.).max(1.) * 1.35;
+                    for (i, v) in times.iter().rev().enumerate() {
+                        let x = rect.right() - (i + 1) as f32 * 3.;
+                        if x < rect.left() {
+                            break;
+                        }
+                        let height = (*v / max).clamp(0., 1.) as f32 * rect.height();
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(x, rect.bottom() - height.max(1.)),
+                                egui::pos2(x + 2., rect.bottom()),
+                            ),
+                            0,
+                            theme::TEXT,
+                        );
+                    }
+                    if self.debug_open {
+                        let channels = [
+                            (0, "Final"),
+                            (1, "Normal"),
+                            (2, "Albedo"),
+                            (5, "Depth"),
+                            (6, "Position"),
+                            (7, "Roughness"),
+                            (8, "Diffuse reflectance"),
+                            (9, "Specular reflectance"),
+                            (10, "ID"),
+                            (11, "Motion"),
+                        ];
+                        let label = channels
+                            .iter()
+                            .find(|(v, _)| *v == self.display_settings.output)
+                            .map_or("Final", |(_, label)| *label);
+                        controls::select(ui, "Output", label, |ui| {
+                            for (mode, name) in channels {
+                                ui.selectable_value(&mut self.display_settings.output, mode, name);
+                            }
+                        });
+                        {
+                            match self.display_settings.output {
+                                5 => {
+                                    controls::scalar(
+                                        ui,
+                                        "Depth range",
+                                        &mut self.aov_display.depth_range[1],
+                                        0.01..=10000.,
+                                    );
+                                }
+                                6 => {
+                                    controls::scalar(
+                                        ui,
+                                        "Position scale",
+                                        &mut self.aov_display.position_scale,
+                                        0.001..=10000.,
+                                    );
+                                }
+                                11 => {
+                                    controls::scalar(
+                                        ui,
+                                        "Motion scale",
+                                        &mut self.aov_display.motion_scale,
+                                        0.01..=1000.,
+                                    );
+                                }
+                                10 => {
+                                    let components = [
+                                        (api::AovIdComponent::Object, "Object"),
+                                        (api::AovIdComponent::Instance, "Instance"),
+                                        (api::AovIdComponent::Material, "Material"),
+                                        (api::AovIdComponent::Primitive, "Primitive"),
+                                    ];
+                                    let label =
+                                        components[self.aov_display.id_component as usize].1;
+                                    controls::select(ui, "ID component", label, |ui| {
+                                        for (value, name) in components {
+                                            ui.selectable_value(
+                                                &mut self.aov_display.id_component,
+                                                value,
+                                                name,
+                                            );
+                                        }
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        controls::toggle(ui, "Interactive preview", &mut self.preview_enabled);
+                        if self.preview_enabled {
+                            controls::scalar(
+                                ui,
+                                "Max preview scale",
+                                &mut self.preview_scale,
+                                0.25..=1.,
+                            );
+                        }
+                        ui.separator();
+                        let diagnostics = self.target.engine.diagnostics();
+                        ui.small(format!(
+                            "{} · {}",
+                            diagnostics.info.adapter_name, self.backend_status
+                        ));
+                        ui.small(format!(
+                            "Drawing buffer  {} × {}",
+                            self.pixel_size[0], self.pixel_size[1]
+                        ));
+                        ui.small(format!(
+                            "Shader cache  {} variants · {} hits",
+                            diagnostics.cached_pipelines, diagnostics.pipeline_cache_hits
+                        ));
+                        ui.small(format!("Textures  {}", self.model.textures.len()));
+                        if self.denoise {
+                            ui.weak("Live denoise also runs while interacting.");
+                        }
+                    }
+                });
+            })
+            .response
+            .rect
     }
     fn material_settings(&mut self, ui: &mut egui::Ui) {
         if let Some(id) = self.selected_mesh {
@@ -834,17 +945,34 @@ impl Viewer {
                             .pick_file()
                         {
                             match self.environment.load(&path) {
-                                Ok(()) => changed = true,
+                                Ok(()) => {
+                                    self.environment.model_lighting = false;
+                                    changed = true;
+                                }
                                 Err(e) => self.error = format!("Could not load environment: {e:#}"),
                             }
                         }
                     }
-                    if controls::button(ui, "Built-in").clicked() {
+                    if self.model.1.available && controls::button(ui, "Scene lighting").clicked() {
+                        self.environment = self.model.environment_for_load(&self.environment);
+                        changed = true;
+                    }
+                    if controls::button(ui, "Procedural sky").clicked() {
+                        self.environment.model_lighting = false;
                         self.environment.image = None;
+                        self.environment.color = [1.; 3];
                         self.environment.name = Environment::default().name;
+                        self.sky.invalidate();
                         changed = true;
                     }
                 });
+                if self.environment.name == "Procedural sky" {
+                    controls::parameter(
+                        ui,
+                        "Time of day",
+                        controls::Scrub::new(&mut self.sky.time, 5.5..=18.5).suffix(" h"),
+                    );
+                }
                 changed |= controls::parameter(
                     ui,
                     "Intensity",
@@ -1022,6 +1150,26 @@ impl Viewer {
     fn camera_settings(&mut self, ui: &mut egui::Ui) {
         let mut changed = false;
         controls::section(ui, "View", |ui| {
+            if !self.model.1.cameras.is_empty() {
+                let previous = self.camera_index;
+                let label = self
+                    .camera_index
+                    .and_then(|i| self.model.1.cameras.get(i))
+                    .map(|v| v.name.as_str())
+                    .unwrap_or("Orbit camera");
+                controls::select(ui, "Camera", label, |ui| {
+                    ui.selectable_value(&mut self.camera_index, None, "Orbit camera");
+                    for (i, view) in self.model.1.cameras.iter().enumerate() {
+                        ui.selectable_value(&mut self.camera_index, Some(i), &view.name);
+                    }
+                });
+                if previous != self.camera_index {
+                    if let Some(index) = self.camera_index {
+                        self.model.1.cameras[index].apply(&mut self.camera, self.model.center);
+                    }
+                    changed = true;
+                }
+            }
             let before = self.camera.orthographic;
             controls::segmented(
                 ui,
@@ -1160,6 +1308,65 @@ impl Viewer {
                 let available = ui.available_size();
                 self.update_resolution(&ctx, available);
                 let dock_rect = self.render_dock(&ctx, ui.max_rect());
+                let debug_rect = self.debug_overlay(&ctx, ui.max_rect());
+                let view_rect = egui::Area::new(egui::Id::new("view-controls"))
+                    .order(egui::Order::Foreground)
+                    .anchor(
+                        egui::Align2::RIGHT_TOP,
+                        ui.max_rect().right_top() - ctx.content_rect().right_top()
+                            + egui::vec2(-10., 10.),
+                    )
+                    .show(&ctx, |ui| {
+                        theme::panel().inner_margin(6).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                if controls::button(ui, "Fit · F").clicked() {
+                                    self.camera.frame(self.model.center, self.model.radius);
+                                    self.camera_index = None;
+                                    self.dirty(Change::Camera);
+                                }
+                                if let Some(id) = self.selected_mesh {
+                                    if controls::button(ui, "Frame selection").clicked() {
+                                        let (min, max) = self.model.mesh_bounds(id);
+                                        self.camera
+                                            .frame((min + max) * 0.5, (max - min).length() * 0.5);
+                                        self.camera_index = None;
+                                        self.dirty(Change::Camera);
+                                    }
+                                }
+                            });
+                        });
+                    })
+                    .response
+                    .rect;
+                let loading_rect = if self.loading.is_some() {
+                    egui::Area::new(egui::Id::new("model-download"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(egui::pos2(
+                            ui.max_rect().right() - 260.,
+                            view_rect.bottom() + 8.,
+                        ))
+                        .show(&ctx, |ui| {
+                            theme::panel().inner_margin(10).show(ui, |ui| {
+                                ui.set_width(240.);
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(&self.loading_name);
+                                });
+                                ui.small(&self.examples.progress);
+                                if controls::button(ui, "Cancel").clicked() {
+                                    self.load_cancel
+                                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                                    self.loading = None;
+                                    self.load_progress = None;
+                                    self.examples.progress.clear();
+                                }
+                            });
+                        })
+                        .response
+                        .rect
+                } else {
+                    egui::Rect::NOTHING
+                };
                 let aspect = self.pixel_size[0] as f32 / self.pixel_size[1] as f32;
                 let width = available.x.min(available.y * aspect);
                 let size = egui::vec2(width, width / aspect);
@@ -1230,7 +1437,7 @@ impl Viewer {
                     self.drag.motion(
                         rect,
                         !focus_drag && response.contains_pointer(),
-                        dock_rect,
+                        &[dock_rect, debug_rect, view_rect, loading_rect],
                         i,
                     )
                 }) {
@@ -1239,13 +1446,15 @@ impl Viewer {
                     } else {
                         self.camera.orbit([delta.x, delta.y]);
                     }
+                    self.camera_index = None;
                     self.dirty(Change::Camera);
                 }
-                if let Some(pos) = self
-                    .drag
-                    .take_click()
-                    .filter(|p| rect.contains(*p) && !dock_rect.contains(*p))
-                {
+                if let Some(pos) = self.drag.take_click().filter(|p| {
+                    rect.contains(*p)
+                        && ![dock_rect, debug_rect, view_rect, loading_rect]
+                            .iter()
+                            .any(|rect| rect.contains(*p))
+                }) {
                     let uv = [
                         (pos.x - rect.min.x) / rect.width(),
                         (pos.y - rect.min.y) / rect.height(),
@@ -1267,9 +1476,33 @@ impl Viewer {
                         }
                     }
                 }
+                if let Some(preset) = &self.model.1.preset {
+                    let text = format!(
+                        "{} · {}",
+                        crate::examples::text(preset, "credit"),
+                        crate::examples::text(preset, "license")
+                    );
+                    ui.scope_builder(
+                        egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                            ui.max_rect().left_bottom()
+                                + egui::vec2(
+                                    12.,
+                                    if self.model.animation.is_some() {
+                                        -156.
+                                    } else {
+                                        -80.
+                                    },
+                                ),
+                            egui::vec2(ui.available_width() - 24., 24.),
+                        )),
+                        |ui| {
+                            ui.hyperlink_to(text, crate::examples::text(preset, "sourceUrl"));
+                        },
+                    );
+                }
                 if let Some(id) = self.selected_mesh {
                     ui.painter().text(
-                        rect.left_top() + egui::vec2(14., 14.),
+                        egui::pos2(rect.left() + 14., debug_rect.bottom() + 10.),
                         egui::Align2::LEFT_TOP,
                         &self.model.0.meshes[id].name,
                         egui::FontId::proportional(14.),
@@ -1278,6 +1511,9 @@ impl Viewer {
                 }
                 if response.hovered()
                     && !dock_rect.contains(ctx.pointer_hover_pos().unwrap_or(egui::Pos2::ZERO))
+                    && ![debug_rect, view_rect, loading_rect].iter().any(|rect| {
+                        rect.contains(ctx.pointer_hover_pos().unwrap_or(egui::Pos2::ZERO))
+                    })
                 {
                     let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                     if scroll != 0. {

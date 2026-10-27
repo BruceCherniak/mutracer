@@ -269,7 +269,7 @@ impl Viewer {
     fn dock_status(&mut self, ui: &mut egui::Ui) {
         let preparing = self.loading.is_some() || self.preparing() || self.candidate.is_some();
         let animating = self.running && self.model.0.animation.as_ref().is_some_and(|a| a.playing);
-        let done = !animating && self.samples >= self.settings.max_samples;
+        let done = !animating && self.samples >= self.output_target_samples();
         let label = if self.loading.is_some() {
             "Opening"
         } else if preparing {
@@ -284,7 +284,7 @@ impl Viewer {
             "Converging"
         };
         let (rect, response) = ui.allocate_exact_size(egui::vec2(26., 28.), Sense::hover());
-        let progress = self.samples as f32 / self.settings.max_samples.max(1) as f32;
+        let progress = self.samples as f32 / self.output_target_samples().max(1) as f32;
         response.widget_info(|| {
             egui::WidgetInfo::slider(true, progress as f64 * 100., "Sample progress")
         });

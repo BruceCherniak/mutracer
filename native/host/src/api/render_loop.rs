@@ -190,11 +190,11 @@ pub(super) struct ImageState {
 }
 fn image_state(render: &Render, display: &Display) -> Result<ImageState> {
     Ok(ImageState {
-        samples: render.samples(),
+        samples: render.display_samples(),
         size: [render.width(), render.height()],
         settings: render.settings()?,
         denoiser_revision: render.denoiser_revision(),
-        denoising: render.denoising(),
+        denoising: render.denoising() && display.settings().channel.aov_kind().is_none(),
         display_size: display.size(),
         display: display.settings(),
         pass_revision: render.engine().lock().display.pass_revision,
@@ -482,12 +482,13 @@ impl RenderLoop {
     pub fn changing(&self) -> bool {
         self.policy.changing
     }
-    /// Complete final samples; preview sampling is excluded. Default 0.
+    /// Complete final-image samples; preview sampling is excluded. Default 0.
+    /// Auxiliary channels report their independent sample count.
     pub fn samples(&self) -> u32 {
         if self.status() == RenderLoopStatus::Previewing {
             0
         } else {
-            self.final_render.samples()
+            self.final_render.display_samples()
         }
     }
     /// Current presented/execution state. Default `Preparing`.
@@ -514,7 +515,8 @@ impl RenderLoop {
             id,
         }
     }
-    /// Called for complete final samples; preview samples are not reported.
+    /// Called for complete final-image samples, including the displayed AOV
+    /// channel's independent samples; preview samples are not reported.
     pub fn on_sample(
         &self,
         listener: impl FnMut(&SampleEvent) + Send + 'static,
@@ -592,7 +594,7 @@ impl RenderLoop {
             return self.engine.inputs_pending() || self.syncs_active();
         }
         let idle = status == RenderLoopStatus::Finished
-            && self.final_render.status() == RenderStatus::Finished
+            && self.final_render.display_finished()
             && !self.policy.changing
             && self.preview_frame_owner.is_none()
             && !self.engine.inputs_pending()
@@ -636,14 +638,17 @@ impl RenderLoop {
             self.finished_image = None;
             return Ok(self.set_status(RenderLoopStatus::Idle));
         }
-        let preview_state = self
-            .preview
-            .as_ref()
-            .map(|p| (p.status(), p.samples(), p.denoising()));
+        let preview_state = self.preview.as_ref().map(|p| {
+            (
+                p.status(),
+                p.display_samples(),
+                p.denoising() && self.display.settings().channel.aov_kind().is_none(),
+            )
+        });
         let owner = self.preview_frame_owner;
         let frame = preview_frame(
             owner.is_some_and(|o| self.preview.as_ref().is_some_and(|p| p.id() == o)),
-            owner.map(|o| self.render(o).complete()),
+            owner.map(|o| self.render(o).display_complete()),
             preview_state,
             self.coalesce_scene_updates,
         );
@@ -663,9 +668,14 @@ impl RenderLoop {
             self.engine.update()?
         };
         let active = self.syncs_active();
+        let was_changing = self.policy.changing;
         self.policy = self
             .policy
             .update(changed, active, Instant::now(), self.idle_ms);
+        let settled = was_changing && !self.policy.changing;
+        if settled && self.display.settings().channel == super::Channel::Motion {
+            self.finished_image = None;
+        }
         let selected = (self.select)(SelectInfo {
             changing: self.policy.changing,
         });
@@ -674,7 +684,7 @@ impl RenderLoop {
                 // Finish this image against its committed camera while syncs collect
                 // the latest input; restarting it on every edit starves presentation.
                 if frame.tracing {
-                    let status = preview.refine()?;
+                    let status = preview.refine_display(false)?;
                     if status == RenderStatus::Error {
                         self.preview_frame_owner = None;
                         return Ok(self.set_status(RenderLoopStatus::Error));
@@ -686,7 +696,9 @@ impl RenderLoop {
                     // Collect without tracing another stale-camera sample.
                     preview.denoise_current()?;
                 }
-                if (!self.coalesce_scene_updates || !preview.denoising())
+                if (!self.coalesce_scene_updates
+                    || !(preview.denoising()
+                        && self.display.settings().channel.aov_kind().is_none()))
                     && self.present(&preview)?.is_some()
                 {
                     self.preview_frame_owner = None;
@@ -705,7 +717,7 @@ impl RenderLoop {
             && !self.policy.changing
             && current_is_final
             && status == RenderLoopStatus::Finished
-            && self.final_render.status() == RenderStatus::Finished
+            && self.final_render.display_finished()
             && !self.display.passes_pending()
             && Some(&state) == self.finished_image.as_ref()
         {
@@ -714,12 +726,13 @@ impl RenderLoop {
         // Show display-setting changes of a finished image before refining.
         if status == RenderLoopStatus::Finished
             && Some(&state) != self.finished_image.as_ref()
-            && self.final_render.samples() > 0
+            && self.final_render.display_samples() > 0
+            && !(settled && self.display.settings().channel == super::Channel::Motion)
         {
             let final_render = self.final_render.clone();
             self.present(&final_render)?;
         }
-        let refined = current.refine()?;
+        let refined = current.refine_display(!self.policy.changing)?;
         let preview_id = self.preview.as_ref().map(|p| p.id());
         let current_is_preview = Some(current.id()) == preview_id;
         // Keep the display on the last completed image while the next preview
@@ -728,10 +741,12 @@ impl RenderLoop {
             self.preview.is_some(),
             current_is_preview,
             refined,
-            current.samples(),
+            current.display_samples(),
             self.coalesce_scene_updates,
-            self.preview.as_ref().is_some_and(|p| p.denoising()),
-            current.complete(),
+            self.preview.as_ref().is_some_and(|p| {
+                p.denoising() && self.display.settings().channel.aov_kind().is_none()
+            }),
+            current.display_complete(),
             current.fallback_id().is_some() && current.fallback_id() == preview_id,
         );
         if waiting {
@@ -742,7 +757,9 @@ impl RenderLoop {
         // Execution may already trace final samples while the display still shows
         // the preview; only a successful presentation transfers the image.
         let previewing = waiting
-            || (current_is_preview && current.denoising())
+            || (current_is_preview
+                && current.denoising()
+                && self.display.settings().channel.aov_kind().is_none())
             || (preview_id.is_some() && self.presented == preview_id);
         let next = loop_status(refined, previewing);
         self.finished_image = (next == RenderLoopStatus::Finished)

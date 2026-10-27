@@ -25,6 +25,8 @@ if(coverage.nativeMatrixPrecision!==64)throw new Error('Native viewer requires F
 if(coverage.error||!summarizeCoverage(JSON.parse(coverage.stdout),coverage.status).passed)throw new Error('AOT compilation graph failed; see coverage.json.');
 if(!prebuilt)run(compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',env.MUTRACER_AOT_ARCHIVE]);
 run(process.execPath,['native/scripts/generate-display.mjs','--check']);
+run(process.execPath,['native/scripts/generate-sky.mjs','--check']);
+run(process.execPath,['native/scripts/generate-viewer-spheres.mjs','--check']);
 await prepareTinyBvh();
 run('cargo',['build','--release','--locked','--manifest-path','native/viewer/Cargo.toml',...(process.env.MUTRACER_VIEWER_DLSS==='1'?['--features','dlss-rr']:[])]);
 const app=resolve(out,mac?'MuTracer.app':'MuTracer'),contents=mac?resolve(app,'Contents'):app;

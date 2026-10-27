@@ -392,6 +392,10 @@ heights and output; archive those differences rather than claiming pixel parity.
 dependencies. eframe/egui-wgpu and tracing share one adapter, device and queue.
 `src/display-shader.ts` generates the display WGSL through the Web generator;
 `scripts/generate-display.mjs --check` detects stale output.
+The examples catalog is `viewer/src/engine/model-presets.json`, shared by both
+viewers. `scripts/generate-sky.mjs` emits the shared sky WGSL and
+`scripts/generate-viewer-spheres.mjs` converts the web procedural example; both
+support `--check` and run in the root typecheck and native app build.
 
 - Preview capture, tone mapping, denoising and presentation stay on the GPU;
   export reads pixels back.
@@ -438,6 +442,19 @@ streams depend on traversal order.
   Metal and OIDN are outside that coverage.
 
 ### Viewer
+
+The ignored `all_shared_examples_download_and_import` test downloads and imports
+both catalogs. Set `MUTRACER_VIEWER_CACHE` outside the checkout; optionally filter
+with comma-separated `MUTRACER_EXAMPLE_IDS` and write results to
+`MUTRACER_EXAMPLE_EVIDENCE`. The ignored
+`catalog_views_and_authored_lighting_render_on_both_backends` test writes images
+and a report to `MUTRACER_EXAMPLE_RENDER_EVIDENCE`.
+
+`viewer_panels_examples_and_debug_use_the_shared_gpu_image` renders the actual
+egui panels offscreen and checks loading, camera selection, output switching,
+preview disabling and overlay gestures. Set `MUTRACER_VIEWER_UI_EVIDENCE` for its
+screenshots. This test does not establish OS-window input or presentation;
+`--startup-smoke` and the surface example still require an unlocked desktop.
 
 The packaged executable accepts these smoke modes. GPU modes require actual
 HWRT where noted and compare against fresh contexts on Software and HWRT.

@@ -289,6 +289,7 @@ struct PipelineKey {
 }
 #[derive(Clone)]
 struct CachedPipeline {
+    aov_pipelines: aov::PipelineCache,
     _shader: wgpu::ShaderModule,
     layouts: Vec<wgpu::BindGroupLayout>,
     pipeline: wgpu::ComputePipeline,
@@ -523,6 +524,7 @@ fn compile_pipeline(
         cache: gpu.pipeline_cache.as_ref(),
     });
     let compiled = CachedPipeline {
+        aov_pipelines: Default::default(),
         _shader: shader,
         layouts,
         pipeline,
@@ -540,6 +542,8 @@ fn compile_pipeline(
 /// accumulation outputs 10..13, the FRAME/OUTPUT groups binding them, and the
 /// pipeline of its pattern/bevel-sample variant when it differs from the scene's.
 struct Target {
+    aov_shader: wgpu::ShaderModule,
+    aov_pipelines: aov::PipelineCache,
     width: u32,
     height: u32,
     buffers: HashMap<usize, wgpu::Buffer>,
@@ -580,6 +584,7 @@ impl Target {
     }
 }
 struct GpuScene {
+    aov_pipelines: aov::PipelineCache,
     depth_shader: wgpu::ShaderModule,
     depth_pipeline: Arc<std::sync::OnceLock<depth::Pipeline>>,
     display_trace: Vec<u8>,
@@ -790,6 +795,7 @@ impl GpuScene {
         let shader_started = Instant::now();
         let (compiled, cache_hit) = compile_pipeline(&gpu, &scene, source, hardware.is_some())?;
         let CachedPipeline {
+            aov_pipelines,
             layouts,
             pipeline,
             _shader: depth_shader,
@@ -850,6 +856,7 @@ impl GpuScene {
         let frames = runtime::frames(bounces, seed)?;
         let display_trace = read(&AssetId::Packet(scene.rt_uniform))?.into_owned();
         Ok(Self {
+            aov_pipelines,
             depth_shader,
             depth_pipeline: Default::default(),
             display_trace,
@@ -1072,13 +1079,23 @@ impl GpuScene {
         }
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
-        let (pipeline, layouts) = match packet.shader {
+        let (pipeline, layouts, aov_shader, aov_pipelines) = match packet.shader {
             Some(source) => {
                 let (compiled, _) =
                     compile_pipeline(&self.gpu, &self.scene, source, self.hardware.is_some())?;
-                (Some(compiled.pipeline), compiled.layouts)
+                (
+                    Some(compiled.pipeline),
+                    compiled.layouts,
+                    compiled._shader,
+                    compiled.aov_pipelines,
+                )
             }
-            None => (None, self.layouts.clone()),
+            None => (
+                None,
+                self.layouts.clone(),
+                self.depth_shader.clone(),
+                self.aov_pipelines.clone(),
+            ),
         };
         let pixels = size[0] as u64 * size[1] as u64;
         let (mut reusable, mut frame_inputs) = previous
@@ -1168,6 +1185,8 @@ impl GpuScene {
             ],
         );
         Ok(Target {
+            aov_shader,
+            aov_pipelines,
             width: size[0],
             height: size[1],
             buffers,

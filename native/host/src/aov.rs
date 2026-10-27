@@ -2,7 +2,14 @@
 use crate::*;
 use wgpu::util::DeviceExt;
 
+pub(crate) type PipelineCache = Arc<Mutex<Option<Arc<Pipelines>>>>;
+pub(crate) struct Pipelines {
+    layout: wgpu::BindGroupLayout,
+    trace: wgpu::ComputePipeline,
+    center: wgpu::ComputePipeline,
+}
 pub(crate) struct Query {
+    pipelines: PipelineCache,
     gpu: GpuDevice,
     shader: wgpu::ShaderModule,
     layouts: Vec<wgpu::BindGroupLayout>,
@@ -14,8 +21,10 @@ impl Query {
     pub(crate) fn snapshot(scene: &GpuScene, target: Option<&Target>) -> Result<Self> {
         let frame = target.map_or_else(|| scene.groups[2].clone(), |t| t.groups[0].clone());
         Ok(Self {
+            pipelines: target
+                .map_or_else(|| scene.aov_pipelines.clone(), |t| t.aov_pipelines.clone()),
             gpu: scene.gpu.clone(),
-            shader: scene.depth_shader.clone(),
+            shader: target.map_or_else(|| scene.depth_shader.clone(), |t| t.aov_shader.clone()),
             layouts: scene.layouts[..3].to_vec(),
             groups: vec![scene.groups[0].clone(), scene.groups[1].clone(), frame],
             retained: scene
@@ -35,6 +44,7 @@ impl Query {
 pub(crate) struct Output {
     pub generation: u64,
     pub samples: u32,
+    pub mask: u32,
     size: [u32; 2],
     gpu: GpuDevice,
     accumulated: wgpu::Buffer,
@@ -42,9 +52,7 @@ pub(crate) struct Output {
     previous_center: wgpu::Buffer,
     current_words: Vec<u32>,
     scene: wgpu::Buffer,
-    layout: wgpu::BindGroupLayout,
-    trace: wgpu::ComputePipeline,
-    center_trace: wgpu::ComputePipeline,
+    pipelines: Arc<Pipelines>,
     resolve: std::sync::OnceLock<wgpu::ComputePipeline>,
     visualizations: HashMap<wgpu::TextureFormat, (wgpu::Texture, wgpu::ComputePipeline)>,
 }
@@ -64,63 +72,76 @@ impl Output {
                 "AOV accumulation exceeds the storage binding size limit",
             ));
         }
-        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        // Driver pipeline failures are internal errors, outside validation's
-        // scope. Return them to the render without an uncaptured-error panic.
-        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("AOV output"),
-            entries: &[
-                (5, wgpu::BufferBindingType::Storage { read_only: false }),
-                (6, wgpu::BufferBindingType::Storage { read_only: false }),
-                (7, wgpu::BufferBindingType::Storage { read_only: true }),
-                (8, wgpu::BufferBindingType::Uniform),
-                (9, wgpu::BufferBindingType::Storage { read_only: true }),
-            ]
-            .map(|(binding, ty)| wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("AOV layout"),
-            bind_group_layouts: &[
-                Some(&query.layouts[0]),
-                Some(&query.layouts[1]),
-                Some(&query.layouts[2]),
-                Some(&layout),
-            ],
-            ..Default::default()
-        });
-        let pipeline = |entry| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                module: &query.shader,
-                entry_point: Some(entry),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[("DEPTH_QUERY_MODE", 1.)],
-                    ..Default::default()
-                },
-                cache: query.gpu.pipeline_cache.as_ref(),
-            })
+        let mut cached = query.pipelines.lock().unwrap_or_else(|e| e.into_inner());
+        let pipelines = if let Some(pipelines) = cached.as_ref() {
+            pipelines.clone()
+        } else {
+            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            // Driver pipeline failures are internal errors, outside validation's
+            // scope. Return them to the render without an uncaptured-error panic.
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("AOV output"),
+                entries: &[
+                    (5, wgpu::BufferBindingType::Storage { read_only: false }),
+                    (6, wgpu::BufferBindingType::Storage { read_only: false }),
+                    (7, wgpu::BufferBindingType::Storage { read_only: true }),
+                    (8, wgpu::BufferBindingType::Uniform),
+                    (9, wgpu::BufferBindingType::Storage { read_only: true }),
+                ]
+                .map(|(binding, ty)| wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }),
+            });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("AOV layout"),
+                bind_group_layouts: &[
+                    Some(&query.layouts[0]),
+                    Some(&query.layouts[1]),
+                    Some(&query.layouts[2]),
+                    Some(&layout),
+                ],
+                ..Default::default()
+            });
+            let pipeline = |entry| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&pipeline_layout),
+                    module: &query.shader,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("DEPTH_QUERY_MODE", 1.)],
+                        ..Default::default()
+                    },
+                    cache: query.gpu.pipeline_cache.as_ref(),
+                })
+            };
+            let trace = pipeline("aovTrace");
+            let center_trace = pipeline("aovTraceCenter");
+            let internal_error = pollster::block_on(internal.pop());
+            let validation_error = pollster::block_on(validation.pop());
+            if let Some(error) = internal_error {
+                return Err(format!("AOV pipeline creation failed: {error}").into());
+            }
+            if let Some(error) = validation_error {
+                return Err(error.to_string().into());
+            }
+            let pipelines = Arc::new(Pipelines {
+                layout,
+                trace,
+                center: center_trace,
+            });
+            *cached = Some(pipelines.clone());
+            pipelines
         };
-        let trace = pipeline("aovTrace");
-        let center_trace = pipeline("aovTraceCenter");
-        let internal_error = pollster::block_on(internal.pop());
-        let validation_error = pollster::block_on(validation.pop());
-        if let Some(error) = internal_error {
-            return Err(format!("AOV pipeline creation failed: {error}").into());
-        }
-        if let Some(error) = validation_error {
-            return Err(error.to_string().into());
-        }
+        drop(cached);
         let buffer = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -148,7 +169,7 @@ impl Output {
         let scene = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("AOV identities/history"),
             contents: &bytes,
-            usage: wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
         Ok(Self {
             generation,
@@ -156,65 +177,90 @@ impl Output {
             previous_center,
             current_words,
             samples: 0,
+            mask: 0,
             size: query.size,
             gpu: query.gpu.clone(),
             accumulated: buffer("AOV accumulation", pixels * 64),
             center: buffer("AOV center", pixels * 32),
             scene,
-            layout,
-            trace,
-            center_trace,
+            pipelines,
             resolve: Default::default(),
         })
     }
     pub(crate) fn render(&mut self, query: &Query, samples: u32, mask: u32) -> Result<()> {
         self.gpu.loss.check()?;
         let device = &self.gpu.device;
-        let run = |pipeline: &wgpu::ComputePipeline, sample: u32| {
-            let parameters: Vec<_> = [self.size[0], self.size[1], sample, mask]
-                .into_iter()
-                .flat_map(u32::to_le_bytes)
-                .collect();
-            let parameters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("AOV parameters"),
-                contents: &parameters,
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            let outputs = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.layout,
-                entries: &[
-                    (5, &self.accumulated),
-                    (6, &self.center),
-                    (7, &self.scene),
-                    (8, &parameters),
-                    (9, &self.previous_center),
-                ]
-                .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                    binding,
-                    resource: buffer.as_entire_binding(),
-                }),
-            });
-            let mut encoder = device.create_command_encoder(&Default::default());
-            {
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(pipeline);
-                for (i, group) in query.groups.iter().enumerate() {
-                    pass.set_bind_group(i as u32, group, &[]);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let run =
+            |encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::ComputePipeline, sample: u32| {
+                let parameters: Vec<_> = [self.size[0], self.size[1], sample, mask]
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect();
+                let parameters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("AOV parameters"),
+                    contents: &parameters,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let outputs = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.pipelines.layout,
+                    entries: &[
+                        (5, &self.accumulated),
+                        (6, &self.center),
+                        (7, &self.scene),
+                        (8, &parameters),
+                        (9, &self.previous_center),
+                    ]
+                    .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                        binding,
+                        resource: buffer.as_entire_binding(),
+                    }),
+                });
+                {
+                    let mut pass = encoder.begin_compute_pass(&Default::default());
+                    pass.set_pipeline(pipeline);
+                    for (i, group) in query.groups.iter().enumerate() {
+                        pass.set_bind_group(i as u32, group, &[]);
+                    }
+                    pass.set_bind_group(3, &outputs, &[]);
+                    pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
                 }
-                pass.set_bind_group(3, &outputs, &[]);
-                pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
-            }
-            self.gpu.queue.submit([encoder.finish()]);
-        };
+            };
         if self.samples == 0 {
-            run(&self.center_trace, 0);
+            run(&mut encoder, &self.pipelines.center, 0);
         }
-        while self.samples < samples {
-            run(&self.trace, self.samples);
-            self.samples += 1;
+        // ID and motion are center-ray outputs; no jittered accumulation pass.
+        if mask & 31 == 0 {
+            self.samples = samples.min(1);
+        } else {
+            while self.samples < samples {
+                run(&mut encoder, &self.pipelines.trace, self.samples);
+                self.samples += 1;
+            }
         }
+        self.mask = mask;
+        self.gpu.queue.submit([encoder.finish()]);
         Ok(())
+    }
+    pub(crate) fn settle_motion(&mut self, query: &Query) -> Result<()> {
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(
+            &self.center,
+            0,
+            &self.previous_center,
+            0,
+            self.size[0] as u64 * self.size[1] as u64 * 32,
+        );
+        let words = reproject_metadata(&self.current_words, Some(&self.current_words));
+        let bytes: Vec<_> = words.iter().flat_map(|v| v.to_le_bytes()).collect();
+        self.gpu.queue.write_buffer(&self.scene, 0, &bytes);
+        self.gpu.queue.submit([encoder.finish()]);
+        // Motion is written by the center trace, rather than resolved from
+        // metadata at display time. Refresh that record against the stationary
+        // history without touching beauty or jittered surface accumulation.
+        self.samples = 0;
+        self.render(query, 1, self.mask)
     }
     pub(crate) fn snapshot(&self, mask: u32) -> Result<Vec<api::GpuAov>> {
         let device = &self.gpu.device;

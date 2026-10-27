@@ -166,6 +166,23 @@ unsafe extern "C" {
 pub(crate) const MAX_BYTES: usize = 512 * 1024 * 1024;
 const MAX_PREPARED_BYTES: usize = 1024 * 1024 * 1024;
 
+// Invertibility is independent of scene units. A fixed determinant threshold
+// rejects valid millimetre/small-unit glTFs such as Khronos ToyCar.
+pub(crate) fn invertible_affine(matrix: &[f32; 16]) -> bool {
+    if !matrix.iter().all(|v| v.is_finite())
+        || [3, 7, 11].iter().any(|i| matrix[*i] != 0.)
+        || matrix[15] != 1.
+    {
+        return false;
+    }
+    let column =
+        |i: usize| glam::DVec3::new(matrix[i] as f64, matrix[i + 1] as f64, matrix[i + 2] as f64);
+    let (a, b, c) = (column(0), column(4), column(8));
+    let scale = a.length() * b.length() * c.length();
+    scale > 0.
+        && a.dot(b.cross(c)).abs() / scale >= 1e-12
+        && glam::Mat4::from_cols_array(matrix).inverse().is_finite()
+}
 struct Words<'a>(&'a [u8]);
 impl Words<'_> {
     fn len(&self) -> usize {
@@ -191,10 +208,8 @@ impl Words<'_> {
     }
     fn affine(&self, off: usize) -> Result<()> {
         self.finite(off, 16)?;
-        let m = |i| self.f(off + i) as f64;
-        let det = m(0) * (m(5) * m(10) - m(6) * m(9)) - m(4) * (m(1) * m(10) - m(2) * m(9))
-            + m(8) * (m(1) * m(6) - m(2) * m(5));
-        if [3, 7, 11].iter().any(|&i| m(i) != 0.0) || m(15) != 1.0 || det.abs() < 1e-12 {
+        let matrix = std::array::from_fn(|i| self.f(off + i));
+        if !invertible_affine(&matrix) {
             return Err("Scene requires invertible affine transforms".into());
         }
         Ok(())
@@ -2615,5 +2630,28 @@ pub(crate) mod tests {
                 "word {word}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod affine_scale_tests {
+    #[test]
+    fn invertibility_is_independent_of_uniform_units_and_rejects_degeneracy() {
+        for scale in [0.00001, 0.0001, 0.001, 1., 1000., 1e10] {
+            let matrix = glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::splat(scale),
+                glam::Quat::from_rotation_y(0.7),
+                glam::Vec3::new(1., 2., 3.),
+            );
+            assert!(super::invertible_affine(&matrix.to_cols_array()), "{scale}");
+        }
+        for scale in [glam::Vec3::ZERO, glam::Vec3::new(1., 0., 1.)] {
+            assert!(!super::invertible_affine(
+                &glam::Mat4::from_scale(scale).to_cols_array()
+            ));
+        }
+        let mut matrix = glam::Mat4::IDENTITY.to_cols_array();
+        matrix[3] = 0.1;
+        assert!(!super::invertible_affine(&matrix));
     }
 }

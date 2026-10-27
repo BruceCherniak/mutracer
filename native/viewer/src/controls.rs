@@ -640,6 +640,7 @@ pub fn toggle(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
 
 #[derive(Clone, Copy)]
 pub enum Icon {
+    Examples,
     Lighting,
     Material,
     Camera,
@@ -799,6 +800,18 @@ fn paint_icon(ui: &Ui, center: egui::Pos2, icon: Icon, color: Color32) {
     let stroke = Stroke::new(1.2, color);
     let rect = egui::Rect::from_center_size(center, egui::vec2(16., 14.));
     match icon {
+        Icon::Examples => {
+            for x in [-4., 4.] {
+                for y in [-4., 4.] {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(center + egui::vec2(x, y), egui::vec2(6., 6.)),
+                        1,
+                        stroke,
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
+        }
         Icon::Lighting => {
             painter.circle_stroke(center, 4., stroke);
             for i in 0..8 {

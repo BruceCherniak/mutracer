@@ -517,7 +517,8 @@ int32_t mt_render_read_pixels(mt_render render, uint32_t kind, void *pixels, siz
   char *error, size_t capacity);
 
 typedef void (*mt_sample_callback)(uint32_t samples, uint32_t first_frame, double frame_time_ms, void *user);
-/* Called for every complete batch of this render; NULL removes it. Default none. */
+/* Called for every complete batch, including auxiliary samples when the render
+ * loop displays an enabled AOV. NULL removes it. Default none. */
 int32_t mt_render_set_callback(mt_render render, mt_sample_callback callback, void *user, char *error, size_t capacity);
 
 /* ---- Render loop ---- */
@@ -571,7 +572,7 @@ int32_t mt_render_loop_converge(mt_render_loop loop, const mt_converge_options *
 typedef struct mt_render_loop_snapshot {
   uint32_t struct_size;
   uint32_t status; /* mt_render_loop_status. */
-  uint32_t samples; /* Final render samples. */
+  uint32_t samples; /* Final-image samples, or displayed AOV samples; excludes previews. */
   uint32_t changing;
   uint64_t presentations; /* Successful presentations so far. */
   mt_presented last_presented; /* samples 0 before the first presentation. */
@@ -581,9 +582,11 @@ MT_ENGINE_LAYOUT(mt_render_loop_snapshot, 48);
 int32_t mt_render_loop_info(mt_render_loop loop, mt_render_loop_snapshot *output, char *error, size_t capacity);
 
 typedef enum mt_loop_event_kind { MT_LOOP_EVENT_STATUS = 0, MT_LOOP_EVENT_SAMPLE = 1 } mt_loop_event_kind;
-/* value is the new mt_render_loop_status or the final render's sample count. */
+/* value is the new mt_render_loop_status or the final image's sample count
+ * (including the displayed AOV channel). */
 typedef void (*mt_loop_callback)(uint32_t kind, uint32_t value, void *user);
-/* Called on status changes and final-render samples; NULL removes it. Default none. */
+/* Called on status changes and final-image samples (including displayed AOVs);
+ * NULL removes it. Default none. */
 int32_t mt_render_loop_set_callback(mt_render_loop loop, mt_loop_callback callback, void *user,
   char *error, size_t capacity);
 

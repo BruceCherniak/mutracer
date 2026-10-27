@@ -68,7 +68,7 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
 
 ### Files and window
 
-- The app opens with a procedural sample. Use **Open…** (**⌘O** / **Ctrl+O**)
+- The app opens with the material spheres example. Use **Open…** (**⌘O** / **Ctrl+O**)
   or drop a `.gltf` or `.glb` file anywhere in the window. Keep external `.bin`
   files and images beside their `.gltf`. While loading, the previous model stays
   visible; a failed load shows an error and keeps it.
@@ -76,25 +76,42 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
 - Drag empty space in the top bar to move the window and double-click it to
   zoom. The three window buttons close, minimize or zoom; the bottom-right grip
   resizes.
-- The right rail opens **Lighting**, **Material**, **Camera**, **Render** and
-  **Object**; click the active category to hide the inspector. **[** and **]**
+- The right rail opens **Examples**, **Lighting**, **Material**, **Camera**, **Render**
+  and **Object**; click the active category to hide the inspector. **[** and **]**
   toggle the scene list and inspector. Section headings collapse. Narrow windows
   hide the scene list.
 - Sliders and numeric fields are separate. Drag a numeric field left or right,
   or click it to type; Enter or clicking elsewhere commits and Escape cancels.
 
+### Examples
+
+- Open **Examples** in the right rail to browse the same **MuTracer collection**
+  and **glTF Research Scenes** as the web viewer. Choose a thumbnail to load it.
+  Switching inspector tabs keeps the selected collection and loaded model.
+- Downloads include the model's external buffers, textures and available scene
+  environment. Completed downloads are cached for reuse. Loading and failed
+  downloads keep the previous model visible.
+- Collection models use their saved preview view. Research scenes use the first
+  authored camera and original lighting when available. **Camera** selects other
+  imported views, and **Scene lighting** restores an imported environment.
+- Each entry shows its download size, license and source. Some collection assets
+  restrict commercial use. Large scenes need more memory; unavailable scene
+  environment maps are reported under **Object → Scene info**.
+
 ### Camera
 
 - Drag to orbit, right-drag or Shift-drag to pan, scroll to zoom. **Fit to
   model** or **F** restores the framing.
-- Choose perspective (35° default field of view) or orthographic projection.
+- Choose an imported camera, perspective (35° default field of view) or
+  orthographic projection. Orbiting an imported view keeps the vertical axis upright.
 - Perspective views support depth of field: enable it and choose an f-number.
   **Area autofocus** is on by default; drag the focus frame's center to choose
   the target. It focuses once the view settles and keeps the current distance
   when the area is empty. Adjusting **Focus (m)** switches to manual focus, and
   **Pick focus point** then focuses on a clicked surface.
 - Set the scene unit to match the model (default metres).
-- Projection, field of view, f-number and scene unit persist across models.
+- Projection and field of view persist across local files; examples apply their
+  saved views. F-number and scene unit persist across models.
 
 ### Objects
 
@@ -152,8 +169,10 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
 
 ### Lighting and background
 
-- **Environment**: intensity, tint and rotation. **Load HDR…** opens a local
-  Radiance equirectangular map; **Built-in** restores the default map.
+- **Environment**: intensity, tint and rotation. **Procedural sky** follows the
+  selected time of day (15:00 by default). **Load HDR…** opens a local Radiance
+  equirectangular map; **Scene lighting** selects the model's environment when
+  available. Imported scene lights remain active when changing environments.
 - **Studio**: eight softbox presets with intensity, rotation, size, ambient fill
   and ambient color. Lights follow the model's bounds; larger softboxes give
   softer shadows at about the same exposure. Changing the preset takes longer
@@ -185,14 +204,26 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   rendering; more samples and bounces take longer.
 - **Color**: AgX (default), ACES, Cineon, Reinhard or Linear tone mapping,
   exposure (1 is unchanged), contrast, saturation, temperature and tint, for
-  both preview and export. **Output** selects Final, Normal or Albedo; guide
-  channels skip color controls and denoising.
+  both preview and export.
 - **Denoise** is on by default for moving previews and final samples. OIDN uses
   [oidn-webgpu](../docs/denoising.md#oidn-webgpu) on the rendering GPU; the optional
   Windows build also offers DLSS RR in **Method**. Toggle it to compare; export
   uses the latest denoised result when there is one.
 - **Ray tracing**: **HWRT** (default) or **Software**. The panel shows the path
   in use, any fallback reason and how many geometries use a software BVH.
+
+### Debug
+
+- The viewport's **Debug** card shows recent sample times. Expand it to choose
+  **Output**, change its visualization range or scale, control interactive preview
+  and inspect device, resolution, texture and shader-cache diagnostics.
+- Outputs: Final, Albedo, Normal, Depth, Position, Roughness, Diffuse reflectance,
+  Specular reflectance, ID and Motion. Only the selected auxiliary output is
+  sampled. It has independent progress and PNG export, skips denoising and color
+  controls, and keeps the Final image's accumulated samples and completed denoising.
+  ID and Motion need one center-ray sample; other auxiliary channels use up to 16.
+- **Interactive preview** enables the moving preview; **Max preview scale** is
+  relative to the viewport. Turning it off renders edits at the final resolution.
 
 ### Animation
 
@@ -217,8 +248,8 @@ the [optional build instructions](../CONTRIBUTING.md#optional-dlss-viewer).
   changes, moving a light or the environment between zero and nonzero
   intensity, and resource size changes rebuild the scene in the background
   while the previous image stays visible.
-- Color controls, the output channel and denoising change only the displayed
-  image.
+- Color controls and denoising change only the displayed image. Output changes
+  preserve Final samples; auxiliary channels sample separately when needed.
 - During continuous edits, new input waits for the current frame, its preview
   denoising and any scene preparation, then applies the latest state. CPU or GPU contention can still
   slow interaction; a lower resolution helps, and no frame rate is guaranteed.

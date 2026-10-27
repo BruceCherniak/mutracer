@@ -272,6 +272,7 @@ impl Drop for Renderer {
 #[derive(Clone)]
 pub struct Camera {
     pub target: Vec3,
+    pub up: Vec3,
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
@@ -286,6 +287,7 @@ impl Camera {
     pub fn fit(center: Vec3, radius: f32) -> Self {
         Self {
             target: center,
+            up: Vec3::Y,
             yaw: 0.6,
             pitch: 0.3,
             distance: radius * 3.6,
@@ -299,6 +301,7 @@ impl Camera {
     }
     pub fn frame(&mut self, center: Vec3, radius: f32) {
         self.target = center;
+        self.up = Vec3::Y;
         self.radius = radius.max(1e-5);
         self.distance = self.radius * 1.15 / (self.fov.to_radians() * 0.5).tan();
         self.focus_distance = self.distance;
@@ -310,7 +313,7 @@ impl Camera {
     pub fn ray(&self, uv: [f32; 2], aspect: f32) -> (Vec3, Vec3) {
         let eye = self.eye();
         let forward = (self.target - eye).normalize();
-        let right = forward.cross(Vec3::Y).normalize();
+        let right = forward.cross(self.up).normalize();
         let up = right.cross(forward);
         let offset = (right * ((uv[0] * 2. - 1.) * aspect) + up * (1. - uv[1] * 2.))
             * (self.fov.to_radians() * 0.5).tan();
@@ -319,6 +322,15 @@ impl Camera {
         } else {
             (eye, (forward + offset).normalize())
         }
+    }
+    pub fn set_view(&mut self, eye: Vec3, target: Vec3) {
+        let delta = eye - target;
+        self.distance = delta.length().max(1e-5);
+        self.target = target;
+        self.up = Vec3::Y;
+        self.yaw = delta.x.atan2(delta.z);
+        self.pitch = (delta.y / self.distance).clamp(-1., 1.).asin();
+        self.focus_distance = self.distance;
     }
     pub fn eye(&self) -> Vec3 {
         self.target
@@ -329,12 +341,13 @@ impl Camera {
             ) * self.distance
     }
     pub fn orbit(&mut self, delta: [f32; 2]) {
+        self.up = Vec3::Y;
         self.yaw -= delta[0] * 0.008;
         self.pitch = (self.pitch + delta[1] * 0.008).clamp(-1.5, 1.5);
     }
     pub fn pan(&mut self, delta: [f32; 2]) {
         let forward = (self.target - self.eye()).normalize();
-        let right = forward.cross(Vec3::Y).normalize();
+        let right = forward.cross(self.up).normalize();
         let up = right.cross(forward);
         self.target += (-right * delta[0] + up * delta[1]) * self.distance * 0.002;
     }
@@ -359,7 +372,7 @@ impl Camera {
         f[camera_wire::METERS_PER_UNIT] = self.meters_per_unit;
         // A general Mat4 inverse can round the homogeneous 1 away from 1.0,
         // which violates the native ABI's exact affine-transform contract.
-        let world = Mat4::from(Affine3A::look_at_rh(self.eye(), self.target, Vec3::Y).inverse());
+        let world = Mat4::from(Affine3A::look_at_rh(self.eye(), self.target, self.up).inverse());
         f[camera_wire::TRANSFORM..camera_wire::WORDS].copy_from_slice(&world.to_cols_array());
         f.into_iter().flat_map(f32::to_le_bytes).collect()
     }

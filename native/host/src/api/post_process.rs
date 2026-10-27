@@ -1,7 +1,7 @@
 //! Display-pass recording without holding the engine or context registry locks.
 use super::display::{Display, DisplaySettings, Presented, Selection, select};
 use super::engine::{Engine, Inner};
-use super::render::{Render, readiness};
+use super::render::{Render, display_readiness};
 use super::{Result, Status, error};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -170,15 +170,15 @@ impl Display {
         let selected = if fallback {
             match select(
                 state.display.settings.channel == super::Channel::Final,
-                readiness(&state, id),
-                primary.fallback.map(|f| readiness(&state, f)),
+                display_readiness(&state, id),
+                primary.fallback.map(|f| display_readiness(&state, f)),
             ) {
                 None => return Ok(None),
                 Some(Selection::Render) => id,
                 Some(Selection::Fallback) => primary.fallback.unwrap(),
             }
         } else {
-            if !readiness(&state, id).complete {
+            if !display_readiness(&state, id).complete {
                 return Err(error(Status::InvalidState, "Render has no complete image"));
             }
             id
@@ -191,9 +191,17 @@ impl Display {
         };
         let pass_revision = state.display.pass_revision;
         let r = state.renders.get_mut(&selected).unwrap();
-        let samples = r.presented_samples();
-        let size = r.capture.as_ref().unwrap().size;
         let aov_kind = settings.channel.aov_kind();
+        let samples = if aov_kind.is_some() {
+            r.aov_samples_for_display()
+        } else {
+            r.presented_samples()
+        };
+        let size = if aov_kind.is_some() {
+            r.published_size()
+        } else {
+            r.capture.as_ref().unwrap().size
+        };
         let original = if let Some(kind) = aov_kind {
             match r.visualize_aov(kind, &settings.aov, hdr) {
                 Ok(image) => image,
@@ -278,7 +286,7 @@ impl Display {
             }
             // API reentry may dispose, restart or refine the selected render.
             let state = self.engine.live()?;
-            if !readiness(&state, selected).complete
+            if !display_readiness(&state, selected).complete
                 || state.renders[&selected].output.epoch != epoch
             {
                 return Err(error(

@@ -167,77 +167,7 @@ pub fn presets() -> &'static [Preset] {
 }
 impl Preset {
     pub fn apply(&self, material: &mut Material) {
-        for (key, value) in &self.values {
-            match key.as_str() {
-                "baseColor" => {
-                    material.color = std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
-                }
-                "baseMetalness" => material.metalness = value.as_f64().unwrap() as f32,
-                "specularRoughness" => material.roughness = value.as_f64().unwrap() as f32,
-                "specularIor" => material.ior = value.as_f64().unwrap() as f32,
-                "specularWeight" => {
-                    material.layers.specular_weight = value.as_f64().unwrap() as f32
-                }
-                "baseDiffuseRoughness" => {
-                    material.layers.diffuse_roughness = value.as_f64().unwrap() as f32
-                }
-                "opacity" => material.opacity = value.as_f64().unwrap() as f32,
-                "transmissionWeight" => material.transmission = value.as_f64().unwrap() as f32,
-                "transmissionColor" => {
-                    material.layers.transmission_color =
-                        std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
-                }
-                "transmissionDepth" => {
-                    material.layers.transmission_depth = value.as_f64().unwrap() as f32
-                }
-                "transmissionDispersionScale" => {
-                    material.layers.dispersion = value.as_f64().unwrap() as f32
-                }
-                "coatColor" => {
-                    material.layers.coat_color =
-                        std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
-                }
-                "specularColor" => {
-                    material.layers.specular_color =
-                        std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
-                }
-                "subsurfaceRadiusScale" => {
-                    material.layers.subsurface_radius_scale =
-                        std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
-                }
-                "coatWeight" => material.layers.coat_weight = value.as_f64().unwrap() as f32,
-                "coatRoughness" => material.layers.coat_roughness = value.as_f64().unwrap() as f32,
-                "coatIor" => material.layers.coat_ior = value.as_f64().unwrap() as f32,
-                "subsurfaceWeight" => {
-                    material.layers.subsurface_weight = value.as_f64().unwrap() as f32
-                }
-                "subsurfaceColor" => {
-                    material.layers.subsurface_color =
-                        std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
-                }
-                "subsurfaceRadius" => {
-                    material.layers.subsurface_radius = value.as_f64().unwrap() as f32
-                }
-                "fuzzWeight" => material.layers.fuzz_weight = value.as_f64().unwrap() as f32,
-                "fuzzColor" => {
-                    material.layers.fuzz_color =
-                        std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
-                }
-                "fuzzRoughness" => material.layers.fuzz_roughness = value.as_f64().unwrap() as f32,
-                "thinFilmWeight" => material.layers.film_weight = value.as_f64().unwrap() as f32,
-                "thinFilmThickness" => {
-                    material.layers.film_thickness = value.as_f64().unwrap() as f32
-                }
-                "thinFilmIor" => material.layers.film_ior = value.as_f64().unwrap() as f32,
-                "emissionColor" => {
-                    material.emission = std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
-                }
-                "emissionLuminance" => material.emission_strength = value.as_f64().unwrap() as f32,
-                "specularAnisotropy" => material.layers.anisotropy = value.as_f64().unwrap() as f32,
-                "thinWalled" => material.layers.thin_walled = value.as_bool().unwrap(),
-                _ => panic!("Unmapped built-in material preset field: {key}"),
-            }
-        }
+        apply_values(material, &self.values);
     }
     pub fn texture(&self, ctx: &egui::Context) -> egui::TextureHandle {
         let id = egui::Id::new(("material-thumbnail", &self.id));
@@ -302,6 +232,77 @@ mod tests {
                 }
             }
             assert!(image::load_from_memory(preset.thumbnail).is_ok());
+        }
+    }
+}
+
+// Shared converted procedural example also carries unused OpenPBR defaults.
+pub fn apply_values(material: &mut Material, values: &serde_json::Map<String, serde_json::Value>) {
+    for (key, value) in values {
+        match key.as_str() {
+            "baseColor" => {
+                material.color = std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+            }
+            "baseMetalness" => material.metalness = value.as_f64().unwrap() as f32,
+            "specularRoughness" => material.roughness = value.as_f64().unwrap() as f32,
+            "specularIor" => material.ior = value.as_f64().unwrap() as f32,
+            "specularWeight" => material.layers.specular_weight = value.as_f64().unwrap() as f32,
+            "baseDiffuseRoughness" => {
+                material.layers.diffuse_roughness = value.as_f64().unwrap() as f32
+            }
+            "opacity" => material.opacity = value.as_f64().unwrap() as f32,
+            "transmissionWeight" => material.transmission = value.as_f64().unwrap() as f32,
+            "transmissionColor" => {
+                material.layers.transmission_color =
+                    std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+            }
+            "transmissionDepth" => {
+                material.layers.transmission_depth = value.as_f64().unwrap() as f32
+            }
+            "transmissionDispersionScale" => {
+                material.layers.dispersion = value.as_f64().unwrap() as f32
+            }
+            "coatColor" => {
+                material.layers.coat_color =
+                    std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+            }
+            "specularColor" => {
+                material.layers.specular_color =
+                    std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+            }
+            "subsurfaceRadiusScale" => {
+                material.layers.subsurface_radius_scale =
+                    std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+            }
+            "coatWeight" => material.layers.coat_weight = value.as_f64().unwrap() as f32,
+            "coatRoughness" => material.layers.coat_roughness = value.as_f64().unwrap() as f32,
+            "coatIor" => material.layers.coat_ior = value.as_f64().unwrap() as f32,
+            "subsurfaceWeight" => {
+                material.layers.subsurface_weight = value.as_f64().unwrap() as f32
+            }
+            "subsurfaceColor" => {
+                material.layers.subsurface_color =
+                    std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+            }
+            "subsurfaceRadius" => {
+                material.layers.subsurface_radius = value.as_f64().unwrap() as f32
+            }
+            "fuzzWeight" => material.layers.fuzz_weight = value.as_f64().unwrap() as f32,
+            "fuzzColor" => {
+                material.layers.fuzz_color =
+                    std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+            }
+            "fuzzRoughness" => material.layers.fuzz_roughness = value.as_f64().unwrap() as f32,
+            "thinFilmWeight" => material.layers.film_weight = value.as_f64().unwrap() as f32,
+            "thinFilmThickness" => material.layers.film_thickness = value.as_f64().unwrap() as f32,
+            "thinFilmIor" => material.layers.film_ior = value.as_f64().unwrap() as f32,
+            "emissionColor" => {
+                material.emission = std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+            }
+            "emissionLuminance" => material.emission_strength = value.as_f64().unwrap() as f32,
+            "specularAnisotropy" => material.layers.anisotropy = value.as_f64().unwrap() as f32,
+            "thinWalled" => material.layers.thin_walled = value.as_bool().unwrap(),
+            _ => {}
         }
     }
 }

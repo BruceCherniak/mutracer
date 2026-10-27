@@ -29,6 +29,14 @@ describe('model lighting', () => {
     expect(material.emissiveIntensity).toBe(1);
   });
 
+  it('uses authored PBRT emission even without metadata-only lights', async () => {
+    const root = new THREE.Group();
+    root.add(new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshStandardMaterial({ emissive: 0xffffff })));
+    const lighting = await loadModelLighting(root, { pbrt: { render: { integrator: 'path' } } }, vi.fn());
+    expect(lighting).toMatchObject({ available: true, useByDefault: true, environment: null });
+    expect(root.children).toHaveLength(1);
+  });
+
   it('ignores hidden, black and zero-power lights', async () => {
     const root = new THREE.Group();
     const hidden = new THREE.Group().add(new THREE.PointLight());
