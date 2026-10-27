@@ -92,11 +92,10 @@ export default function rayTraceCompute({
     var path: Path;
     path.ray = ray;
     path.fromEye = true;
-    sampleShadowCatcher(si, 0, &path);
-    // RGB stores primary catcher coverage independently from the stochastic
-    // visibility in alpha. Composition uses this raw coverage to clip any
-    // shadow-mask denoising bleed at model silhouettes.
-    return vec4f(vec3f(1.0), path.alpha);
+    (*outAux).shadowCounts = sampleShadowCatcher(si, 0, &path);
+    // RGB stores primary catcher coverage. The shadow travels in the
+    // auxiliary counts, out of reach of color clamping.
+    return vec4f(1.0);
   }
   else {
     if (HAS_BEVEL && rtUniform.bevel != 0) {
@@ -232,6 +231,8 @@ struct RayTraceAuxiliary {
   isShadowCatcher: bool,
   normal: vec3f,
   isBlank: bool,
+  // Shadow-catcher hits: occluded and total light sample counts.
+  shadowCounts: vec2f,
 }
 
 fn groundedSurfaceDistance(point: vec3f, height: f32, radius: f32) -> f32 {
@@ -776,6 +777,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
       (*outAux).normal = select(vec3f(0.0), normalize(blendedNormal), dot(blendedNormal, blendedNormal) > 1e-12);
       (*outAux).isBlank = backAux.isBlank & branchAux.isBlank;
       (*outAux).isShadowCatcher = backAux.isShadowCatcher & branchAux.isShadowCatcher;
+      (*outAux).shadowCounts = mix(backAux.shadowCounts, branchAux.shadowCounts, coverage);
       return mix(back, result, coverage);
     }
   }
@@ -848,6 +850,7 @@ ${primaryGuides}
         (*outAux).normal = select(vec3f(0.0), normalize(blendedNormal), dot(blendedNormal, blendedNormal) > 1e-12);
         (*outAux).isBlank = backAux.isBlank & (*outAux).isBlank;
         (*outAux).isShadowCatcher = backAux.isShadowCatcher & (*outAux).isShadowCatcher;
+        (*outAux).shadowCounts = mix(backAux.shadowCounts, (*outAux).shadowCounts, coverage);
         return mix(back, result, coverage);
       }
       back = result; backAux = *outAux;
@@ -1144,15 +1147,18 @@ ${inputHooks?.unclampedColor ?? ''}
     let backgroundHit = select(0.0, 1.0, backgroundSample.a >= 0.01);
     let backgroundPremultiplied = vec4f(backgroundSample.rgb * backgroundSample.a, backgroundSample.a);
     // Keep the background contribution separate from geometry at silhouettes.
-    // mask: catcher coverage, background alpha, background hits, shadow opacity.
-    outShadowCatcher[idx].mask += vec4f(1.0, backgroundSample.a, backgroundHit, liAndAlpha.a);
+    // mask: catcher coverage, background alpha, background hits. The resolve
+    // pass derives shadow opacity from the occluded/total sample counts in moments.zw.
+    outShadowCatcher[idx].mask += vec4f(1.0, backgroundSample.a, backgroundHit, 0.0);
+    outShadowCatcher[idx].moments += vec4f(0.0, 0.0, outAux.shadowCounts);
     outShadowCatcher[idx].background += backgroundPremultiplied;
     outColor[idx] += backgroundPremultiplied;
     outAlbedo[idx] += vec4f(outAux.albedo, backgroundHit);
     accumulateNormalOrVariance(idx, backgroundSample.rgb, outAux.normal);
     // The composed catcher is the background darkened by the shadow. Over a
     // transparent background the shadow is only its opacity.
-    let visibility = 1.0 - liAndAlpha.a;
+    let counts = outAux.shadowCounts;
+    let visibility = 1.0 - select(0.0, counts.x / counts.y, counts.y > 0.0);
     accumulateDenoiseMoments(idx, visibility * select(
       1.0, dot(backgroundSample.rgb, luminance), backgroundSample.a >= 0.01
     ));

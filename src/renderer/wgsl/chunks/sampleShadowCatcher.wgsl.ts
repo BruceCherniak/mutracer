@@ -12,13 +12,18 @@ export default /*wgsl*/ `
 // primary hit costs only shadow rays and lets the mask settle much sooner.
 const SHADOW_CATCHER_LIGHT_SAMPLES = 4u;
 
-fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, Path>) {
+// Returns the occluded and the total count of light samples that reach the
+// visible side of this hit. The shadow opacity is the ratio of their sums over
+// all samples; samples that carry no light, such as those from below the
+// receiver, do not dilute it. Weighting by Le * cos / pdf instead is unbiased
+// but noisier, because the environment CDF dilates bright texels.
+fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, Path>) -> vec2f {
   let viewDir = -(*path).ray.d;
+  var counts = vec2f(0.0);
 
   // The catcher table holds only the environment and analytic lights, as in
   // WebGL 2: emissive meshes are scene objects, not light in the plate.
   if (rtUniform.shadowCatcherChoiceCount > 0) {
-    var shadow = 0.0;
     for (var candidate = 0u; candidate < SHADOW_CATCHER_LIGHT_SAMPLES; candidate++) {
       var lightSample: LightSampleRec;
       let lightRnd = vec3f(sample2D(lightDim(candidate, 1u)), sample1D(lightDim(candidate, 0u)));
@@ -34,16 +39,16 @@ fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, 
       let cosThetaL = dot(si.normal, lightDir);
       let orientation = dot(si.normal, viewDir) * cosThetaL;
       if (lightSample.pdf > 0.0 && orientation >= 0.0) {
-        var ray: Ray;
-        initRay(&ray, si.position + EPS * lightDir, lightDir);
-        if (intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex)) {
-          shadow += 1.0;
+        if (dot(lightSample.emission, luminance) * abs(cosThetaL) > 0.0) {
+          var ray: Ray;
+          initRay(&ray, si.position + EPS * lightDir, lightDir);
+          let occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex);
+          counts += vec2f(select(0.0, 1.0, occluded), 1.0);
         }
       }
     }
-    // WebGPU's compose pass consumes shadow opacity directly.
-    (*path).alpha = shadow / f32(SHADOW_CATCHER_LIGHT_SAMPLES);
   }
   (*path).fromEye = false;
+  return counts;
 }
 `;

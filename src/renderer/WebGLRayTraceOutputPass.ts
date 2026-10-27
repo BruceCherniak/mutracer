@@ -15,7 +15,7 @@ type RayTraceOutput = 'color' | 'albedo' | 'normal' | 'shadowCatcher';
 /** Converts the additive ray tracing buffers into display/denoise textures. */
 export class WebGLRayTraceOutputPass {
   private readonly _renderer: WebGLDevice;
-  private readonly _pass: WebGLFullQuadPass<RayTraceInput, RayTraceOutput>;
+  private readonly _pass: WebGLFullQuadPass<RayTraceInput | 'catcherMomentsTex', RayTraceOutput>;
 
   private readonly _layersPass: WebGLFullQuadPass<
     RayTraceInput | 'catcherBackgroundTex', LayerOutput
@@ -93,6 +93,9 @@ void main() {
         normalTex: rayTracePass.getOutput('normal'),
         shadowCatcherTex: rayTracePass.hasShadowCatcher()
           ? rayTracePass.getOutput('shadowCatcher')
+          : this._renderer.emptyTexture,
+        catcherMomentsTex: rayTracePass.hasShadowCatcher()
+          ? rayTracePass.getOutput('catcherMoments')
           : this._renderer.emptyTexture
       },
       undefined,

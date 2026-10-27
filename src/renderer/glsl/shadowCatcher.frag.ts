@@ -54,8 +54,9 @@ ${cameraRayGlsl}
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-vec4 integrator(inout Ray ray, out vec4 background) {
+vec4 integrator(inout Ray ray, out vec4 background, out vec2 shadowCounts) {
   background = vec4(0.0);
+  shadowCounts = vec2(0.0);
   Path path;
   path.ray = ray;
   path.li = vec3(0);
@@ -86,9 +87,9 @@ vec4 integrator(inout Ray ray, out vec4 background) {
   vec4 bg = sampleBackgroundFromRay(ray.o, ray.d);
   background = vec4(bg.rgb * bg.a, bg.a);
   if (!path.abort) {
-    sampleShadowCatcher(si, 0, path);
+    shadowCounts = sampleShadowCatcher(si, 0, path);
   }
-  return vec4(1.0, bg.a, bg.a >= 0.01 ? 1.0 : 0.0, path.alpha);
+  return vec4(1.0, bg.a, bg.a >= 0.01 ? 1.0 : 0.0, 0.0);
 }
 
 void main() {
@@ -98,22 +99,26 @@ void main() {
   if (dispersionWavelengths == 1 && wavelength > 0.0) { sample1D(CAMERA_WAVELENGTH); }
   Ray cam = primaryCameraRay();
   vec4 background;
-  vec4 liAndAlpha = integrator(cam, background);
+  vec2 shadowCounts;
+  vec4 liAndAlpha = integrator(cam, background, shadowCounts);
 
   if (!(liAndAlpha.x < INF && liAndAlpha.x > -EPS)) {
-    liAndAlpha = vec4(0, 0, 0, 1);
+    liAndAlpha = vec4(0.0);
+    shadowCounts = vec2(0.0);
   }
 
-  out_shadowCatcher = liAndAlpha;
+  // Alpha and the moments' w sum the occluded and total light sample counts;
+  // the output pass resolves their ratio into shadow visibility.
+  out_shadowCatcher = vec4(liAndAlpha.rgb, shadowCounts.x);
   out_catcherBackground = background;
-  // The composed catcher is the background darkened by the shadow (its
-  // visibility in alpha). Over a transparent background the shadow is only
-  // its opacity.
-  float guideValue = liAndAlpha.a * (background.a >= 0.01
+  // The composed catcher is the background darkened by the shadow. Over a
+  // transparent background the shadow is only its opacity.
+  float visibility = 1.0 - (shadowCounts.y > 0.0 ? shadowCounts.x / shadowCounts.y : 0.0);
+  float guideValue = visibility * (background.a >= 0.01
     ? dot(background.rgb / background.a, vec3(0.2126, 0.7152, 0.0722))
     : 1.0);
   out_catcherMoments = liAndAlpha.r > 0.0
-    ? vec4(guideValue, guideValue * guideValue, 1.0, 0.0)
+    ? vec4(guideValue, guideValue * guideValue, 1.0, shadowCounts.y)
     : vec4(0.0);
 
 }`

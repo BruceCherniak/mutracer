@@ -19,11 +19,13 @@ uint shadowCatcherLightDim(uint candidate, uint slot) {
   return candidate == 0u ? bounceDim(slot) : bounceDim(9u + (candidate - 1u) * 3u + slot);
 }
 
-void sampleShadowCatcher(SurfaceInteraction si, int bounce, inout Path path) {
+// Returns the occluded and the total count of light samples that reach the
+// visible side of this hit; see the WGSL sampleShadowCatcher().
+vec2 sampleShadowCatcher(SurfaceInteraction si, int bounce, inout Path path) {
   vec3 viewDir = -path.ray.d;
+  vec2 counts = vec2(0.0);
 
 #if defined(NUM_LIGHTS) || defined(USE_ENVMAP)
-  float visibility = 0.0;
   for (uint candidate = 0u; candidate < SHADOW_CATCHER_LIGHT_SAMPLES; candidate++) {
     LightSampleRec lightSample;
     vec3 lightRnd = vec3(
@@ -35,17 +37,17 @@ void sampleShadowCatcher(SurfaceInteraction si, int bounce, inout Path path) {
     vec3 lightDir = lightSample.direction;
     float cosThetaL = dot(si.normal, lightDir);
     float orientation = dot(si.normal, viewDir) * cosThetaL;
-    bool occluded = false;
-    if (orientation >= 0.0) {
-      Ray ray;
-      initRay(ray, si.position + EPS * lightDir, lightDir);
-      occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex);
+    if (lightSample.pdf > 0.0 && orientation >= 0.0) {
+      if (dot(lightSample.emission, luminance) * abs(cosThetaL) > 0.0) {
+        Ray ray;
+        initRay(ray, si.position + EPS * lightDir, lightDir);
+        bool occluded = intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex);
+        counts += vec2(occluded ? 1.0 : 0.0, 1.0);
+      }
     }
-    visibility += occluded ? 0.0 : 1.0;
   }
-  // WebGL's compose pass converts visibility to shadow opacity.
-  path.alpha = visibility / float(SHADOW_CATCHER_LIGHT_SAMPLES);
 #endif
   path.fromEye = false;
+  return counts;
 }
 `;
