@@ -46,9 +46,9 @@ Earlier Windows 360p timings included excessive tile submissions in Classroom 2 
 
 - Surface AOVs (`render.aovs`, `aovSamples`): depth, position, ID, motion and directional reflectance, on WebGPU and WebGL 2. View them with `display.channel`, read them back, or pass them to a custom denoiser.
 - `render.refine(kind)` traces a single AOV without adding beauty samples.
-- `batchSamples` lets one `refine()` call submit several samples within its time budget, so still renders are no longer limited to one sample per frame.
+- `batchSamples` lets one `refine()` call submit several samples within its time budget, so still renders are no longer limited to one sample per frame. Thanks to [@cedricpinson](https://github.com/cedricpinson) for the report and prototype ([#11](https://github.com/pissang/mutracer/issues/11)).
 - `ProceduralSky`: clear-sky environment textures.
-- `EquirectBackground` with `intensity` and rotation, synced from Three.js `backgroundIntensity` and `backgroundRotation`.
+- `EquirectBackground` with `intensity` and rotation, synced from Three.js `backgroundIntensity` and `backgroundRotation`. Thanks to [@cedricpinson](https://github.com/cedricpinson) for the rotation report and proposed fix ([#9](https://github.com/pissang/mutracer/issues/9)).
 - Experimental WebGPU bindless material textures (`textureBinding: 'auto'`), falling back to the texture atlas.
 
 ### Changed
@@ -63,7 +63,7 @@ Earlier Windows 360p timings included excessive tile submissions in Classroom 2 
 ### Fixed
 
 - Public TypeScript declarations resolve under NodeNext module resolution with `skipLibCheck` off.
-- Shadow catcher contact shadows no longer weaken under environment light from below the receiver, or near emissive meshes on WebGPU.
+- Shadow catcher contact shadows no longer weaken under environment light from below the receiver, or near emissive meshes on WebGPU. Thanks to [@cedricpinson](https://github.com/cedricpinson) for the emissive-mesh report and proposed fix ([#10](https://github.com/pissang/mutracer/issues/10)).
 - WebGL 2 waits for asynchronously compiled shaders before drawing.
 - Diagnostic channels show their original images without color denoising; native albedo display now matches the browser.
 - Native HDR presentation applies JNLM to extended-range output and can show completed display-linear denoising results.
@@ -72,7 +72,7 @@ Earlier Windows 360p timings included excessive tile submissions in Classroom 2 
 
 ### Fixed
 
-- Coat normals no longer inherit the base normal map. Assign the same texture to both maps to perturb both layers.
+- Coat normals no longer inherit the base normal map. Assign the same texture to both maps to perturb both layers. Thanks to [@BruceCherniak](https://github.com/BruceCherniak) ([#8](https://github.com/pissang/mutracer/issues/8)).
 
 ## 0.1.4 - 2026-10-21
 
@@ -84,10 +84,11 @@ Earlier Windows 360p timings included excessive tile submissions in Classroom 2 
 
 ### Fixed
 
-- Three.js conversion keeps vertex colors, back-side materials and half-float or R/RG/RGB/RGBA data textures.
-- Converted equirectangular environments match Three.js orientation.
-- Fully metallic glTF materials without a metalness map ignore specular settings, as in glTF.
-- Spot light falloff between the inner and outer cones.
+- Three.js conversion keeps vertex colors. Thanks to [@zz85](https://github.com/zz85) ([#7](https://github.com/pissang/mutracer/issues/7)).
+- Three.js conversion keeps back-side materials and half-float or R/RG/RGB/RGBA data textures.
+- Converted equirectangular environments match Three.js orientation. Thanks to [@zz85](https://github.com/zz85) ([#6](https://github.com/pissang/mutracer/issues/6)).
+- Fully metallic glTF materials without a metalness map ignore specular settings, as in glTF. Thanks to [@BruceCherniak](https://github.com/BruceCherniak) ([#4](https://github.com/pissang/mutracer/issues/4)).
+- Spot light falloff between the inner and outer cones. Thanks to [@zz85](https://github.com/zz85) ([#5](https://github.com/pissang/mutracer/issues/5)).
 
 ## 0.1.3 - 2026-10-19
 
@@ -97,7 +98,7 @@ Earlier Windows 360p timings included excessive tile submissions in Classroom 2 
 
 ### Fixed
 
-- Adding untextured lights after a scene update.
+- Adding untextured lights after a scene update. Thanks to [@ertugrulerkan](https://github.com/ertugrulerkan) ([#1](https://github.com/pissang/mutracer/issues/1)).
 - WebGPU shadow catcher edges over opaque flat backgrounds, and OIDN artifacts around silhouettes over shadow catchers.
 
 ## 0.1.2 - 2026-10-16
