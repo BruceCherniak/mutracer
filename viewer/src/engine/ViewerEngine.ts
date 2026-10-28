@@ -1381,7 +1381,13 @@ export class ViewerEngine {
     if (this.exporting) throw new Error('A render is already running');
     this.exporting = true; this.exportAbort = new AbortController();
     const background = this.settings.background;
-    const camera = this.activeCamera().clone(); setAspect(camera, options.width / options.height);
+    const source = this.activeCamera();
+    source.updateWorldMatrix(true, false);
+    const camera = source.clone();
+    // A detached clone must retain the model camera's full parent transform.
+    camera.matrixAutoUpdate = false;
+    camera.matrix.copy(source.matrixWorld);
+    setAspect(camera, options.width / options.height);
     let image: Render | undefined;
     set({export: {stage: 'final', samples: 0, target: options.samples}});
     try {
