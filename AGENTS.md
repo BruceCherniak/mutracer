@@ -106,7 +106,9 @@ sample count) on a real GPU before and after, and compare
 - Display composition, denoising order and scheduling changes must update
   `tests/fixtures/display-order.json` or `display-schedule.json`, both independent
   implementations and their execution/event tests. Run the real-GPU cross-backend
-  image comparison. Do not introduce a shared runtime frame plan or decision layer.
+  image comparison with `npm run test:parity`. Set
+  `MUTRACER_OIDN_DISPLAY_INPUT` to include the frozen highlight comparison; the
+  command explicitly reports that check as skipped when unset. Do not introduce a shared runtime frame plan or decision layer.
 
 ## Documentation
 

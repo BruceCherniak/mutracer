@@ -153,6 +153,13 @@ Filtered Rust tests do not replace the final AOT, C consumer or GPU validation.
 
 ### Focused regression runs
 
+Run `npm run test:parity` for browser WebGPU/WebGL and native display images,
+execution traces and schedule events. Set `MUTRACER_PARITY_OUTPUT` outside the
+checkout and `MUTRACER_OIDN_DISPLAY_INPUT` to the frozen HDR/guide directory to
+include the frozen highlight comparison; without it, the command explicitly
+reports that item as skipped. The command builds the native archive; it accepts
+the ordinary host `CARGO_TARGET_DIR` for reuse.
+
 Use `node native/scripts/ci.mjs --only host-tests --gpu-tests 'display|jnlm'
 --batch-gpu-tests` with an existing `MUTRACER_AOT_ARCHIVE` and host
 `CARGO_TARGET_DIR` during iteration. `--only` and `--skip` select comma-separated

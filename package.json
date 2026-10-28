@@ -111,7 +111,8 @@
     "native:engine": "node native/validation/engine-render.mjs",
     "native:ci": "node native/scripts/ci.mjs",
     "native:ci:gpu": "node native/scripts/ci.mjs --gpu",
-    "native:ci:hosts": "node native/scripts/ci.mjs --gpu --hosts"
+    "native:ci:hosts": "node native/scripts/ci.mjs --gpu --hosts",
+    "test:parity": "node scripts/test-parity.mjs"
   },
   "dependencies": {
     "@webgpu/types": "^0.1.40",
