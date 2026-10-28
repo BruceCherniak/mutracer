@@ -99,7 +99,7 @@ fn gradeColor(inputColor: vec3f) -> vec3f {
 }
 `;
 
-export function createComposeMain(sdrEncoding: 'gamma22' | 'srgb' = 'gamma22'): string {
+export function createComposeMain(sdrEncoding: 'gamma22' | 'srgb' = 'srgb'): string {
   return /* wgsl */ `
 
 var finalColor = load_colorTex(uv, 0);
@@ -207,7 +207,7 @@ export const composeMain = createComposeMain();
 
 // Preserve the existing display composition, but give OIDN a floating-point,
 // linear-light image. Alpha is deliberately not used as a second color layer.
-export function createCompositeDenoiseColorMain(output = 'output.denoiseColor', input = 'finalColor', sdrEncoding: 'gamma22' | 'srgb' = 'gamma22'): string {
+export function createCompositeDenoiseColorMain(output = 'output.denoiseColor', input = 'finalColor', sdrEncoding: 'gamma22' | 'srgb' = 'srgb'): string {
   const srgbDecode = 'select(pow((encoded + 0.055) / 1.055, vec3f(2.4)), encoded / 12.92, encoded <= vec3f(0.04045))';
   return /* wgsl */ `
 let encoded = max(${input}.rgb, vec3f(0.0));
@@ -242,7 +242,7 @@ ${output} = vec4f(clamp(compositeAlbedo, vec3f(0.0), vec3f(1.0)), rawAlbedo.a);
 }
 export const compositeDenoiseOutputMain = createCompositeDenoiseColorMain() + createCompositeDenoiseAlbedoMain();
 
-export function createCompositeDenoiseDisplayMain(sdrEncoding: 'gamma22' | 'srgb' = 'gamma22'): string {
+export function createCompositeDenoiseDisplayMain(sdrEncoding: 'gamma22' | 'srgb' = 'srgb'): string {
   return /* wgsl */ `
 let denoised = load_colorTex(uv, 0);
 // Keep the original primary coverage, including transparency. OIDN only

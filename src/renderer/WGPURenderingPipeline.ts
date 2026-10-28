@@ -427,7 +427,6 @@ output.color = color;
     fsMain: compositeDenoiseDisplayMain,
     fsDefine: linearToSrgbDefine,
     uniforms: [
-      { label: 'hdrOutputEnabled', type: 'f32', data: 0 },
       { label: 'denoisedAlpha', type: 'f32', data: 0 }
     ],
     outputs: ['color'], inputs: ['colorTex', 'composedTex']
@@ -647,7 +646,6 @@ output.color = color;
     composePass.setUniform('shadowCatcherAlpha', shadowCatcherAlpha);
     compositeDenoiseDisplayPass.setSize(renderWidth, renderHeight);
     compositeDenoiseDisplayPass.setOutputParams({ color: { format: composeColorFormat } });
-    compositeDenoiseDisplayPass.setUniform('hdrOutputEnabled', +hdrOutputActive);
     compositeDenoiseDisplayPass.setUniform('denoisedAlpha', denoiseValid && denoisedDisplayLinear ? +rayTracePass.needsDenoiseAlpha() : 0);
   }
   function snapshotInput(encoder: GPUCommandEncoder, key: string, texture: GPUTexture, exact = false) {
@@ -1123,7 +1121,6 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       hdrPeakMeter?.reset();
     }
     compositeDenoiseDisplayPass.setOutputParams({ color: { format: composeColorFormat } });
-    compositeDenoiseDisplayPass.setUniform('hdrOutputEnabled', hdrOutputActive ? 1 : 0);
     composePass.setUniform('hdrOutputEnabled', hdrOutputActive ? 1 : 0);
     return wasActive !== hdrOutputActive;
   }
