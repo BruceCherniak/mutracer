@@ -63,6 +63,19 @@ post-processing, render the examples (or a fixed-seed scene with a fixed
 sample count) on a real GPU before and after, and compare
 `render.readPixels('hdr')` pixels. Test both WebGPU and WebGL 2 (`?webgl`).
 
+Run browser GPU tests, captures and benchmarks in headless Chrome
+(`--headless=new`) with a temporary profile, so results do not depend on a
+visible window, focus or an unlocked screen. Use a visible window only for checks
+that need real presentation, such as native window and HDR surface tests.
+
+Scale verification to the change. While iterating on display, denoising or
+scheduling, run `npm run test:parity` and the affected tests only; run the complete
+native gate once, before merging. Record performance measurements, but do not let
+them block a change: sub-millisecond CPU frame timings are noisy, so treat a
+regression as real only when it reproduces and the diff explains it. Classify
+measurement noise and known flaky tests yourself and report the evidence instead
+of stopping for confirmation.
+
 ## Site deployment
 
 - `main`: `npm run deploy` publishes `mutracer` at `mutracer.meimu-studio.com`.

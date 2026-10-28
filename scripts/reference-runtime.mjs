@@ -43,7 +43,7 @@ export async function launchChrome() {
   const profile = mkdtempSync(resolve(tmpdir(), 'mutracer-reference-chrome-'));
   const child = spawn(executable, ['--user-data-dir=' + profile, '--remote-debugging-port=0',
     '--remote-allow-origins=*', '--no-first-run', '--no-default-browser-check', '--disable-background-timer-throttling',
-    '--js-flags=--expose-gc', 'about:blank'], {stdio: 'ignore'});
+    '--js-flags=--expose-gc', '--headless=new', 'about:blank'], {stdio: 'ignore'});
   let launchError;
   child.on('error', error => {launchError = error;});
   const close = async () => {
