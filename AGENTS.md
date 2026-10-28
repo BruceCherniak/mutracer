@@ -96,6 +96,9 @@ of stopping for confirmation.
   structs; update both and run the contract tests.
 - Write tests for behavior and public contracts (packing, parsing, lifecycle,
   generated shader validity). Do not add tests that only restate source text.
+- Prefer existing APIs from the standard library, the platform, wgpu or crates
+  and packages already in the dependency tree over hand-written helpers. Do not
+  add a new dependency only to replace a few lines.
 - Use Three.js `GLTFLoader` with `THREESync` in examples and comparisons.
 - Keep examples small: procedural or CC0 assets only, no large models.
 - Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.
