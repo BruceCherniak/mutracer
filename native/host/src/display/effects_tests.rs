@@ -622,7 +622,7 @@ fn hdr_display_preserves_extended_radiance_grading_bloom_and_coverage() {
     settings.output = 1;
     let hdr = display.compose_hdr(&settings);
     for p in read_half(&gpu, &hdr) {
-        assert!((p[0] - decode(0.5)).abs() < 0.001);
+        assert!((p[0] - 0.5).abs() < 0.001);
         assert_eq!(p[2], 1.);
     }
 }

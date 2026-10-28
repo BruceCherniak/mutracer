@@ -1031,7 +1031,7 @@ mod tests {
         settings.output = 2;
         let albedo = display.read_rgba(&settings).unwrap();
         assert_ne!(albedo, normal);
-        assert!((albedo[12] as f32 - srgb(0.2) * 255.).abs() <= 1.);
+        assert!((albedo[12] as f32 - 0.2 * 255.).abs() <= 1.);
         assert!(albedo[19].abs_diff(128) <= 1);
         assert_eq!(display.read_linear().unwrap(), pixels);
     }
