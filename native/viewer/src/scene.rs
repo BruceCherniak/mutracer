@@ -10,6 +10,7 @@ pub use mutracer_native_probe::scene_api::Geometry;
 #[cfg(test)]
 pub use mutracer_native_probe::scene_api::MaterialLayers;
 pub use mutracer_native_probe::scene_api::viewer_support::Descriptor;
+#[cfg(test)]
 pub use mutracer_native_probe::scene_api::viewer_support::material_values;
 pub use mutracer_native_probe::scene_api::viewer_support::{Material, Mesh, Texture};
 #[derive(Clone)]

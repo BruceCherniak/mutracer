@@ -391,10 +391,9 @@ impl CustomDenoiser for TemporalFilter {
                 .unwrap();
         let stable =
             crate::hit_diagnostics::read_raw(&self.engine.inner.gpu, frame.stable_ids()).unwrap();
-        let depth = super::gpu_output_tests::bytes(
-            &self.engine,
+        let depth = crate::test_support::read_texture(
+            &self.engine.inner.gpu,
             frame.guide(TemporalGuide::LinearDepth).unwrap(),
-            4,
         );
         for y in 0..input.size[1] as usize {
             for x in 0..input.size[0] as usize {
@@ -424,15 +423,13 @@ impl CustomDenoiser for TemporalFilter {
             frame.metadata().capabilities.deformation_motion,
             TemporalSupport::Unverified
         ));
-        let validity = super::gpu_output_tests::bytes(
-            &self.engine,
+        let validity = crate::test_support::read_texture(
+            &self.engine.inner.gpu,
             frame.guide(TemporalGuide::Validity).unwrap(),
-            4,
         );
-        let motion = super::gpu_output_tests::bytes(
-            &self.engine,
+        let motion = crate::test_support::read_texture(
+            &self.engine.inner.gpu,
             frame.guide(TemporalGuide::Motion).unwrap(),
-            8,
         );
         let flags: Vec<_> = validity
             .chunks_exact(4)

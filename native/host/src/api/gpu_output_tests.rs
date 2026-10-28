@@ -1,6 +1,6 @@
 use super::*;
+use crate::test_support::read_texture;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 fn fixture() -> (Engine, Render) {
     let engine = Engine::new(EngineOptions {
@@ -19,49 +19,6 @@ fn fixture() -> (Engine, Render) {
     )
     .unwrap();
     (engine, render)
-}
-pub(super) fn bytes(engine: &Engine, texture: &wgpu::Texture, channels: u32) -> Vec<u8> {
-    let gpu = &engine.inner.gpu;
-    let stride = (texture.width() * channels).div_ceil(256) * 256;
-    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: stride as u64 * texture.height() as u64,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride),
-                rows_per_image: None,
-            },
-        },
-        texture.size(),
-    );
-    gpu.queue.submit([encoder.finish()]);
-    let (send, receive) = std::sync::mpsc::channel();
-    buffer.map_async(wgpu::MapMode::Read, .., move |result| {
-        let _ = send.send(result);
-    });
-    gpu.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(10)),
-        })
-        .unwrap();
-    receive
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap();
-    let mapped = buffer.get_mapped_range(..).unwrap();
-    mapped
-        .chunks_exact(stride as usize)
-        .flat_map(|row| row[..(texture.width() * channels) as usize].iter().copied())
-        .collect()
 }
 fn color_pass(context: PostProcessContext<'_>, color: wgpu::Color) -> Result<()> {
     let view = context.output.create_view(&Default::default());
@@ -95,10 +52,9 @@ fn gpu_output_borrows_and_ordered_passes_cover_export_fallback_and_lifecycle() {
             .is_none()
     );
     render.converge(ConvergeOptions::new(2)).unwrap();
-    let hdr = bytes(
-        &engine,
+    let hdr = read_texture(
+        &engine.inner.gpu,
         &render.get_output_texture(OutputKind::Hdr).unwrap().unwrap(),
-        16,
     );
     let raw = render.read_pixels(PixelKind::Hdr).unwrap();
     assert!(
@@ -110,13 +66,12 @@ fn gpu_output_borrows_and_ordered_passes_cover_export_fallback_and_lifecycle() {
     let display = engine.display();
     let original = display.read_rgba8(&render).unwrap().2;
     assert_eq!(
-        bytes(
-            &engine,
+        read_texture(
+            &engine.inner.gpu,
             &render
                 .get_output_texture(OutputKind::Display)
                 .unwrap()
-                .unwrap(),
-            4
+                .unwrap()
         ),
         original
     );
@@ -169,28 +124,26 @@ fn gpu_output_borrows_and_ordered_passes_cover_export_fallback_and_lifecycle() {
     let pending = Render::new(&engine, RenderSettings::default()).unwrap();
     pending.set_fallback(Some(&render)).unwrap();
     assert!(display.present(&pending).unwrap().unwrap().fallback);
-    let presentation = bytes(&engine, &display.texture().unwrap(), 4);
+    let presentation = read_texture(&engine.inner.gpu, &display.texture().unwrap());
     for rgba in presentation.chunks_exact(4) {
         for (actual, expected) in rgba.iter().zip([32u8, 64, 96, 128]) {
             assert!(actual.abs_diff(expected) <= 1);
         }
     }
     assert_eq!(
-        bytes(
-            &engine,
+        read_texture(
+            &engine.inner.gpu,
             &render
                 .get_output_texture(OutputKind::Display)
                 .unwrap()
-                .unwrap(),
-            4
+                .unwrap()
         ),
         processed
     );
     assert_eq!(
-        bytes(
-            &engine,
-            &render.get_output_texture(OutputKind::Hdr).unwrap().unwrap(),
-            16
+        read_texture(
+            &engine.inner.gpu,
+            &render.get_output_texture(OutputKind::Hdr).unwrap().unwrap()
         ),
         hdr
     );
@@ -239,7 +192,7 @@ fn gpu_output_borrows_and_ordered_passes_cover_export_fallback_and_lifecycle() {
         })
         .unwrap();
     display.present(&render).unwrap();
-    let scaled = bytes(&engine, &display.texture().unwrap(), 4);
+    let scaled = read_texture(&engine.inner.gpu, &display.texture().unwrap());
     assert!(scaled.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255));
     for pixel in scaled.chunks_exact(4) {
         assert_eq!(pixel[1], 0);
@@ -367,13 +320,12 @@ fn gpu_output_pass_failure_discards_commands_and_allows_callback_reentry() {
             .unwrap();
         assert_eq!(display.read_rgba8(&render).unwrap().2, original);
         assert_eq!(
-            bytes(
-                &engine,
+            read_texture(
+                &engine.inner.gpu,
                 &render
                     .get_output_texture(OutputKind::Display)
                     .unwrap()
-                    .unwrap(),
-                4
+                    .unwrap()
             ),
             original
         );
@@ -424,7 +376,7 @@ fn hdr_passes_keep_extended_pixels_order_failure_and_sdr_exports_independent() {
         .unwrap()
         .unwrap()
         .texture;
-    let baseline = bytes(&engine, &before, 8);
+    let baseline = read_texture(&engine.inner.gpu, &before);
     let order = Arc::new(Mutex::new(Vec::new()));
     let seen = order.clone();
     let a = display
@@ -470,7 +422,7 @@ fn hdr_passes_keep_extended_pixels_order_failure_and_sdr_exports_independent() {
         .into_iter()
         .flat_map(u16::to_le_bytes)
         .collect();
-    for pixel in bytes(&engine, &hdr.texture, 8).chunks_exact(8) {
+    for pixel in read_texture(&engine.inner.gpu, &hdr.texture).chunks_exact(8) {
         assert_eq!(pixel, expected);
     }
     assert_eq!(display.read_rgba8(&render).unwrap().2, sdr);
@@ -479,20 +431,19 @@ fn hdr_passes_keep_extended_pixels_order_failure_and_sdr_exports_independent() {
         .add_hdr_post_process(|_| Err(error(Status::Error, "HDR pass failure")))
         .unwrap();
     let failed = display.compose_mode(&render, false, true).unwrap().unwrap();
-    assert_eq!(bytes(&engine, &failed.texture, 8), baseline);
+    assert_eq!(read_texture(&engine.inner.gpu, &failed.texture), baseline);
     assert!(engine.last_error().unwrap().contains("HDR pass failure"));
     bad.remove();
     a.remove();
     b.remove();
     assert_eq!(
-        bytes(
-            &engine,
+        read_texture(
+            &engine.inner.gpu,
             &display
                 .compose_mode(&render, false, true)
                 .unwrap()
                 .unwrap()
-                .texture,
-            8
+                .texture
         ),
         baseline
     );

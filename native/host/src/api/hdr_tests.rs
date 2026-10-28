@@ -137,7 +137,7 @@ fn l1_hdr_matches_ts_coverage_and_background_without_changing_l0() {
             // Compare with the independently GPU-resolved WebGPU image. CPU HDR
             // restores flat-background misses; alpha is never multiplied twice.
             let texture = render.get_output_texture(OutputKind::Hdr).unwrap().unwrap();
-            let gpu = super::gpu_output_tests::bytes(&engine, &texture, 16);
+            let gpu = crate::test_support::read_texture(&engine.inner.gpu, &texture);
             for (i, pixel) in gpu.chunks_exact(16).enumerate() {
                 let mut value: [f32; 4] = std::array::from_fn(|c| {
                     f32::from_le_bytes(pixel[c * 4..c * 4 + 4].try_into().unwrap())

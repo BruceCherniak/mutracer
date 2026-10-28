@@ -221,64 +221,6 @@ impl Words<'_> {
         Ok(())
     }
 }
-#[cfg(feature = "fuzzing")]
-pub(super) fn fuzz_budget(bytes: &[u8]) -> bool {
-    // Called only after full wire validation; restrict cost without relaxing it.
-    let w = Words(bytes);
-    if w.u(h::WIDTH) > 32
-        || w.u(h::HEIGHT) > 32
-        || w.u(h::GEOMETRY_COUNT) > 4
-        || w.u(h::MESH_COUNT) > 8
-        || w.u(h::MATERIAL_COUNT) > 8
-        || w.u(h::TEXTURE_COUNT) > 4
-        || w.u(h::LIGHT_COUNT) > 4
-    {
-        return false;
-    }
-    for i in 0..w.u(h::GEOMETRY_COUNT) {
-        let o = w.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
-        if w.u(o + g::VERTEX_COUNT) > 64 || w.u(o + g::INDEX_COUNT) > 192 {
-            return false;
-        }
-        for (field, components) in [(g::POSITION, 3), (g::UV, 2), (g::UV1, 2)] {
-            let offset = w.u(o + field);
-            if offset != 0
-                && (0..w.u(o + g::VERTEX_COUNT) * components).any(|k| w.f(offset + k).abs() > 2.)
-            {
-                return false;
-            }
-        }
-    }
-    for i in 0..w.u(h::TEXTURE_COUNT) {
-        let o = w.u(h::TEXTURE_OFFSET) + i * t::WORDS;
-        if w.u(o + t::WIDTH) > 8 || w.u(o + t::HEIGHT) > 8 {
-            return false;
-        }
-    }
-    for i in 0..w.u(h::MATERIAL_COUNT) {
-        let o = w.u(h::MATERIAL_OFFSET) + i * mat::WORDS;
-        for j in 0..w.u(o + mat::EXTENSION_COUNT) {
-            let entry = w.u(o + mat::EXTENSION_OFFSET) + j * ext::WORDS;
-            let id = w.u(entry + ext::ID);
-            let value = w.f(entry + ext::X);
-            if matches!(id, 58 | 60 | 76) && value.abs() > 2. || id == 61 && value < 0.125 {
-                return false;
-            }
-        }
-    }
-    if w.u(h::BATCH_OFFSET) != 0
-        && (0..w.u(h::MESH_COUNT))
-            .map(|i| match w.u(w.u(h::BATCH_OFFSET) + i * b::WORDS) {
-                value if value == u32::MAX as usize => 1,
-                value => value,
-            })
-            .sum::<usize>()
-            > 8
-    {
-        return false;
-    }
-    true
-}
 pub(super) fn validate(bytes: &[u8]) -> Result<()> {
     validate_changed(bytes, &[])
 }
@@ -1747,6 +1689,7 @@ pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, Assets)> {
     )
 }
 /// Explicit frame-input preparation; ordinary scenes do not generate this PSO.
+#[cfg(test)]
 pub(super) fn prepare_frame_inputs(
     bytes: &[u8],
     settings: &settings::RenderSettings,
@@ -2097,7 +2040,7 @@ pub unsafe extern "C" fn mt_probe_render_scene(
     status::write(error, error_capacity, status, &message)
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(test)]
 pub(super) fn small_fixture() -> Vec<u8> {
     let mut words = vec![0u32; 132];
     words[..15].copy_from_slice(&[

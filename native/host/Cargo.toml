@@ -46,25 +46,8 @@ naga = { version = "=30.0.1", features = ["spv-out", "hlsl-out"] }
 default = ["gltf"]
 gltf = ["dep:gltf", "dep:image", "dep:meshopt", "dep:base64", "dep:percent-encoding"]
 viewer-support = ["gltf"]
-fuzzing = []
-# Opt-in stage-gate observations; never enabled by the native API/viewer.
-validation = []
 # Opt in to Vulkan interop on macOS for portability-driver validation.
 vulkan-interop = ["wgpu/vulkan-portability"]
-
-[[bin]]
-name = "denoise-benchmark"
-path = "diagnostics/denoise-benchmark.rs"
-required-features = ["validation"]
-
-[[bin]]
-name = "fuzz-seed"
-path = "diagnostics/fuzz-seed.rs"
-required-features = ["fuzzing"]
-
-[[bin]]
-name = "closest-diagnostics"
-path = "diagnostics/closest-diagnostics.rs"
 
 [[bin]]
 name = "incremental-oracle"
@@ -75,25 +58,5 @@ name = "gpu-availability"
 path = "diagnostics/gpu-availability.rs"
 
 [[bin]]
-name = "hit-diagnostics"
-path = "diagnostics/hit-diagnostics.rs"
-
-[[bin]]
-name = "image-diagnostics"
-path = "diagnostics/image-diagnostics.rs"
-
-[[bin]]
-name = "path-diagnostics"
-path = "diagnostics/path-diagnostics.rs"
-
-[[bin]]
-name = "prepare-diagnostics"
-path = "diagnostics/prepare-diagnostics.rs"
-
-[[bin]]
 name = "ray-query-probe"
 path = "diagnostics/ray-query-probe.rs"
-
-[[bin]]
-name = "validate-shaders"
-path = "diagnostics/validate-shaders.rs"

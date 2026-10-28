@@ -46,8 +46,6 @@ pub struct Denoiser {
     filter: Handle,
     buffers: Vec<Handle>,
     size: [u32; 2],
-    #[cfg(feature = "validation")]
-    input_scale: Option<f32>,
     pub backend: &'static str,
 }
 // SAFETY: OIDN 2.5.1 explicitly permits calls from arbitrary threads, including
@@ -114,8 +112,6 @@ impl Denoiser {
                     filter: ptr::null_mut(),
                     buffers: vec![],
                     size: [0; 2],
-                    #[cfg(feature = "validation")]
-                    input_scale: None,
                     backend,
                 });
             }
@@ -138,15 +134,6 @@ impl Denoiser {
             }
         }
         self.size = [0; 2];
-    }
-    /// Fix HDR normalization for comparisons with GPU-resident oidn-web input.
-    /// Normal application calls retain OIDN's automatic exposure.
-    #[cfg(feature = "validation")]
-    pub fn set_validation_input_scale(&mut self, scale: f32) -> Result<()> {
-        ensure!(scale.is_finite() && scale > 0., "Invalid input scale");
-        self.clear();
-        self.input_scale = Some(scale);
-        Ok(())
     }
     pub fn run(
         &mut self,
@@ -206,16 +193,6 @@ impl Denoiser {
                 (self.api.oidnSetFilterBool)(self.filter, c"hdr".as_ptr(), true);
                 // Accumulated guides contain sampling noise, so never mark them clean.
                 (self.api.oidnSetFilterBool)(self.filter, c"cleanAux".as_ptr(), false);
-                #[cfg(feature = "validation")]
-                if let Some(scale) = self.input_scale {
-                    let set_float =
-                        self.api
-                            ._library
-                            .get::<unsafe extern "C" fn(Handle, *const c_char, f32)>(
-                                b"oidnSetFilterFloat\0",
-                            )?;
-                    set_float(self.filter, c"inputScale".as_ptr(), scale);
-                }
                 (self.api.oidnCommitFilter)(self.filter);
                 error(&self.api, self.device)?;
             }

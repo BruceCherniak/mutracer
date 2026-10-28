@@ -757,44 +757,6 @@ pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Respons
     response.on_hover_text(label)
 }
 
-pub fn tree_row(ui: &mut Ui, name: &str, material: &str, selected: bool) -> Response {
-    let response = ui.add_sized(
-        [ui.available_width(), 26.],
-        egui::Button::selectable(selected, "").corner_radius(5),
-    );
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::SelectableLabel,
-            ui.is_enabled(),
-            selected,
-            name,
-        )
-    });
-    let color = if selected {
-        theme::ACCENT
-    } else {
-        theme::MUTED
-    };
-    paint_icon(
-        ui,
-        response.rect.left_center() + egui::vec2(13., 0.),
-        Icon::Object,
-        color,
-    );
-    let galley = egui::WidgetText::from(name).into_galley(
-        ui,
-        Some(egui::TextWrapMode::Truncate),
-        (response.rect.width() - 40.).max(0.),
-        egui::TextStyle::Button,
-    );
-    ui.painter().galley(
-        response.rect.left_center() + egui::vec2(28., -galley.size().y * 0.5),
-        galley,
-        color,
-    );
-    response.on_hover_text(format!("{name}\n{material}"))
-}
-
 pub(super) fn paint_icon(ui: &Ui, center: egui::Pos2, icon: Icon, color: Color32) {
     let painter = ui.painter();
     let stroke = Stroke::new(1.2, color);

@@ -14,16 +14,13 @@ use std::{
 use wgpu::util::DeviceExt;
 #[macro_use]
 pub mod logging;
+mod aov;
 pub mod api;
 mod commit_plan;
 mod compilation;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;
-mod oidn_webgpu;
-#[cfg(feature = "validation")]
-pub use oidn_webgpu::benchmark as benchmark_oidn_webgpu;
-mod aov;
 mod denoiser_inputs;
 mod depth;
 mod device_loss;
@@ -31,19 +28,17 @@ pub mod display;
 mod hardware;
 mod hdr;
 pub mod hit_diagnostics;
-pub mod image_diagnostics;
 mod image_limits;
+mod oidn_webgpu;
 pub mod picking;
-#[cfg(any(test, feature = "validation"))]
+#[cfg(test)]
 mod sample_audit;
+#[cfg(test)]
+mod test_support;
 #[rustfmt::skip]
 pub mod layout;
-#[cfg(feature = "fuzzing")]
-pub mod fuzzing;
 mod material_properties;
-pub mod path_diagnostics;
 mod postprocess;
-pub mod preparation_diagnostics;
 mod profiling;
 mod runtime;
 mod scene;
@@ -65,6 +60,7 @@ enum AssetId {
     GeometryPositions(usize),
     HardwareMap,
     HardwareShader,
+    #[cfg(test)]
     Diagnostic(usize),
 }
 impl std::fmt::Display for AssetId {
@@ -74,6 +70,7 @@ impl std::fmt::Display for AssetId {
             Self::GeometryPositions(id) => write!(f, "native-hwrt-positions-{id}"),
             Self::HardwareMap => write!(f, "native-hwrt-map"),
             Self::HardwareShader => write!(f, "native-hwrt-shader"),
+            #[cfg(test)]
             Self::Diagnostic(id) => write!(f, "diagnostic-{id}"),
         }
     }
@@ -578,11 +575,6 @@ impl Target {
         self.buffers
             .get(&id)
             .ok_or_else(|| "Missing output buffer".into())
-    }
-    /// GPU bytes owned by this target.
-    #[cfg(test)]
-    fn bytes(&self) -> u64 {
-        self.buffers.values().map(|b| b.size()).sum()
     }
 }
 struct GpuScene {

@@ -3,6 +3,7 @@ use super::render_loop::{
 };
 use super::tests::{assert_bytes, expected_descriptor, images, lit_scene, oracle, software_engine};
 use super::*;
+use crate::test_support::read_texture;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -379,45 +380,6 @@ fn camera_sync(engine: &Engine) -> Arc<Mutex<CameraSync>> {
         base: Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap(),
     }))
 }
-fn texture_bytes(engine: &Engine, texture: &wgpu::Texture) -> Vec<u8> {
-    let gpu = &engine.inner.gpu;
-    let [width, height] = [texture.width(), texture.height()];
-    let stride = (width * 4).div_ceil(256) * 256;
-    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: stride as u64 * height as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride),
-                rows_per_image: None,
-            },
-        },
-        texture.size(),
-    );
-    gpu.queue.submit([encoder.finish()]);
-    let (send, receive) = std::sync::mpsc::channel();
-    buffer.map_async(wgpu::MapMode::Read, .., move |r| send.send(r).unwrap());
-    gpu.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })
-        .unwrap();
-    receive.recv().unwrap().unwrap();
-    let mapped = buffer.get_mapped_range(..).unwrap();
-    mapped
-        .chunks_exact(stride as usize)
-        .flat_map(|row| row[..width as usize * 4].iter().copied())
-        .collect()
-}
 fn tick_until(
     render_loop: &mut RenderLoop,
     done: impl Fn(&RenderLoop, RenderLoopStatus) -> bool,
@@ -522,7 +484,7 @@ fn interaction_keeps_an_image_and_never_reverts_a_finished_final() {
         s == RenderLoopStatus::Finished && !l.needs_tick()
     });
     assert_eq!(render_loop.presented(), Some(final_id));
-    let settled = texture_bytes(&engine, &display.texture().unwrap());
+    let settled = read_texture(&engine.inner.gpu, &display.texture().unwrap());
     assert!(
         settled.chunks(4).any(|p| p[3] != 0),
         "settled image is blank"
@@ -539,7 +501,7 @@ fn interaction_keeps_an_image_and_never_reverts_a_finished_final() {
     for _ in 0..40 {
         statuses.push(render_loop.tick().unwrap());
         assert!(render_loop.changing());
-        let image = texture_bytes(&engine, &display.texture().unwrap());
+        let image = read_texture(&engine.inner.gpu, &display.texture().unwrap());
         assert!(image.chunks(4).any(|p| p[3] != 0), "blank frame");
         preview_shown |= render_loop.presented() == Some(preview);
         std::thread::sleep(Duration::from_millis(2));
@@ -563,14 +525,14 @@ fn interaction_keeps_an_image_and_never_reverts_a_finished_final() {
     assert!(!render_loop.changing());
     assert_eq!(render_loop.presented(), Some(final_id));
     assert_eq!(render_loop.samples(), 4);
-    let finished = texture_bytes(&engine, &display.texture().unwrap());
+    let finished = read_texture(&engine.inner.gpu, &display.texture().unwrap());
     for _ in 0..10 {
         assert_eq!(render_loop.tick().unwrap(), RenderLoopStatus::Finished);
         assert_eq!(render_loop.presented(), Some(final_id));
         assert!(!render_loop.needs_tick());
     }
     assert_eq!(
-        texture_bytes(&engine, &display.texture().unwrap()),
+        read_texture(&engine.inner.gpu, &display.texture().unwrap()),
         finished
     );
     // A display edit re-presents the finished final image, not the preview.
@@ -584,7 +546,7 @@ fn interaction_keeps_an_image_and_never_reverts_a_finished_final() {
     assert_eq!(render_loop.tick().unwrap(), RenderLoopStatus::Finished);
     assert_eq!(render_loop.presented(), Some(final_id));
     assert_ne!(
-        texture_bytes(&engine, &display.texture().unwrap()),
+        read_texture(&engine.inner.gpu, &display.texture().unwrap()),
         finished
     );
     assert!(!render_loop.needs_tick());

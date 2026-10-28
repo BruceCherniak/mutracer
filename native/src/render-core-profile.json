@@ -4,396 +4,204 @@
   "entry": "render-core.ts",
   "emission": "llvm",
   "abi": {
-    "prefix": "mt_core_",
-    "init_symbol": "mt_core_init",
-    "sink_register_symbol": "mt_core_sink",
-    "collect_symbol": "mt_core_collect",
-    "result_reset_symbol": "mt_core_reset",
+    "prefix": "mt_core_", "init_symbol": "mt_core_init", "sink_register_symbol": "mt_core_sink",
+    "collect_symbol": "mt_core_collect", "result_reset_symbol": "mt_core_reset",
     "localize_runtime": true
   },
   "exports": [
     {
-      "export": "sceneCameraParameters",
-      "symbol": "mt_core_scene_camera",
-      "params": [
-        "bytes",
-        "u32",
-        "u32"
-      ],
+      "export": "sceneCameraParameters", "symbol": "mt_core_scene_camera",
+      "params": ["bytes", "u32", "u32"], "returns": "bytes"
+    },
+    {
+      "export": "frameParameters", "symbol": "mt_core_frame", "params": ["f64", "f64", "u32"],
       "returns": "bytes"
     },
     {
-      "export": "frameParameters",
-      "symbol": "mt_core_frame",
-      "params": [
-        "f64",
-        "f64",
-        "u32"
-      ],
+      "export": "cameraParameters", "symbol": "mt_core_camera",
+      "params": ["bytes", "f64", "f64", "f64"], "returns": "bytes"
+    },
+    {
+      "export": "materialParameters", "symbol": "mt_core_material",
+      "params": ["f64", "f64", "f64", "f64"], "returns": "bytes"
+    },
+    {"export": "buildBvh", "symbol": "mt_core_bvh", "params": ["bytes"], "returns": "bytes"},
+    {
+      "export": "samplingParameters", "symbol": "mt_core_sampling", "params": ["bytes"],
       "returns": "bytes"
     },
     {
-      "export": "cameraParameters",
-      "symbol": "mt_core_camera",
-      "params": [
-        "bytes",
-        "f64",
-        "f64",
-        "f64"
-      ],
+      "export": "sceneParameters", "symbol": "mt_core_scene", "params": ["bytes"],
       "returns": "bytes"
     },
     {
-      "export": "materialParameters",
-      "symbol": "mt_core_material",
-      "params": [
-        "f64",
-        "f64",
-        "f64",
-        "f64"
-      ],
+      "export": "retainedSceneParameters", "symbol": "mt_core_scene_retained",
+      "params": ["bytes", "u32"], "returns": "bytes"
+    },
+    {
+      "export": "releaseSceneParameters", "symbol": "mt_core_scene_release", "params": ["u32"],
       "returns": "bytes"
     },
     {
-      "export": "buildBvh",
-      "symbol": "mt_core_bvh",
-      "params": [
-        "bytes"
-      ],
-      "returns": "bytes"
+      "export": "sceneMaterialParameters", "symbol": "mt_core_scene_material",
+      "params": ["bytes", "u32"], "returns": "bytes"
     },
     {
-      "export": "samplingParameters",
-      "symbol": "mt_core_sampling",
-      "params": [
-        "bytes"
-      ],
-      "returns": "bytes"
+      "export": "sceneEnvironmentParameters", "symbol": "mt_core_scene_environment",
+      "params": ["bytes", "u32"], "returns": "bytes"
     },
     {
-      "export": "sceneParameters",
-      "symbol": "mt_core_scene",
-      "params": [
-        "bytes"
-      ],
-      "returns": "bytes"
-    },
-    {
-      "export": "retainedSceneParameters",
-      "symbol": "mt_core_scene_retained",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
-    },
-    {
-      "export": "releaseSceneParameters",
-      "symbol": "mt_core_scene_release",
-      "params": [
-        "u32"
-      ],
-      "returns": "bytes"
-    },
-    {
-      "export": "sceneMaterialParameters",
-      "symbol": "mt_core_scene_material",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
-    },
-    {
-      "export": "sceneEnvironmentParameters",
-      "symbol": "mt_core_scene_environment",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
-    },
-    {
-      "export": "sceneLightParameters",
-      "symbol": "mt_core_scene_light",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "export": "sceneLightParameters", "symbol": "mt_core_scene_light", "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
       "export": "acceptSceneLighting",
       "symbol": "mt_core_scene_accept_lighting",
-      "params": [
-        "u32"
-      ],
+      "params": ["u32"],
       "returns": "bytes"
     },
     {
-      "export": "sceneTransformParameters",
-      "symbol": "mt_core_scene_transform",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
+      "export": "sceneTransformParameters", "symbol": "mt_core_scene_transform",
+      "params": ["bytes", "u32"], "returns": "bytes"
     },
     {
       "export": "acceptSceneTransform",
       "symbol": "mt_core_scene_accept_transform",
-      "params": [
-        "u32"
-      ],
+      "params": ["u32"],
       "returns": "bytes"
     },
     {
-      "export": "sceneGeometryParameters",
-      "symbol": "mt_core_scene_geometry",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
+      "export": "sceneGeometryParameters", "symbol": "mt_core_scene_geometry",
+      "params": ["bytes", "u32"], "returns": "bytes"
     },
     {
       "export": "acceptSceneGeometry",
       "symbol": "mt_core_scene_accept_geometry",
-      "params": [
-        "u32"
-      ],
+      "params": ["u32"],
       "returns": "bytes"
     },
     {
-      "export": "nativeSceneBegin",
-      "symbol": "mt_core_native_scene_begin",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "export": "nativeSceneBegin", "symbol": "mt_core_native_scene_begin",
+      "params": ["bytes", "u32"], "returns": "bytes"
+    },
+    {
+      "export": "nativeSceneBlas", "symbol": "mt_core_native_scene_blas", "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
-      "export": "nativeSceneBlas",
-      "symbol": "mt_core_native_scene_blas",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
-    },
-    {
-      "export": "nativeSceneFinish",
-      "symbol": "mt_core_native_scene_finish",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
+      "export": "nativeSceneFinish", "symbol": "mt_core_native_scene_finish",
+      "params": ["bytes", "u32"], "returns": "bytes"
     },
     {
       "export": "nativeTransformBegin",
       "symbol": "mt_core_native_transform_begin",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
       "export": "nativeTransformFinish",
       "symbol": "mt_core_native_transform_finish",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
       "export": "nativeGeometryBegin",
       "symbol": "mt_core_native_geometry_begin",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
       "export": "nativeGeometryFinish",
       "symbol": "mt_core_native_geometry_finish",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
       "export": "nativeHardwareScene",
       "symbol": "mt_core_native_hardware_scene",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
-      "export": "configureSceneParameters",
-      "symbol": "mt_core_scene_configure",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
+      "export": "configureSceneParameters", "symbol": "mt_core_scene_configure",
+      "params": ["bytes", "u32"], "returns": "bytes"
     },
     {
-      "export": "shaderCacheParameters",
-      "symbol": "mt_core_shader_cache",
-      "params": [],
+      "export": "shaderCacheParameters", "symbol": "mt_core_shader_cache", "params": [],
       "returns": "bytes"
     },
     {
       "export": "receiveGeometryKernelHints",
       "symbol": "mt_core_geometry_kernel_hints",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
       "export": "geometryKernelReference",
       "symbol": "mt_core_geometry_kernel_reference",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
       "export": "geometryKernelHypot",
       "symbol": "mt_core_geometry_kernel_hypot",
-      "params": [
-        "f64",
-        "f64",
-        "f64"
-      ],
+      "params": ["f64", "f64", "f64"],
       "returns": "f64"
     },
     {
-      "export": "syncNativeScene",
-      "symbol": "mt_core_scene_sync",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "export": "syncNativeScene", "symbol": "mt_core_scene_sync", "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
-      "export": "acceptNativeScene",
-      "symbol": "mt_core_scene_accept_sync",
-      "params": [
-        "u32"
-      ],
+      "export": "acceptNativeScene", "symbol": "mt_core_scene_accept_sync", "params": ["u32"],
       "returns": "bytes"
     },
     {
-      "export": "releaseNativeScene",
-      "symbol": "mt_core_scene_release_sync",
-      "params": [
-        "u32"
-      ],
+      "export": "releaseNativeScene", "symbol": "mt_core_scene_release_sync", "params": ["u32"],
       "returns": "bytes"
     },
     {
-      "export": "sceneLightListParameters",
-      "symbol": "mt_core_scene_light_list",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
+      "export": "sceneLightListParameters", "symbol": "mt_core_scene_light_list",
+      "params": ["bytes", "u32"], "returns": "bytes"
     },
     {
       "export": "sceneInstanceColorParameters",
       "symbol": "mt_core_scene_instance_colors",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
-      "export": "sceneAtlasParameters",
-      "symbol": "mt_core_scene_atlas",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "export": "sceneAtlasParameters", "symbol": "mt_core_scene_atlas", "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
-      "export": "receiveNativeSyncHints",
-      "symbol": "mt_core_scene_sync_hints",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
+      "export": "receiveNativeSyncHints", "symbol": "mt_core_scene_sync_hints",
+      "params": ["bytes", "u32"], "returns": "bytes"
     },
     {
-      "export": "sceneTargetParameters",
-      "symbol": "mt_core_scene_target",
-      "params": [
-        "bytes",
-        "u32"
-      ],
-      "returns": "bytes"
+      "export": "sceneTargetParameters", "symbol": "mt_core_scene_target",
+      "params": ["bytes", "u32"], "returns": "bytes"
     },
     {
-      "export": "sceneAovParameters",
-      "symbol": "mt_core_scene_aov",
-      "params": [
-        "bytes",
-        "u32"
-      ],
+      "export": "sceneAovParameters", "symbol": "mt_core_scene_aov", "params": ["bytes", "u32"],
       "returns": "bytes"
     },
     {
       "export": "jnlmParameters",
       "symbol": "mt_core_jnlm",
-      "params": [
-        "u32",
-        "u32",
-        "f64",
-        "u32",
-        "u32",
-        "f64",
-        "f64",
-        "u32"
-      ],
+      "params": ["u32", "u32", "f64", "u32", "u32", "f64", "f64", "u32"],
       "returns": "bytes"
     },
     {
-      "export": "postprocessParameters",
-      "symbol": "mt_core_postprocess",
-      "params": [],
+      "export": "postprocessParameters", "symbol": "mt_core_postprocess", "params": [],
       "returns": "bytes"
     },
     {
-      "export": "bloomParameters",
-      "symbol": "mt_core_bloom_parameters",
-      "params": [
-        "f64"
-      ],
+      "export": "bloomParameters", "symbol": "mt_core_bloom_parameters", "params": ["f64"],
       "returns": "bytes"
     },
     {
-      "export": "viewerParameters",
-      "symbol": "mt_core_viewer_math",
-      "params": [
-        "u32",
-        "bytes"
-      ],
+      "export": "viewerParameters", "symbol": "mt_core_viewer_math", "params": ["u32", "bytes"],
       "returns": "bytes"
     }
   ]

@@ -321,39 +321,7 @@ fn reference_bloom(input: &Image, threshold: f64, radius: f64) -> Image {
     result
 }
 fn read_half(gpu: &GpuDevice, texture: &wgpu::Texture) -> Vec<[f64; 4]> {
-    let stride = (texture.width() * 8).div_ceil(256) * 256;
-    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: stride as u64 * texture.height() as u64,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride),
-                rows_per_image: None,
-            },
-        },
-        texture.size(),
-    );
-    gpu.queue.submit([encoder.finish()]);
-    let (send, receive) = std::sync::mpsc::channel();
-    buffer.map_async(wgpu::MapMode::Read, .., move |r| {
-        let _ = send.send(r);
-    });
-    gpu.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(10)),
-        })
-        .unwrap();
-    receive.recv().unwrap().unwrap();
-    let mapped = buffer.get_mapped_range(..).unwrap();
+    let mapped = crate::test_support::read_texture(gpu, texture);
     let half = |b: &[u8]| {
         let n = u16::from_le_bytes(b.try_into().unwrap());
         let e = (n >> 10) & 31;
@@ -366,12 +334,8 @@ fn read_half(gpu: &GpuDevice, texture: &wgpu::Texture) -> Vec<[f64; 4]> {
         if n & 0x8000 == 0 { v } else { -v }
     };
     let pixels: Vec<[f64; 4]> = mapped
-        .chunks_exact(stride as usize)
-        .flat_map(|row| {
-            row[..texture.width() as usize * 8]
-                .chunks_exact(8)
-                .map(|p| std::array::from_fn(|c| half(&p[c * 2..c * 2 + 2])))
-        })
+        .chunks_exact(8)
+        .map(|p| std::array::from_fn(|c| half(&p[c * 2..c * 2 + 2])))
         .collect();
     if let Ok(dir) = std::env::var("MUTRACER_EFFECTS_SNAPSHOT") {
         static INDEX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

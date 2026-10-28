@@ -250,19 +250,7 @@ fn classify(data: &[u8], normal: &[u8], sample: u32) -> Result<Sample> {
     Ok(result)
 }
 
-#[cfg(feature = "validation")]
-pub(super) fn accumulation_count(state: &GpuScene, sample: u32) -> Result<serde_json::Value> {
-    let data = hit_diagnostics::read_raw(
-        &state.gpu,
-        &state.buffers[&state
-            .scene
-            .normal_output
-            .ok_or("Missing normal accumulator")?],
-    )?;
-    Ok(classify_accumulation(&data, sample))
-}
-
-#[cfg(any(test, feature = "validation"))]
+#[cfg(test)]
 fn classify_accumulation(data: &[u8], sample: u32) -> serde_json::Value {
     let mut short = 0usize;
     let mut invalid = usize::from(data.is_empty() || data.len() % 16 != 0);

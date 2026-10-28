@@ -228,7 +228,7 @@ fn surface_sdr_blit_preserves_encoded_pixels_orientation_and_alpha_modes() {
             &target.create_view(&Default::default()),
         );
         let expected: Vec<_> = want.into_iter().flat_map(u16::to_le_bytes).collect();
-        for p in crate::api::gpu_output_tests::bytes(&engine, &target, 8).chunks_exact(8) {
+        for p in crate::test_support::read_texture(&engine.inner.gpu, &target).chunks_exact(8) {
             assert_eq!(p, expected);
         }
     }

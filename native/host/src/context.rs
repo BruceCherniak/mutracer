@@ -426,15 +426,6 @@ fn target_contexts(
     }
     Ok((current, source))
 }
-/// GPU bytes held by a linked render target (A/B measurements).
-#[cfg(test)]
-pub(crate) fn target_bytes(handle: u64) -> u64 {
-    let slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    slot.as_ref()
-        .and_then(|r| r.contexts.get(&handle))
-        .and_then(|c| c.link.as_ref())
-        .map_or(0, |l| l.target.bytes())
-}
 // Direct AS preparation deliberately omits the software BVH. Re-run the shared
 // TS preparation only when hardware capture/upload fails, replacing its retained
 // state too so later edits operate on the same representation as the fallback.

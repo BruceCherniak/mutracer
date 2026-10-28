@@ -11,7 +11,7 @@ const chunks=[geometry.position.array,geometry.normal.array,geometry.uv.array,ge
 });
 const header=Buffer.alloc(16);chunks.forEach((c,i)=>header.writeUInt32LE(c.length,4*i));
 const data=Buffer.concat([header,...chunks]);
-const materials=JSON.stringify(scene.meshes.map(mesh=>({name:mesh.name,transform:mesh.transform,values:mesh.materials[0]})),null,2)+'\n';
+const materials='[\n'+scene.meshes.map(mesh=>JSON.stringify({name:mesh.name,transform:mesh.transform,values:mesh.materials[0]})).join(',\n')+'\n]\n';
 for(const [name,bytes] of [['spheres.bin',data],['spheres.json',Buffer.from(materials)]]) {
  const path=new URL('../viewer/assets/'+name,import.meta.url);
  if(process.argv.includes('--check')) {if(!readFileSync(path).equals(bytes))throw Error('Regenerate native material spheres: '+name);}

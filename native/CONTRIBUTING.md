@@ -10,8 +10,8 @@ Rust doc comments); workflows, behavior across calls, costs and limits belong in
 ## Layout
 
 - `src/`: TypeScript AOT entry points, runtime adapters and shader generators.
-- `host/src/`: Rust library; `host/diagnostics/`: standalone diagnostic
-  executables and shaders; `host/fuzz/`: fuzz targets.
+- `host/src/`: Rust library; `host/diagnostics/`: CI probe executables and
+  shaders.
 - `include/`: public C headers; `schemas/`: frozen wire-property IDs and error
   codes.
 - `docs/`: user guides and the scene format reference.
@@ -20,7 +20,6 @@ Rust doc comments); workflows, behavior across calls, costs and limits belong in
   C module test harness.
 - `validation/`: render and contract checks and browser reference tools;
   `validation/compiler/` holds whole-browser-API and async compilation probes.
-- `benchmark/`: performance and correctness comparisons.
 - `viewer/`: standalone app; `toolchain/`: pinned compiler; `LICENSES/`:
   license texts.
 
@@ -586,30 +585,10 @@ SDK tests.
   `OIDN_DEVICE_CUDA=0` and `OIDN_DEVICE_HIP=0`, and leave the GPU requirement
   flags unset.
 
-### Robustness and fuzzing
+### Robustness
 
 Caught TypeScript exceptions must keep their operation code and message across
 the packet boundary; test with the actual AOT archive, not JavaScript alone.
-Fatal AOT traps abort the process, so fuzz in a separate process.
-
-With nightly Rust and cargo-fuzz, set `MUTRACER_AOT_ARCHIVE` and a
-`CARGO_TARGET_DIR` outside the checkout. Generate a seed with
-`cargo run --manifest-path native/host/Cargo.toml --features fuzzing --bin fuzz-seed -- SEED_PATH`,
-put it and small descriptor fixtures in external corpus directories, and run
-each target for at least 30 minutes:
-
-```sh
-cargo +nightly fuzz run --fuzz-dir native/host/fuzz validate CORPUS_VALIDATE -- \
-  -max_total_time=1860 -max_len=65536 -artifact_prefix=ARTIFACT_DIRECTORY/
-cargo +nightly fuzz run --fuzz-dir native/host/fuzz commit CORPUS_COMMIT -- \
-  -max_total_time=1860 -max_len=65536 -artifact_prefix=ARTIFACT_DIRECTORY/
-```
-
-The `commit` target needs a real adapter and checks both backends with bounded
-dimensions, geometry and displacement work. Rust AddressSanitizer does not
-instrument the scriptc archive or system drivers; report instrumentation
-boundaries, and compile C++ separately with a compatible sanitizer before
-claiming C++ coverage. Keep failing inputs, logs, the exact toolchain and hashes.
 
 ### C window consumer
 
@@ -640,58 +619,8 @@ separate from formal timing:
 - Upload payload counts come from the write calls, separate from buffer
   capacity and acceleration-structure storage.
 - Native peak RSS and the browser JS heap are different metrics.
-- `prepare-diagnostics INPUT OUTPUT BACKEND ITERATIONS` profiles CPU-only
-  preparation. `nativeGeometryKernelProfile` separates kernel bodies; its time is
-  already part of preparation.
-
-### Native versus Web rendering
-
-```sh
-node native/benchmark/benchmark.mjs --manifest /absolute/inputs.json \
-  --library /absolute/libmutracer_native_probe.dylib --output /absolute/evidence --port 4201
-```
-
-- The manifest fixes raw descriptors, checksums and the expected backend and
-  reason; the harness freezes binaries, bundles and configuration.
-- Measure performance on complex models only; procedural fixtures are
-  correctness checks. Web requests 1080 rows but renders 1088; compare requested
-  sizes without rescaling.
-- Use caffeinate with an unlocked display and wait for `thermalState=0` before
-  each group. Default one round: Web and HWRT render six times and discard the
-  first; Software renders once for bytes, without timing or GPU profiling; HWRT
-  profiles twice after formal output is saved. Commit sequences keep twelve
-  observations and discard the first two.
-- Add three alternating Web/native rounds for threshold-adjacent results,
-  benefits, regressions and outliers. Do not reuse Web timings across browser
-  upgrades or bundle hash changes. `?index=N` resumes a group; `?edits=1`
-  measures retained edits.
-
-### Native versus Web denoising
-
-```sh
-cargo build --release --locked --manifest-path native/host/Cargo.toml \
-  --features validation --bin denoise-benchmark
-node native/benchmark/denoise.mjs --output /absolute/evidence \
-  --native /absolute/denoise-benchmark --oidn /absolute/OIDN-library \
-  --model /absolute/complex-model.gltf
-```
-
-Open the printed localhost URL in a WebGPU browser. The harness loads the model
-with GLTFLoader/THREESync and captures the same 8-sample HDR, normal and albedo
-inputs for native CPU, native CUDA and oidn-web.
-
-- Three alternating rounds each discard the first run and two warmups, then
-  measure seven runs.
-- Web uses the standard model, fixed 512-pixel tiles and FP16 when supported.
-  Native uses high quality with noisy guides; the diagnostic fixes HDR
-  `inputScale=1` to match Web GPU-buffer inputs (applications keep automatic
-  exposure).
-- Wall times include input upload and result readback, not renderer readback or
-  model loading. Web `residentMs` excludes result readback but may include
-  pending uploads; it is not a GPU timestamp.
-- Keep input and output bytes, verify the actual GPU, report cold start
-  separately, and compare outputs as well as timings; this does not establish
-  quality parity.
+- `nativeGeometryKernelProfile` separates kernel bodies; its time is already
+  part of preparation.
 
 ## Metal HWRT sample miss
 
