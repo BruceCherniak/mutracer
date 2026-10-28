@@ -63,9 +63,17 @@
         <p class="drop__error" id="drop-error" role="alert" hidden></p>
       </section>
 
-      <section class="examples" aria-labelledby="examples-title">
-        <h2 id="examples-title">Examples <span>Khronos &amp; Sketchfab · loaded on demand</span></h2>
-        <ul class="cards" id="cards"></ul>
+      <section class="examples" aria-label="Examples">
+        <div class="collection-tabs" role="tablist" aria-label="Example collections">
+          <button id="collection-tab" type="button" role="tab" aria-selected="true" aria-controls="collection-panel">MuTracer Collection</button>
+          <button id="research-tab" type="button" role="tab" aria-selected="false" aria-controls="research-panel" tabindex="-1">glTF Research Scenes</button>
+        </div>
+        <div id="collection-panel" role="tabpanel" aria-labelledby="collection-tab" tabindex="0">
+          <ul class="cards" id="cards"></ul>
+        </div>
+        <div id="research-panel" role="tabpanel" aria-labelledby="research-tab" tabindex="0" hidden>
+          <ul class="cards cards--research" id="research-cards"></ul>
+        </div>
       </section>
 
       <section class="features" aria-labelledby="features-title">
