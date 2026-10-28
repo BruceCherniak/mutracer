@@ -1,4 +1,4 @@
-import type {DisplayParityAccumulation} from './displayParityDiagnostics.js';
+import type {DisplayParityAccumulation, DisplayParityTarget} from './displayParityDiagnostics.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WebGLAov} from './WebGLAov.js';
 import {aovMask} from './aov.js';
@@ -539,8 +539,9 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       return undefined;
     },
     getTotalSamplesRendered: () => sampleCount,
-    getDiagnostics: () => ({ ...rayTracePass.getDiagnostics(), shaderCompilation: renderer.getShaderCompilationDiagnostics(),
-      displayParity: {
+    /** @internal */
+    _displayParity() {
+      return {
         record(trace?: string[]) { displayTrace = trace; },
         load(input: DisplayParityAccumulation) {
           setSize(input.width, input.height);
@@ -557,15 +558,16 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
           const inputs = {color: texture(input.color), albedo: texture(input.albedo), normal: texture(input.normal),
             moments: texture(Float32Array.from(input.moments, (v, i) => i % 4 === 2 ? input.samples : v)),
             shadowCatcher: texture(shadow), catcherBackground: texture(background), catcherMoments: texture(input.moments)};
-          rayTracePass.getDiagnostics().loadAccumulation(inputs, input.catcher);
+          rayTracePass._loadDiagnosticAccumulation(inputs, input.catcher);
           sampleCount = resolvedSamples = input.samples;
           resolvedHasShadowCatcher = input.catcher; isFirstFrame = false;
           rayTraceOutputPass.setSize(renderWidth, renderHeight);
           rayTraceOutputPass.setSampleCount(sampleCount);
           rayTraceOutputPass.createPass(rayTracePass);
         }
-      }
-    }),
+      };
+    },
+    getDiagnostics: () => ({ ...rayTracePass.getDiagnostics(), shaderCompilation: renderer.getShaderCompilationDiagnostics() }),
     flushDiagnostics: async () => { },
     setShadowCatcherParams(color: ColorRGB, alpha: number) {
       const changed =
@@ -640,7 +642,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       presentationTexture?.dispose(renderer.gl);
       denoisedTexture?.dispose(renderer.gl);
     }
-  } satisfies TargetPipeline;
+  } satisfies TargetPipeline & DisplayParityTarget;
 }
 
 /** Independent render targets, without preview or presentation policy. */

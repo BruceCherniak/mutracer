@@ -1,4 +1,4 @@
-import type {DisplayParityAccumulation} from './displayParityDiagnostics.js';
+import type {DisplayParityAccumulation, DisplayParityTarget} from './displayParityDiagnostics.js';
 import {hdrResolveWGSL} from './wgsl/compose.frag.wgsl.js';
 import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
@@ -1728,34 +1728,38 @@ width: renderWidth, height: renderHeight,
       return sampleCount;
     },
 
+    /** @internal */
+    _displayParity() {
+      return {
+        record(trace?: string[]) { displayTrace = trace; },
+        load(input: DisplayParityAccumulation) {
+          cancelDenoise(); clearDenoisedOutput();
+          setSize(input.width, input.height);
+          rayTracePass.useTarget(targetKey);
+          rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
+          const buffers = rayTracePass.getOutputBuffer();
+          const shadow = new Float32Array(input.width * input.height * 12);
+          for (let i = 0; i < input.width * input.height; i++) {
+            shadow.set(input.shadow.subarray(i * 8, i * 8 + 8), i * 12);
+            shadow.set(input.moments.subarray(i * 4, i * 4 + 4), i * 12 + 8);
+          }
+          for (const [buffer, data] of [[buffers.color, input.color], [buffers.albedo, input.albedo],
+            [buffers.normal, input.normal], [buffers.shadowCatcher, shadow]] as const) device.queue.writeBuffer(buffer, 0, data);
+          sampleCount = resolvedSamples = input.samples;
+          resolvedHasShadowCatcher = input.catcher;
+          isFirstFrame = false; postProcessPending = false; bloomSamples = 0;
+          rayTraceOutputPass.setSampleCount(sampleCount);
+          rayTraceOutputPass.setSampleTileGrid(1, 1);
+          const encoder = device.createCommandEncoder();
+          rayTraceOutputPass.createPass(encoder, buffers, resolvedHasShadowCatcher);
+          device.queue.submit([encoder.finish()]);
+        }
+      };
+    },
+
     getDiagnostics() {
       return {
         ...rayTracePass.getDiagnostics(),
-        displayParity: {
-          record(trace?: string[]) { displayTrace = trace; },
-          load(input: DisplayParityAccumulation) {
-            cancelDenoise(); clearDenoisedOutput();
-            setSize(input.width, input.height);
-            rayTracePass.useTarget(targetKey);
-            rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
-            const buffers = rayTracePass.getOutputBuffer();
-            const shadow = new Float32Array(input.width * input.height * 12);
-            for (let i = 0; i < input.width * input.height; i++) {
-              shadow.set(input.shadow.subarray(i * 8, i * 8 + 8), i * 12);
-              shadow.set(input.moments.subarray(i * 4, i * 4 + 4), i * 12 + 8);
-            }
-            for (const [buffer, data] of [[buffers.color, input.color], [buffers.albedo, input.albedo],
-              [buffers.normal, input.normal], [buffers.shadowCatcher, shadow]] as const) device.queue.writeBuffer(buffer, 0, data);
-            sampleCount = resolvedSamples = input.samples;
-            resolvedHasShadowCatcher = input.catcher;
-            isFirstFrame = false; postProcessPending = false; bloomSamples = 0;
-            rayTraceOutputPass.setSampleCount(sampleCount);
-            rayTraceOutputPass.setSampleTileGrid(1, 1);
-            const encoder = device.createCommandEncoder();
-            rayTraceOutputPass.createPass(encoder, buffers, resolvedHasShadowCatcher);
-            device.queue.submit([encoder.finish()]);
-          }
-        },
         hdrPresentation: {
           requested: hdrOutputRequested,
           active: surface.hdr,
@@ -1820,7 +1824,7 @@ width: renderWidth, height: renderHeight,
     },
 
     dispose
-  } satisfies TargetPipeline;
+  } satisfies TargetPipeline & DisplayParityTarget;
 }
 
 /** Independent render targets, without preview or presentation policy. */

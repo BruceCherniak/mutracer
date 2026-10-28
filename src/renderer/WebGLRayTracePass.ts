@@ -562,15 +562,15 @@ class WebGLRayTracePass {
     return this._debugBvhData;
   }
 
+  /** @internal */
+  _loadDiagnosticAccumulation(inputs: Record<string, WebGLTexture2D>, catcher: boolean) {
+    this._mainPass.loadDiagnosticOutputs({color: inputs.color, albedo: inputs.albedo, normal: inputs.normal, moments: inputs.moments});
+    this._shadowCatcherPass.loadDiagnosticOutputs({shadowCatcher: inputs.shadowCatcher, catcherBackground: inputs.catcherBackground, catcherMoments: inputs.catcherMoments});
+    this._hasShadowCatcher = catcher;
+  }
+
   getDiagnostics() {
-    return {
-      textureAtlas: this._materialData?.textureAtlasStats,
-      loadAccumulation: (inputs: Record<string, WebGLTexture2D>, catcher: boolean) => {
-        this._mainPass.loadDiagnosticOutputs({color: inputs.color, albedo: inputs.albedo, normal: inputs.normal, moments: inputs.moments});
-        this._shadowCatcherPass.loadDiagnosticOutputs({shadowCatcher: inputs.shadowCatcher, catcherBackground: inputs.catcherBackground, catcherMoments: inputs.catcherMoments});
-        this._hasShadowCatcher = catcher;
-      }
-    };
+    return { textureAtlas: this._materialData?.textureAtlasStats };
   }
 
   private _updateMeshData() {

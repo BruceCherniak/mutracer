@@ -1,3 +1,6 @@
+import Engine from '../../src/Engine';
+import {makeWebGLRenderTargets} from '../../src/renderer/WebGLRenderingPipeline';
+import {expectDataOnlyDiagnostics} from '../helpers/diagnostics';
 import {expect, it, vi} from 'vitest';
 import {FragmentShader} from '../../src/renderer/shader';
 import {Texture2D, constants, type WebGLDevice} from '../../src/renderer/webgl';
@@ -31,4 +34,17 @@ it('releases unused resolve outputs and detaches their framebuffer attachments',
   pass.setSize(64, 32); pass.createPass({}); const mask = pass.getOutput('mask');
   pass.setOutputs(['color']); pass.createPass({}); expect(mask.getMemoryBytes()).toBe(0);
   expect(gl.framebufferTexture2D).toHaveBeenCalledWith(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + 1, gl.TEXTURE_2D, null, 0); pass.dispose();
+});
+
+it('keeps internal WebGL fixture methods out of Engine diagnostics', () => {
+  vi.stubGlobal('Image', class {src = '';});
+  const {renderer} = context();
+  Object.assign(renderer, {getShaderCompilationDiagnostics: () => ({status: 'ready', modules: []})});
+  const manager = makeWebGLRenderTargets(renderer);
+  const target = manager.createTarget('diagnostics'); target.activate();
+  const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement});
+  Object.assign(engine, {_pipeline: manager, _info: {backend: 'webgl'}});
+  try {
+    expectDataOnlyDiagnostics(engine.getDiagnostics());
+  } finally {engine.dispose(); vi.unstubAllGlobals();}
 });

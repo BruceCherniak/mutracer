@@ -1,3 +1,5 @@
+import Engine from '../../src/Engine';
+import {expectDataOnlyDiagnostics} from '../helpers/diagnostics';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Camera from '../../src/scene/Camera';
 import {makeWGPURenderTargets} from '../../src/renderer/WGPURenderingPipeline';
@@ -631,4 +633,12 @@ it.each([false,true])('records actual composition after bloom (%s)', async bloom
   const table=JSON.parse((await import('node:fs')).readFileSync(new URL('../fixtures/display-order.json',import.meta.url),'utf8'));
   expect(events).toEqual(table.cases.find((row:{name:string})=>row.name===(bloom?'sdr-bloom':'sdr-raw')).trace);
   pipeline.dispose();
+});
+
+it('keeps internal WebGPU fixture methods out of Engine diagnostics', () => {
+  const target = createPipeline();
+  const engine = new Engine({canvas: {width: 80, height: 64} as HTMLCanvasElement});
+  Object.assign(engine, {_pipeline: target.manager, _info: {backend: 'webgpu'}, _gpuDevice: target.device});
+  expectDataOnlyDiagnostics(engine.getDiagnostics());
+  engine.dispose();
 });

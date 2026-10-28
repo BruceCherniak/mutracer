@@ -5,3 +5,12 @@ export interface DisplayParityAccumulation {
   color: Float32Array; albedo: Float32Array; normal: Float32Array;
   shadow: Float32Array; moments: Float32Array;
 }
+
+/** @internal Test-only access on concrete backend targets, never public diagnostics. */
+export interface DisplayParityTarget {
+  /** @internal */
+  _displayParity(): {
+    record(trace?: string[]): void;
+    load(input: DisplayParityAccumulation): void;
+  };
+}

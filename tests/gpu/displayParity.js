@@ -34,7 +34,7 @@ window.runBenchmark=async()=>{
  const records=[];
  try{for(const row of table.cases.filter(r=>backend!=='webgl'||!r.hdr&&r.webgl!==false)){
   const target=pipeline.createTarget(row.name);target.activate();
-  const diagnostics=target.getDiagnostics().displayParity;
+  const diagnostics=target._displayParity();
   target.setToneMappingParams({exposure:row.exposure??1,toneMapping:['agx','aces','cineon','reinhard','linear'][row.tone??0]});
   target.setBloomParams({intensity:row.bloom?.2:0,threshold:1,radius:.6});
   target.setOutput(['final','normal','albedo','shadow','shadowCatcher'][row.output]);
