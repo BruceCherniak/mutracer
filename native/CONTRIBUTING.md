@@ -172,7 +172,11 @@ browser/native outputs by commit; `compare COMMIT` captures the current checkout
 and reports byte and float differences. Set `MUTRACER_REFERENCE_CACHE` outside the
 checkout and `MUTRACER_OIDN_DISPLAY_INPUT` to the frozen HDR/guide directory.
 `node scripts/reference-performance.mjs COMMIT` measures active CPU frames and
-live JS heap after forced GC; it expands from one to three rounds above 3%.
+live JS heap after forced GC. It expands from one to three rounds when active
+CPU frame time increases by both more than 3% and more than 0.05 ms/frame, or
+when live JS heap increases by more than 3%. Submillisecond CPU frame times are
+sensitive to timer precision, so a relative threshold alone can report false
+regressions.
 
 ### Environment variables
 
