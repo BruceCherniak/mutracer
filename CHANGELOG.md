@@ -20,7 +20,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Intermediate progressive denoising updates are at least 500 ms apart.
 - Faster WebGPU shader compilation and rendering. Compared with v0.1.5, a 10-scene glTF benchmark on Apple M4 Max (640×360, 3 bounces) measured 54% lower cold shader preparation/compilation time and 21% lower GPU path-tracing time (geometric means across scenes). Results vary by hardware and scene.
 
-Benchmark values below are v0.1.5 → Unreleased, using Chrome 156 and medians of three independent runs. GPU times are per sample, measured using 32-sample renders after warmup with denoising disabled.
+Apple M4 Max benchmark values below are v0.1.5 → Unreleased, using Chrome 156 and medians of three independent runs. GPU times are per sample, measured using 32-sample renders after warmup with denoising disabled.
 
 | Scene | Cold shader preparation/compilation (s) | Change | GPU path tracing (ms/sample) | Change |
 | --- | ---: | ---: | ---: | ---: |
@@ -34,6 +34,25 @@ Benchmark values below are v0.1.5 → Unreleased, using Chrome 156 and medians o
 | 2025 Yamaha MT-09 SP V4 | 2.34 → 1.16 | -50.4% | 16.28 → 12.95 | -20.5% |
 | Gelatinous Cube | 2.31 → 1.15 | -50.3% | 17.52 → 14.11 | -19.5% |
 | Dragon | 2.16 → 1.02 | -52.5% | 14.17 → 11.34 | -19.9% |
+
+On Windows 11 with an NVIDIA GeForce RTX 4060 Laptop GPU (driver 617.42), the same 10 scenes at 640×360 and 3 bounces measured 74.4% lower shader preparation/compilation time and 58.8% lower GPU-completed 32-sample render time (geometric means across scenes). Time from BVH preparation completion to the first complete sample fell 71.5%. Results vary by hardware and scene.
+
+Windows values below compare `a646620` → `08d6c63`, using headless Chrome 156 and three independent processes per version and scene. Each process measured three 32-sample renders after an 8-sample warmup, with Sobol sampling, atlas textures and denoising disabled; values are medians within and across processes. Rendering waits for GPU completion and excludes pixel readback, but includes scheduling and post-processing, so these times are not directly comparable to the GPU-only M4 Max timings above. The canvas is 640×360; both versions align their internal render targets to 640×368.
+
+| Scene | Shader preparation/compilation (s) | Change | GPU-completed render (s/32 samples) | Change |
+| --- | ---: | ---: | ---: | ---: |
+| Classroom 2 | 7.900 → 2.176 | -72.5% | 21.518 → 1.360 | -93.7% |
+| Bathroom | 8.134 → 1.913 | -76.5% | 1.395 → 1.028 | -26.3% |
+| BMW M6 | 7.349 → 1.535 | -79.1% | 0.771 → 0.485 | -37.1% |
+| House | 7.388 → 1.670 | -77.4% | 1.243 → 0.636 | -48.9% |
+| Kitchen | 7.295 → 1.726 | -76.3% | 10.093 → 0.859 | -91.5% |
+| Blender Cover Remix | 8.379 → 2.509 | -70.1% | 0.573 → 0.450 | -21.5% |
+| LEGO Technic Bugatti Chiron | 7.156 → 1.818 | -74.6% | 1.208 → 0.679 | -43.8% |
+| 2025 Yamaha MT-09 SP V4 | 8.170 → 2.431 | -70.2% | 1.266 → 0.885 | -30.1% |
+| Gelatinous Cube | 8.273 → 2.485 | -70.0% | 1.369 → 0.957 | -30.1% |
+| Dragon | 7.667 → 1.857 | -75.8% | 1.141 → 0.582 | -48.9% |
+
+Windows compilation used fresh browser profiles, disabled shader disk caching and unique shader function names, but these controls do not guarantee an empty driver cache. Some scenes compiled more slowly in the first round despite these controls. Across individual rounds, geometric-mean compilation reductions ranged from 74.4% to 74.7%, and render-time reductions from 57.0% to 59.4%.
 
 ### Deprecated
 
