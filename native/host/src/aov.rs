@@ -18,22 +18,22 @@ pub(crate) struct Query {
     size: [u32; 2],
 }
 impl Query {
-    pub(crate) fn snapshot(scene: &GpuScene, target: Option<&Target>) -> Result<Self> {
-        let frame = target.map_or_else(|| scene.groups[2].clone(), |t| t.groups[0].clone());
+    pub(crate) fn snapshot(scene: &GpuScene, target: &Target) -> Result<Self> {
         Ok(Self {
-            pipelines: target
-                .map_or_else(|| scene.aov_pipelines.clone(), |t| t.aov_pipelines.clone()),
+            pipelines: target.aov_pipelines.clone(),
             gpu: scene.gpu.clone(),
-            shader: target.map_or_else(|| scene.depth_shader.clone(), |t| t.aov_shader.clone()),
+            shader: target.aov_shader.clone(),
             layouts: scene.layouts[..3].to_vec(),
-            groups: vec![scene.groups[0].clone(), scene.groups[1].clone(), frame],
+            groups: vec![
+                scene.groups[0].clone(),
+                scene.groups[1].clone(),
+                target.groups[0].clone(),
+            ],
             retained: scene
                 .retained
                 .clone()
                 .ok_or("AOV requires a retained scene")?,
-            size: target.map_or([scene.scene.width, scene.scene.height], |t| {
-                [t.width, t.height]
-            }),
+            size: [target.width, target.height],
         })
     }
     pub(crate) fn metadata(&self, camera: &[u8]) -> Result<Vec<u32>> {

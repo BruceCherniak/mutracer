@@ -151,8 +151,9 @@ fn first_surface_reflectance_matches_independent_hemisphere_quadrature() {
                 + include_str!("reflectance-oracle.wgsl");
             let camera = &assets[&AssetId::Packet(layout::resource::CAMERA)];
             let trace = &assets[&AssetId::Packet(layout::resource::TRACE_UNIFORM)];
-            let scene = GpuScene::new(description, &RenderOptions::default(), &assets, gpu.clone())
-                .unwrap();
+            let (scene, _) =
+                GpuScene::new(description, &RenderOptions::default(), &assets, gpu.clone())
+                    .unwrap();
             let mut metadata = super::tests::metadata();
             metadata.camera = camera_metadata(camera, false);
             let run = |source| {
@@ -334,11 +335,11 @@ fn real_frame_inputs_match_plane_oracle_and_preserve_path_rng() {
                 let control_source = source.replace("  mtFrameSurface(si, ma, ray);\n", "");
                 let camera = &assets[&AssetId::Packet(layout::resource::CAMERA)];
                 let trace = &assets[&AssetId::Packet(layout::resource::TRACE_UNIFORM)];
-                let mut scene =
+                let (scene, mut target) =
                     GpuScene::new(description, &RenderOptions::default(), &assets, gpu.clone())
                         .unwrap();
-                scene.add_samples(1, 6., 12345).unwrap();
-                let raw_before = scene.read_pixels(0).unwrap();
+                scene.add_samples(&mut target, 1).unwrap();
+                let raw_before = scene.read_target(&target, 0).unwrap();
                 if !thin && !ortho && !normal_mapped && pattern == 0 {
                     // A rejected PSO must not become a successful cache hit or
                     // leave a validation scope open on the shared device.
@@ -403,7 +404,7 @@ fn real_frame_inputs_match_plane_oracle_and_preserve_path_rng() {
                     "guide recording color error {color_error}"
                 );
                 assert_eq!(
-                    scene.read_pixels(0).unwrap(),
+                    scene.read_target(&target, 0).unwrap(),
                     raw_before,
                     "frame producer changed progressive accumulation"
                 );

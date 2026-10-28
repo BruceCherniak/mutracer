@@ -119,7 +119,7 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
     if !gpu.hardware_ray_query {
         return Err("Diagnostic requires actual HWRT".into());
     }
-    let state = GpuScene::new(
+    let (state, target) = GpuScene::new(
         scene,
         &RenderOptions {
             flags: if hardware { 4 } else { 0 },
@@ -128,11 +128,11 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
         &assets,
         gpu,
     )?;
-    state.dispatch_timed(0, 1, 6., 12345, None)?;
-    let sw = read_raw(&state.gpu, &state.buffers[&10])?;
-    let sw_bary = read_raw(&state.gpu, &state.buffers[&11])?;
-    let hw = read_raw(&state.gpu, &state.buffers[&12])?;
-    let auxiliary = read_raw(&state.gpu, &state.buffers[&13])?;
+    state.dispatch_target(&target, 0, 1, None)?;
+    let sw = read_raw(&state.gpu, &target.buffers[&10])?;
+    let sw_bary = read_raw(&state.gpu, &target.buffers[&11])?;
+    let hw = read_raw(&state.gpu, &target.buffers[&12])?;
+    let auxiliary = read_raw(&state.gpu, &target.buffers[&13])?;
     let pixels = state.scene.width as usize * state.scene.height as usize;
     let mut software = Vec::with_capacity(pixels * 32);
     let mut hardware = Vec::with_capacity(pixels * 32);

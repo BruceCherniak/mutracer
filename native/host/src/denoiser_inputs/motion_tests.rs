@@ -23,7 +23,7 @@ fn camera_motion_uses_accepted_unjittered_frames_and_checks_previous_coverage() 
                 .unwrap();
                 let camera = &assets[&AssetId::Packet(layout::resource::CAMERA)];
                 let trace = &assets[&AssetId::Packet(layout::resource::TRACE_UNIFORM)];
-                let scene =
+                let (scene, _) =
                     GpuScene::new(description, &RenderOptions::default(), &assets, gpu.clone())
                         .unwrap();
                 let producer = FrameProducer::new(&scene, source).unwrap();

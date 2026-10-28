@@ -79,7 +79,7 @@ fn fresh(
     let target = crate::context::create_with_gpu(gpu, 0).unwrap();
     let l0settings = settings.l0(settings.sample_cap(samples), 0);
     unsafe {
-        super::l0_blocking(|e, n| {
+        super::test_support::l0_blocking(|e, n| {
             crate::context::mt_context_commit_with_settings(
                 owner,
                 input.as_ptr(),
@@ -91,7 +91,7 @@ fn fresh(
         })
         .unwrap();
     }
-    super::l0_blocking(|e, n| unsafe {
+    super::context_blocking(|| {
         crate::context::set_target(
             target,
             owner,
@@ -100,13 +100,12 @@ fn fresh(
             settings.quality(),
             settings.alpha_blend_strategy as u32,
             camera,
-            std::slice::from_raw_parts_mut(e, n),
         )
     })
     .unwrap();
     let mut job = 0;
     unsafe {
-        super::l0_blocking(|e, n| {
+        super::test_support::l0_blocking(|e, n| {
             crate::context::mt_context_submit(target, samples, &mut job, e, n)
         })
         .unwrap();
@@ -122,8 +121,12 @@ fn fresh(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
         unsafe {
-            super::l0_blocking(|e, n| crate::context::mt_job_poll(job, 64, e, n)).unwrap();
-            super::l0_blocking(|e, n| crate::context::mt_job_info(job, &mut info, e, n)).unwrap();
+            super::test_support::l0_blocking(|e, n| crate::context::mt_job_poll(job, 64, e, n))
+                .unwrap();
+            super::test_support::l0_blocking(|e, n| {
+                crate::context::mt_job_info(job, &mut info, e, n)
+            })
+            .unwrap();
         }
         if info.state == 2 {
             break;
@@ -134,7 +137,10 @@ fn fresh(
     let result = super::tests::context_images(target, [8, 6]);
     for handle in [target, owner] {
         unsafe {
-            super::l0_blocking(|e, n| crate::context::mt_context_destroy(handle, e, n)).unwrap();
+            super::test_support::l0_blocking(|e, n| {
+                crate::context::mt_context_destroy(handle, e, n)
+            })
+            .unwrap();
         }
     }
     result

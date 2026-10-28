@@ -1,6 +1,7 @@
 use super::display::{Selection, select};
 use super::engine::camera_offset;
 use super::render::{Readiness, flip_rows};
+use super::test_support::{l0, l0_blocking, status_from};
 use super::*;
 use crate::context;
 use crate::layout::header as h;
@@ -522,8 +523,7 @@ pub(super) fn context_outputs(handle: u64, size: [u32; 2], resolved: bool) -> [V
     let mut error = [0i8; 1024];
     [0, 1, 2].map(|kind| {
         if kind == 0 && resolved {
-            let mut pixels = Vec::new();
-            l0_blocking(|e, n| context::read_hdr(handle, &mut pixels, e, n)).unwrap();
+            let pixels = context_blocking(|| context::read_hdr(handle)).unwrap();
             return flip_rows(&pixels, size[0], size[1]);
         }
         let mut bytes = vec![0u8; size[0] as usize * size[1] as usize * 16];
@@ -1766,7 +1766,7 @@ fn l0_samples(handle: u64) -> std::result::Result<u32, Status> {
     if code == 0 {
         Ok(info.samples)
     } else {
-        Err(super::status_from(code))
+        Err(status_from(code))
     }
 }
 /// Holds the next full preparation until the returned sender is used or dropped.

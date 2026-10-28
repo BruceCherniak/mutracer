@@ -28,7 +28,7 @@ impl Fixture {
     fn new() -> Self {
         let mut error = [0; 512];
         let gpu = GpuDevice::with_backend(0).expect("real GPU required");
-        let owner = create_with_gpu(gpu.clone(), 0).unwrap();
+        let owner = create_scene_with_gpu(gpu.clone(), 0).unwrap();
         let target = create_with_gpu(gpu.clone(), 0).unwrap();
         let other = create_with_gpu(gpu, 0).unwrap();
         let input = scene::tests::input();
@@ -44,6 +44,23 @@ impl Fixture {
                 &error,
             );
         }
+        with_registry(|registry| {
+            let owner = context(registry, owner)?;
+            assert!(owner.target.is_none());
+            let scene = ready(owner)?;
+            for id in [
+                layout::resource::CAMERA,
+                layout::resource::TRACE_UNIFORM,
+                layout::resource::COLOR,
+                layout::resource::NORMAL,
+                layout::resource::ALBEDO,
+                layout::resource::SHADOW_CATCHER,
+            ] {
+                assert!(!scene.buffers.contains_key(&id));
+            }
+            Ok(())
+        })
+        .unwrap();
         let at = layout::header::CAMERA_OFFSET * 4;
         let at = u32::from_le_bytes(input[at..at + 4].try_into().unwrap()) as usize * 4;
         let result = Self {
@@ -59,30 +76,36 @@ impl Fixture {
         result
     }
     fn set(&self, handle: u64, size: [u32; 2], error: &mut [c_char]) -> i32 {
-        set_target(
-            handle,
-            self.owner,
-            &settings::RenderSettings::default(),
-            size,
-            0,
-            0,
-            &self.camera,
-            error,
+        write_result(
+            error.as_mut_ptr(),
+            error.len(),
+            set_target(
+                handle,
+                self.owner,
+                &settings::RenderSettings::default(),
+                size,
+                0,
+                0,
+                &self.camera,
+            ),
         )
     }
     fn start(&self) -> std::thread::JoinHandle<i32> {
         let (target, owner, camera) = (self.target, self.owner, self.camera);
         std::thread::spawn(move || {
             let mut error = [0; 512];
-            set_target(
-                target,
-                owner,
-                &settings::RenderSettings::default(),
-                [16, 8],
-                0,
-                0,
-                &camera,
-                &mut error,
+            write_result(
+                error.as_mut_ptr(),
+                error.len(),
+                set_target(
+                    target,
+                    owner,
+                    &settings::RenderSettings::default(),
+                    [16, 8],
+                    0,
+                    0,
+                    &camera,
+                ),
             )
         })
     }
@@ -189,13 +212,16 @@ fn target_preparation_rejects_a_scene_commit_that_started_after_its_snapshot() {
         let input = Arc::new(scene::tests::input());
         let mut error = [0; 512];
         retry(|| {
-            commit_path(
-                owner,
-                &input,
-                &settings::RenderSettings::default(),
-                CommitPath::FullOnly,
-                &mut CommitOutcome::Done,
-                &mut error,
+            write_result(
+                error.as_mut_ptr(),
+                error.len(),
+                commit_path(
+                    owner,
+                    &input,
+                    &settings::RenderSettings::default(),
+                    CommitPath::FullOnly,
+                )
+                .map(|_| ()),
             )
         })
     });
@@ -227,10 +253,9 @@ fn target_preparation_rejects_a_scene_commit_that_started_after_its_snapshot() {
         action(error.as_mut_ptr(), error.len(), |registry| {
             assert_eq!(
                 context(registry, fixture.target)?
-                    .link
+                    .target
                     .as_ref()
                     .unwrap()
-                    .target
                     .width,
                 8
             );

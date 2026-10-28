@@ -11,7 +11,7 @@ pub(crate) struct Query {
     shader: wgpu::ShaderModule,
     layouts: Vec<wgpu::BindGroupLayout>,
     groups: [wgpu::BindGroup; 2],
-    frame: Vec<(u32, wgpu::Buffer)>,
+    frame: [wgpu::Buffer; 2],
     pipeline: Arc<OnceLock<Pipeline>>,
 }
 impl Query {
@@ -21,11 +21,17 @@ impl Query {
             shader: scene.depth_shader.clone(),
             layouts: scene.layouts[..3].to_vec(),
             groups: [scene.groups[0].clone(), scene.groups[1].clone()],
-            frame: scene.scene.bind_groups[layout::group::FRAME]
-                .entries
-                .iter()
-                .map(|entry| (entry.binding, scene.buffers[&entry.id].clone()))
-                .collect(),
+            frame: [
+                scene
+                    .gpu
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Depth query trace settings"),
+                        contents: &scene.display_trace,
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    }),
+                scene.buffers[&layout::resource::LIGHT_UNIFORM].clone(),
+            ],
             pipeline: scene.depth_pipeline.clone(),
         }
     }
@@ -91,19 +97,12 @@ impl Query {
         let frame = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Depth query frame"),
             layout: &self.layouts[2],
-            entries: &self
-                .frame
-                .iter()
-                .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                    binding: *binding,
-                    resource: if *binding == layout::frame_binding::CAMERA as u32 {
-                        &camera
-                    } else {
-                        buffer
-                    }
-                    .as_entire_binding(),
-                })
-                .collect::<Vec<_>>(),
+            entries: &[(0, &camera), (1, &self.frame[0]), (2, &self.frame[1])].map(
+                |(binding, buffer)| wgpu::BindGroupEntry {
+                    binding,
+                    resource: buffer.as_entire_binding(),
+                },
+            ),
         });
         let bytes = (api::DEPTH_SAMPLE_COUNT * 16) as u64;
         let output = device.create_buffer(&wgpu::BufferDescriptor {

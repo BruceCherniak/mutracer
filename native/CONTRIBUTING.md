@@ -339,13 +339,21 @@ layout entries and pipeline keys.
 
 ### Engine API
 
-The Rust `api` module commits each engine's scene once to an L0 context through
-the crate-internal `CommitPath`: incremental on the calling thread, full
-preparation on a library thread. Each render's L0 context is a target linked to
-that scene (`context::set_target`), with camera and trace uniforms from the
-`sceneTargetParameters` AOT entry, its own accumulation and, for another
-sampling pattern or bevel sample count, its own shader variant. Every scene
+The Rust `api` module commits each engine's scene once to a scene-only L0
+context through the crate-internal `CommitPath`: incremental on the calling
+thread, full preparation on a library thread. Each render's context owns a
+`Target` linked to that scene (`context::set_target`), with camera and trace
+uniforms from `sceneTargetParameters`, its own accumulation and, for another
+sampling pattern or bevel sample count, its own shader variant. Standalone L0
+contexts use the same `Target` execution and readback paths. Every scene
 publication drains linked targets and sets them again.
+
+Rust context operations and C wrappers share `with_registry`: `try_lock` reports
+Busy and platform-scoped panic handling keeps the guard alive. An unclassified
+execution error that newly fails a touched context reports ContextFailed;
+explicit error statuses remain unchanged. Only C wrappers encode
+statuses and bounded error strings. Full commit publication retains its blocking
+lock after preparation, so publication and cancellation keep their ordering.
 
 Tests compare every render's HDR, normal and albedo with a fresh L0 context
 given the same overridden descriptor, settings and sample count, byte for byte

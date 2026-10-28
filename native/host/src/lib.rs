@@ -147,9 +147,6 @@ struct Scene {
     samplers: Vec<usize>,
     bind_groups: Vec<Group>,
     rt_uniform: usize,
-    color_output: usize,
-    normal_output: Option<usize>,
-    albedo_output: Option<usize>,
     hwrt: Option<hardware::Capture>,
     native_layout: Option<hardware::NativeLayout>,
 }
@@ -596,13 +593,16 @@ struct GpuScene {
     samplers: HashMap<usize, wgpu::Sampler>,
     hardware: Option<hardware::Resources>,
     compile_seconds: f64,
-    samples: u32,
-    frames: Vec<[u8; 16]>,
-    frame_key: (u32, u32),
 }
 impl GpuScene {
-    fn new(scene: Scene, options: &RenderOptions, assets: &Assets, gpu: GpuDevice) -> Result<Self> {
-        Self::new_reusing(scene, options, assets, gpu, None, None)
+    fn new(
+        scene: Scene,
+        options: &RenderOptions,
+        assets: &Assets,
+        gpu: GpuDevice,
+    ) -> Result<(Self, Target)> {
+        let (scene, target) = Self::new_reusing(scene, options, assets, gpu, None, None, true)?;
+        Ok((scene, target.unwrap()))
     }
     fn new_reusing(
         scene: Scene,
@@ -611,11 +611,20 @@ impl GpuScene {
         gpu: GpuDevice,
         reusable: Option<&HashMap<usize, wgpu::Buffer>>,
         reusable_hw: Option<&HashMap<hardware::HardwareBufferId, wgpu::Buffer>>,
-    ) -> Result<Self> {
+        own_target: bool,
+    ) -> Result<(Self, Option<Target>)> {
         // Drain validation/OOM errors before making a candidate scene visible to a context.
         let memory_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let result = Self::upload(scene, options, assets, gpu.clone(), reusable, reusable_hw);
+        let result = Self::upload(
+            scene,
+            options,
+            assets,
+            gpu.clone(),
+            reusable,
+            reusable_hw,
+            own_target,
+        );
         let validation = pollster::block_on(validation_scope.pop());
         let memory = pollster::block_on(memory_scope.pop());
         if let Some(error) = validation.or(memory) {
@@ -634,7 +643,8 @@ impl GpuScene {
         gpu: GpuDevice,
         reusable: Option<&HashMap<usize, wgpu::Buffer>>,
         reusable_hw: Option<&HashMap<hardware::HardwareBufferId, wgpu::Buffer>>,
-    ) -> Result<Self> {
+        own_target: bool,
+    ) -> Result<(Self, Option<Target>)> {
         let read = |name: &AssetId| -> Result<Cow<'_, [u8]>> {
             assets
                 .get(name)
@@ -674,10 +684,22 @@ impl GpuScene {
             }
         }
         runtime::init();
+        let target_ids: Vec<_> = scene.bind_groups[layout::group::FRAME..]
+            .iter()
+            .flat_map(|group| &group.entries)
+            .filter(|entry| {
+                matches!(entry.kind, BindingKind::Buffer)
+                    && entry.id != layout::resource::LIGHT_UNIFORM
+            })
+            .map(|entry| entry.id)
+            .collect();
         let mut buffers = HashMap::new();
         let mut reused_bytes = 0u64;
         let mut allocated_bytes = 0u64;
         for buffer in &scene.buffers {
+            if !own_target && target_ids.contains(&buffer.id) {
+                continue;
+            }
             let data = read(&buffer.resource)?;
             if data.len() as u64 != buffer.size {
                 return Err("Capture buffer length mismatch".into());
@@ -805,6 +827,11 @@ impl GpuScene {
         let groups: Vec<_> = scene
             .bind_groups
             .iter()
+            .take(if own_target {
+                scene.bind_groups.len()
+            } else {
+                layout::group::FRAME
+            })
             .zip(layouts.iter())
             .enumerate()
             .map(|(index, (group, layout))| {
@@ -845,113 +872,57 @@ impl GpuScene {
                 })
             })
             .collect();
-        let bounces = options.bounces;
-        let seed = options.seed;
-        let frames = runtime::frames(bounces, seed)?;
         let display_trace = read(&AssetId::Packet(scene.rt_uniform))?.into_owned();
-        Ok(Self {
-            aov_pipelines,
-            depth_shader,
-            depth_pipeline: Default::default(),
-            display_trace,
-            retained: None,
-            frames,
-            frame_key: (bounces.to_bits(), seed),
-            gpu,
-            scene,
-            buffers,
-            pipeline,
-            layouts,
-            hwrt_shader: use_hwrt,
-            groups,
-            textures: textures,
-            samplers,
-            hardware,
-            compile_seconds,
-            samples: 0,
-        })
+        let mut groups = groups;
+        let target = if own_target {
+            let target_buffers = target_ids
+                .into_iter()
+                .filter_map(|id| buffers.remove(&id).map(|b| (id, b)))
+                .collect();
+            Some(Target {
+                aov_shader: depth_shader.clone(),
+                aov_pipelines: aov_pipelines.clone(),
+                width: scene.width,
+                height: scene.height,
+                buffers: target_buffers,
+                pipeline: None,
+                groups: [
+                    groups[layout::group::FRAME].clone(),
+                    groups[layout::group::OUTPUT].clone(),
+                ],
+                samples: 0,
+                frames: runtime::frames(options.bounces, options.seed)?,
+                frame_inputs: None,
+            })
+        } else {
+            None
+        };
+        groups.truncate(layout::group::FRAME);
+        Ok((
+            Self {
+                aov_pipelines,
+                depth_shader,
+                depth_pipeline: Default::default(),
+                display_trace,
+                retained: None,
+                gpu,
+                scene,
+                buffers,
+                pipeline,
+                layouts,
+                hwrt_shader: use_hwrt,
+                groups,
+                textures,
+                samplers,
+                hardware,
+                compile_seconds,
+            },
+            target,
+        ))
     }
-    fn dispatch_timed(
-        &self,
-        start: u32,
-        additional: u32,
-        bounces: f32,
-        seed: u32,
-        timer: Option<&profiling::GpuTimer>,
-    ) -> Result<()> {
-        let end = start
-            .checked_add(additional)
-            .ok_or("Sample count overflow")?;
-        if additional == 0 || end > 16384 {
-            return Err("Total samples must be 1..16384".into());
-        }
-        if self.frame_key != (bounces.to_bits(), seed) {
-            return Err("Frame settings do not match the prepared sequence".into());
-        }
-        let groups: Vec<_> = self.groups.iter().collect();
-        self.encode_samples(
-            &self.pipeline,
-            &groups,
-            &self.buffers[&self.scene.rt_uniform],
-            &self.frames,
-            [self.scene.width, self.scene.height],
-            start..end,
-            timer,
-        );
-        Ok(())
-    }
-    /// Submits one dispatch per sample, writing that sample's frame words first.
-    #[allow(clippy::too_many_arguments)]
-    fn encode_samples(
-        &self,
-        pipeline: &wgpu::ComputePipeline,
-        groups: &[&wgpu::BindGroup],
-        uniform: &wgpu::Buffer,
-        frames: &[[u8; 16]],
-        size: [u32; 2],
-        samples: std::ops::Range<u32>,
-        timer: Option<&profiling::GpuTimer>,
-    ) {
-        let device = &self.gpu.device;
-        let queue = &self.gpu.queue;
-        let (start, end) = (samples.start, samples.end);
-        for sample in samples {
-            let frame = &frames[sample as usize];
-            queue.write_buffer(
-                uniform,
-                layout::ray_uniform::SAMPLE_COUNT as u64,
-                &frame[0..4],
-            );
-            queue.write_buffer(uniform, layout::ray_uniform::BOUNCES as u64, &frame[4..8]);
-            queue.write_buffer(
-                uniform,
-                layout::ray_uniform::SEQUENCE_SEED as u64,
-                &frame[8..12],
-            );
-            let mut encoder =
-                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    timestamp_writes: timer.map(|t| t.pass(sample - start)),
-                    ..Default::default()
-                });
-                pass.set_pipeline(pipeline);
-                for (index, group) in groups.iter().enumerate() {
-                    pass.set_bind_group(index as u32, *group, &[]);
-                }
-                pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
-            }
-            if sample + 1 == end {
-                if let Some(t) = timer {
-                    t.resolve(&mut encoder);
-                }
-            }
-            queue.submit([encoder.finish()]);
-        }
-    }
-    fn add_samples(&mut self, additional: u32, bounces: f32, seed: u32) -> Result<()> {
+    fn add_samples(&self, target: &mut Target, additional: u32) -> Result<()> {
         let timer = profiling::GpuTimer::new(&self.gpu.device, additional, false);
-        self.dispatch_timed(self.samples, additional, bounces, seed, timer.as_ref())?;
+        self.dispatch_target(target, target.samples, additional, timer.as_ref())?;
         self.gpu.device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: Some(Duration::from_secs(30)),
@@ -962,76 +933,21 @@ impl GpuScene {
                 .and_then(|t| t.optional_milliseconds(&self.gpu.device, &self.gpu.queue));
             native_log!(
                 "{}",
-                json!({"nativeRenderProfile": {"firstSample": self.samples, "samples": additional, "kernelGpuMs": gpu_ms}})
+                json!({"nativeRenderProfile": {"firstSample": target.samples, "samples": additional, "kernelGpuMs": gpu_ms}})
             );
         }
-        self.samples += additional;
+        target.samples += additional;
         Ok(())
     }
-    fn read_pixels(&self, kind: u32) -> Result<Vec<u8>> {
-        if self.samples == 0 {
-            return Err("No completed samples".into());
-        }
-        let id = match kind {
-            0 => self.scene.color_output,
-            1 => self.scene.normal_output.ok_or("No normal output")?,
-            2 => self.scene.albedo_output.ok_or("No albedo output")?,
-            _ => return Err("Unknown image kind".into()),
-        };
-        read_average(
-            &self.gpu.device,
-            &self.gpu.queue,
-            self.buffers.get(&id).ok_or("Missing output buffer")?,
-            self.scene.width,
-            self.scene.height,
-            self.samples,
-        )
-    }
-    /// L1 readback; the public L0 read_pixels method above remains a raw average.
-    fn read_hdr(&self, target: Option<&Target>) -> Result<Vec<f32>> {
-        let (buffers, size, samples) = match target {
-            Some(target) => (
-                [target.output(0)?, target.output(1)?, target.output(2)?],
-                [target.width, target.height],
-                target.samples,
-            ),
-            None => (
-                [
-                    &self.buffers[&self.scene.color_output],
-                    &self.buffers[&self.scene.normal_output.ok_or("No normal output")?],
-                    &self.buffers[&self.scene.albedo_output.ok_or("No albedo output")?],
-                ],
-                [self.scene.width, self.scene.height],
-                self.samples,
-            ),
-        };
+    /// L1 coverage/background conversion; L0 remains a raw average.
+    fn read_hdr(&self, target: &Target) -> Result<Vec<f32>> {
         hdr::read(
             &self.gpu,
-            buffers,
-            size,
-            samples,
+            [target.output(0)?, target.output(1)?, target.output(2)?],
+            [target.width, target.height],
+            target.samples,
             display::Metadata::from_trace(&self.display_trace).opaque_background(),
         )
-    }
-    fn reset_raw(&mut self) -> Result<()> {
-        // The raw resource protocol reserves 10..13 for accumulation and ray scratch.
-        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        for id in 10..=13 {
-            encoder.clear_buffer(
-                self.buffers
-                    .get(&id)
-                    .ok_or("Missing raw accumulation buffer")?,
-                0,
-                None,
-            );
-        }
-        self.gpu.queue.submit([encoder.finish()]);
-        self.gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
-        self.samples = 0;
-        Ok(())
     }
     /// Builds a render target from its AOT packet, reusing `previous` buffers of
     /// the same size. The accumulation restarts.
@@ -1097,22 +1013,24 @@ impl GpuScene {
         }
         let mut buffers = HashMap::new();
         let mut clear = Vec::new();
-        for (id, bytes, usage) in [
-            (res::CAMERA, 144, self.buffers[&res::CAMERA].usage()),
-            (
-                res::TRACE_UNIFORM,
-                layout::ray_uniform::BYTES as u64,
-                self.buffers[&res::TRACE_UNIFORM].usage(),
-            ),
-            (res::COLOR, pixels * 16, self.buffers[&res::COLOR].usage()),
-            (res::NORMAL, pixels * 16, self.buffers[&res::NORMAL].usage()),
-            (res::ALBEDO, pixels * 16, self.buffers[&res::ALBEDO].usage()),
-            (
-                res::SHADOW_CATCHER,
-                pixels * 48,
-                self.buffers[&res::SHADOW_CATCHER].usage(),
-            ),
+        for (id, bytes) in [
+            (res::CAMERA, 144),
+            (res::TRACE_UNIFORM, layout::ray_uniform::BYTES as u64),
+            (res::COLOR, pixels * 16),
+            (res::NORMAL, pixels * 16),
+            (res::ALBEDO, pixels * 16),
+            (res::SHADOW_CATCHER, pixels * 48),
         ] {
+            let usage = wgpu::BufferUsages::from_bits(
+                self.scene
+                    .buffers
+                    .iter()
+                    .find(|b| b.id == id)
+                    .ok_or("Missing target buffer declaration")?
+                    .usage,
+            )
+            .ok_or("Invalid target buffer usage")?
+                | wgpu::BufferUsages::COPY_DST;
             let buffer = match reusable.remove(&id).filter(|b| b.size() == bytes) {
                 Some(buffer) => {
                     clear.push(id);
@@ -1202,20 +1120,50 @@ impl GpuScene {
         if additional == 0 || end > 16384 {
             return Err("Total samples must be 1..16384".into());
         }
-        self.encode_samples(
-            target.pipeline.as_ref().unwrap_or(&self.pipeline),
-            &[
-                &self.groups[layout::group::SCENE],
-                &self.groups[layout::group::TEXTURES],
-                &target.groups[0],
-                &target.groups[1],
-            ],
-            &target.buffers[&layout::resource::TRACE_UNIFORM],
-            &target.frames,
-            [target.width, target.height],
-            start..end,
-            timer,
-        );
+        let device = &self.gpu.device;
+        let queue = &self.gpu.queue;
+        let samples = start..end;
+        let groups = [
+            &self.groups[layout::group::SCENE],
+            &self.groups[layout::group::TEXTURES],
+            &target.groups[0],
+            &target.groups[1],
+        ];
+        let uniform = &target.buffers[&layout::resource::TRACE_UNIFORM];
+        let pipeline = target.pipeline.as_ref().unwrap_or(&self.pipeline);
+        for sample in samples {
+            let frame = &target.frames[sample as usize];
+            queue.write_buffer(
+                uniform,
+                layout::ray_uniform::SAMPLE_COUNT as u64,
+                &frame[0..4],
+            );
+            queue.write_buffer(uniform, layout::ray_uniform::BOUNCES as u64, &frame[4..8]);
+            queue.write_buffer(
+                uniform,
+                layout::ray_uniform::SEQUENCE_SEED as u64,
+                &frame[8..12],
+            );
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    timestamp_writes: timer.map(|t| t.pass(sample - start)),
+                    ..Default::default()
+                });
+                pass.set_pipeline(pipeline);
+                for (index, group) in groups.iter().enumerate() {
+                    pass.set_bind_group(index as u32, *group, &[]);
+                }
+                pass.dispatch_workgroups(target.width.div_ceil(8), target.height.div_ceil(8), 1);
+            }
+            if sample + 1 == end {
+                if let Some(t) = timer {
+                    t.resolve(&mut encoder);
+                }
+            }
+            queue.submit([encoder.finish()]);
+        }
         Ok(())
     }
     fn read_target(&self, target: &Target, kind: u32) -> Result<Vec<u8>> {
@@ -1244,14 +1192,32 @@ impl GpuScene {
         target.samples = 0;
         Ok(())
     }
-    fn validate_lighting(&self, updates: &scene::LightingUpdates) -> Result<()> {
+    fn validate_lighting(
+        &self,
+        updates: &scene::LightingUpdates,
+        target: Option<&Target>,
+    ) -> Result<()> {
+        use layout::resource as res;
         for (id, offset, width, height, data) in updates {
             if *id < layout::resource::ATLAS {
-                let size = self
+                let size = if let Some(buffer) = self
                     .buffers
                     .get(id)
-                    .ok_or("Missing updated scene buffer")?
-                    .size();
+                    .or_else(|| target.and_then(|t| t.buffers.get(id)))
+                {
+                    buffer.size()
+                } else if target.is_none() && matches!(*id, res::CAMERA | res::TRACE_UNIFORM) {
+                    // Shared scenes validate declaration sizes; update_lighting
+                    // then skips CAMERA/TRACE_UNIFORM writes without a target.
+                    self.scene
+                        .buffers
+                        .iter()
+                        .find(|b| b.id == *id)
+                        .ok_or("Missing updated scene buffer")?
+                        .size
+                } else {
+                    return Err("Missing updated scene buffer".into());
+                };
                 if *offset > size || data.len() as u64 > size - offset {
                     return Err("Full scene commit required: scene write exceeds buffer".into());
                 }
@@ -1419,7 +1385,11 @@ impl GpuScene {
         }
         result.map(Some)
     }
-    fn update_lighting(&mut self, updates: &scene::LightingUpdates) -> Result<()> {
+    fn update_lighting(
+        &mut self,
+        updates: &scene::LightingUpdates,
+        target: Option<&Target>,
+    ) -> Result<()> {
         if let Some(layout) = &updates.native_layout {
             self.scene.native_layout = Some(layout.clone());
         }
@@ -1467,9 +1437,13 @@ impl GpuScene {
                 self.display_trace[at..at + data.len()].copy_from_slice(data);
             }
             if *id < layout::resource::ATLAS {
-                self.gpu
-                    .queue
-                    .write_buffer(&self.buffers[id], *offset, data);
+                if let Some(buffer) = self
+                    .buffers
+                    .get(id)
+                    .or_else(|| target.and_then(|t| t.buffers.get(id)))
+                {
+                    self.gpu.queue.write_buffer(buffer, *offset, data);
+                }
             } else {
                 let texture = &self.textures[id];
                 self.gpu.queue.write_texture(
@@ -1499,7 +1473,7 @@ impl GpuScene {
                 );
             }
         }
-        self.reset_raw()
+        Ok(())
     }
     /// Rebuilds the bind groups that sample any of the `replaced` textures.
     fn rebind_textures(&mut self, replaced: &[usize]) -> Result<()> {
@@ -1554,20 +1528,7 @@ impl GpuScene {
             return Err("Material buffer size mismatch".into());
         }
         self.gpu.queue.write_buffer(buffer, 0, packed);
-        self.reset_raw()
-    }
-    fn update_camera(&mut self, packed: &[u8]) -> Result<()> {
-        let buffer = self
-            .buffers
-            .get(&layout::resource::CAMERA)
-            .ok_or("Missing raw camera buffer")?;
-        if packed.len() != 144 || buffer.size() != 144 {
-            return Err("Camera uniform size mismatch".into());
-        }
-        // Existing TS Camera/lens/packing owns the values; the host only uploads
-        // the command and clears accumulation. No scene/pipeline recreation.
-        self.gpu.queue.write_buffer(buffer, 0, packed);
-        self.reset_raw()
+        Ok(())
     }
 }
 
@@ -1585,33 +1546,31 @@ fn render_scene(
     let start = Instant::now();
     let use_hwrt = options.flags & 4 != 0;
     let gpu = GpuDevice::new(use_hwrt)?;
-    let mut gpu_scene = GpuScene::new(scene, options, assets, gpu)?;
+    let (gpu_scene, mut target) = GpuScene::new(scene, options, assets, gpu)?;
     let compile_seconds = gpu_scene.compile_seconds;
     let hardware_ray_query = gpu_scene.gpu.hardware_ray_query;
     native_log!("Native pipeline ready in {compile_seconds:.2}s; tracing {samples} samples...");
     let render_started = Instant::now();
-    gpu_scene.add_samples(samples, options.bounces, options.seed)?;
+    gpu_scene.add_samples(&mut target, samples)?;
     let scene = &gpu_scene.scene;
     let info = &gpu_scene.gpu.info;
-    let averaged = gpu_scene.read_pixels(0)?;
+    let averaged = gpu_scene.read_target(&target, 0)?;
     let mapped = &averaged;
     let mut aov_outputs = Vec::new();
     for (name, id) in [
-        ("normal", scene.normal_output),
-        ("albedo", scene.albedo_output),
+        ("normal", layout::resource::NORMAL),
+        ("albedo", layout::resource::ALBEDO),
     ] {
-        if let Some(id) = id {
-            let values = read_average(
-                &gpu_scene.gpu.device,
-                &gpu_scene.gpu.queue,
-                gpu_scene.buffers.get(&id).ok_or("Missing AOV buffer")?,
-                scene.width,
-                scene.height,
-                samples,
-            )?;
-            fs::write(output.join(format!("{name}.rgba32f")), values)?;
-            aov_outputs.push(name);
-        }
+        let values = read_average(
+            &gpu_scene.gpu.device,
+            &gpu_scene.gpu.queue,
+            target.buffers.get(&id).ok_or("Missing AOV buffer")?,
+            scene.width,
+            scene.height,
+            samples,
+        )?;
+        fs::write(output.join(format!("{name}.rgba32f")), values)?;
+        aov_outputs.push(name);
     }
     let mut hdr = Vec::with_capacity(mapped.len());
     let mut rgb = Vec::with_capacity(scene.width as usize * scene.height as usize * 3);

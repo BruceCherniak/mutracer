@@ -71,60 +71,21 @@ pub(crate) fn error(status: Status, message: impl Into<String>) -> Error {
     }
 }
 
-/// Status code of an L0 call result.
-fn status_from(code: i32) -> Status {
-    use Status::*;
-    [
-        Ok,
-        Error,
-        InvalidArgument,
-        InvalidHandle,
-        Busy,
-        InvalidState,
-        FullCommitRequired,
-        Cancelled,
-        BufferTooSmall,
-        ContextFailed,
-        Unavailable,
-        Timeout,
-    ]
-    .into_iter()
-    .find(|status| *status as i32 == code)
-    .unwrap_or(Error)
+fn context_result<T>(result: crate::Result<T>) -> Result<T> {
+    result.map_err(|e| {
+        error(
+            crate::status::classify(e.as_ref(), Status::Error),
+            e.to_string(),
+        )
+    })
 }
-fn l0_result(code: i32, message: &[std::ffi::c_char]) -> Result<()> {
-    if code == 0 {
-        return Ok(());
-    }
-    let bytes: Vec<u8> = message
-        .iter()
-        .take_while(|c| **c != 0)
-        .map(|c| *c as u8)
-        .collect();
-    Err(error(
-        status_from(code),
-        String::from_utf8_lossy(&bytes).into_owned(),
-    ))
+/// Blocking callers retry the same registry Busy result as the C boundary.
+fn context_blocking<T>(operation: impl FnMut() -> crate::Result<T>) -> Result<T> {
+    context_result(crate::context::blocking(operation))
 }
-/// Runs one L0 ABI call with an owned error buffer.
-fn l0(operation: impl FnOnce(*mut std::ffi::c_char, usize) -> i32) -> Result<()> {
-    let mut message = [0 as std::ffi::c_char; 1024];
-    let code = operation(message.as_mut_ptr(), message.len());
-    l0_result(code, &message)
-}
-/// Blocking callers retry L0 registry contention, which lasts one short operation.
-fn l0_blocking(mut operation: impl FnMut(*mut std::ffi::c_char, usize) -> i32) -> Result<()> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    loop {
-        crate::runtime::check_loss().map_err(|e| error(Status::Unavailable, e.to_string()))?;
-        match l0(&mut operation) {
-            Err(e) if e.status == Status::Busy && std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_micros(200));
-            }
-            result => return result,
-        }
-    }
-}
+
+#[cfg(test)]
+mod test_support;
 
 #[cfg(test)]
 mod alpha_tests;
