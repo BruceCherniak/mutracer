@@ -17,9 +17,23 @@ it.each(table.cases)('browser schedule: $name',async(row:{events:string[];action
   else if(event==='advance'){
    // Advance the real target while retaining its completed filtered output.
    render.maxSamples=2;targets[0].trace(engine.camera!,2);actions.push('Retain');
+  }else if(event==='options'){
+   await render.setDenoiser({type:'jnlm',schedule:'progressive',strength:2});
+   expect(state._denoisedSamples).toBe(0);expect(render.denoising).toBe(false);actions.push('Invalidate');
+  }else if(event==='present'){
+   const samples=state._denoisedSamples, calls=vi.mocked(targets[0].performDenoise!).mock.calls.length;
+   expect(engine.display.present(render)).toBe(render);
+   expect(state._denoisedSamples).toBe(samples);expect(targets[0].performDenoise).toHaveBeenCalledTimes(calls);actions.push('Present');
+  }else if(event==='present-unavailable'){
+   expect(engine.display.present(render)).toBeUndefined();expect(state._presentable).toBe(false);actions.push('Unavailable');
+  }else if(event==='diagnostic'||event==='final'){
+   const samples=state._denoisedSamples;engine.display.channel=event==='diagnostic'?'normal':'final';
+   expect(engine.display.present(render)).toBe(render);expect(targets[0].setOutput).toHaveBeenLastCalledWith(engine.display.channel);
+   expect(state._denoisedSamples).toBe(samples);actions.push(event==='diagnostic'?'Diagnostic':'Final');
   }else{
+   const pending=render.denoising;
    if(event==='revision')state._inputsChanged();else if(event==='device-lost')state._deviceLost(false);else state._cancelDenoise();
-   expect(signal?.aborted).toBe(true);expect(render.denoising).toBe(false);actions.push('Cancel');
+   if(pending||event!=='device-lost')expect(signal?.aborted).toBe(true);expect(state._denoisedSamples).toBe(0);expect(render.denoising).toBe(false);actions.push('Cancel');
   }
  }
  expect(actions).toEqual(row.actions);engine.dispose();

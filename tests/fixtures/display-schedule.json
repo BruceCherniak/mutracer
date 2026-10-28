@@ -1,9 +1,172 @@
 {
- "cases":[
-  {"name":"publish-current","events":["start","complete"],"actions":["Filter","Publish"]},
-  {"name":"revision-rejects-late-result","events":["start","revision","complete"],"actions":["Filter","Cancel","Discard"]},
-  {"name":"cancel-rejects-late-result","events":["start","cancel","complete"],"actions":["Filter","Cancel","Discard"]},
-  {"name":"loss-cancels-worker","events":["start","device-lost","complete"],"actions":["Filter","Cancel","Discard"]},
-  {"name":"new-request-with-retained-result","events":["start","complete","advance","start","complete"],"actions":["Filter","Publish","Retain","Filter","Publish"]}
- ]
+  "cases": [
+    {
+      "name": "publish-current",
+      "events": [
+        "start",
+        "complete"
+      ],
+      "actions": [
+        "Filter",
+        "Publish"
+      ]
+    },
+    {
+      "name": "revision-rejects-late-result",
+      "events": [
+        "start",
+        "revision",
+        "complete"
+      ],
+      "actions": [
+        "Filter",
+        "Cancel",
+        "Discard"
+      ]
+    },
+    {
+      "name": "cancel-rejects-late-result",
+      "events": [
+        "start",
+        "cancel",
+        "complete"
+      ],
+      "actions": [
+        "Filter",
+        "Cancel",
+        "Discard"
+      ]
+    },
+    {
+      "name": "loss-cancels-worker",
+      "events": [
+        "start",
+        "device-lost",
+        "complete"
+      ],
+      "actions": [
+        "Filter",
+        "Cancel",
+        "Discard"
+      ]
+    },
+    {
+      "name": "new-request-with-retained-result",
+      "events": [
+        "start",
+        "complete",
+        "advance",
+        "start",
+        "complete"
+      ],
+      "actions": [
+        "Filter",
+        "Publish",
+        "Retain",
+        "Filter",
+        "Publish"
+      ]
+    },
+    {
+      "name": "consecutive-revisions",
+      "events": [
+        "start",
+        "revision",
+        "revision",
+        "revision",
+        "complete"
+      ],
+      "actions": [
+        "Filter",
+        "Cancel",
+        "Cancel",
+        "Cancel",
+        "Discard"
+      ]
+    },
+    {
+      "name": "options-after-completion",
+      "events": [
+        "start",
+        "complete",
+        "options",
+        "start",
+        "complete"
+      ],
+      "actions": [
+        "Filter",
+        "Publish",
+        "Invalidate",
+        "Filter",
+        "Publish"
+      ]
+    },
+    {
+      "name": "alternating-filter-and-present",
+      "events": [
+        "start",
+        "present",
+        "complete",
+        "present",
+        "advance",
+        "present",
+        "start",
+        "present",
+        "complete",
+        "present"
+      ],
+      "actions": [
+        "Filter",
+        "Present",
+        "Publish",
+        "Present",
+        "Retain",
+        "Present",
+        "Filter",
+        "Present",
+        "Publish",
+        "Present"
+      ]
+    },
+    {
+      "name": "loss-after-completion",
+      "events": [
+        "start",
+        "complete",
+        "device-lost",
+        "present-unavailable"
+      ],
+      "actions": [
+        "Filter",
+        "Publish",
+        "Cancel",
+        "Unavailable"
+      ]
+    },
+    {
+      "name": "diagnostic-with-retained-result",
+      "events": [
+        "start",
+        "complete",
+        "advance",
+        "diagnostic",
+        "present",
+        "final",
+        "present",
+        "start",
+        "complete"
+      ],
+      "actions": [
+        "Filter",
+        "Publish",
+        "Retain",
+        "Diagnostic",
+        "Present",
+        "Final",
+        "Present",
+        "Filter",
+        "Publish"
+      ]
+    }
+  ]
 }
