@@ -9,32 +9,31 @@ Faster WebGPU rendering, surface AOVs and procedural skies.
 
 ### Performance
 
-Compared with v0.1.5, WebGPU shaders compile 2–4× faster and render time drops 20–59% (geometric means over 10 glTF scenes):
+Compared with v0.1.5, WebGPU shader compilation time drops 53.8% and render time drops 25.6% on Apple M4 Max (geometric means over 10 glTF scenes):
 
 | GPU | Shader compilation | Render time |
 | --- | ---: | ---: |
-| Apple M4 Max | -53.8% | -20.2% |
-| NVIDIA RTX 4060 Laptop (Windows 11) | -74.4% | -58.8% |
+| Apple M4 Max | -53.8% | -25.6% |
 
-Results vary by scene, hardware and shader cache.
+Results vary by scene, hardware, GPU load and shader cache.
 
 <details>
 <summary>Per-scene results</summary>
 
-Chrome 156, WebGPU, 640×368, 3 bounces, denoising off. Render time is 32 samples after warmup; medians of three runs. Values are v0.1.5 → v0.2.0 in seconds.
+Chrome 156, WebGPU, 1280×720, full-frame rendering without tiling, 3 bounces, denoising off. Render time is 32 samples after warmup, excluding loading, preparation and shader compilation. Each run uses the median of three measurements; results are medians of three runs. Shader compilation times are from the previous measurements. Values are v0.1.5 → v0.2.0 in seconds.
 
-| Scene | M4 Max compile | M4 Max render | RTX 4060 compile | RTX 4060 render |
-| --- | ---: | ---: | ---: | ---: |
-| Classroom 2 | 2.32 → 1.15 | 0.64 → 0.49 | 7.90 → 2.18 | 21.52 → 1.36 |
-| Bathroom | 2.34 → 1.01 | 0.60 → 0.48 | 8.13 → 1.91 | 1.40 → 1.03 |
-| BMW M6 | 2.13 → 0.88 | 0.35 → 0.27 | 7.35 → 1.54 | 0.77 → 0.49 |
-| House | 2.15 → 0.93 | 0.41 → 0.32 | 7.39 → 1.67 | 1.24 → 0.64 |
-| Kitchen | 2.12 → 0.92 | 0.49 → 0.39 | 7.30 → 1.73 | 10.09 → 0.86 |
-| Blender Cover Remix | 2.35 → 1.15 | 0.31 → 0.25 | 8.38 → 2.51 | 0.57 → 0.45 |
-| LEGO Technic Bugatti Chiron | 2.13 → 1.01 | 0.52 → 0.43 | 7.16 → 1.82 | 1.21 → 0.68 |
-| 2025 Yamaha MT-09 SP V4 | 2.34 → 1.16 | 0.53 → 0.42 | 8.17 → 2.43 | 1.27 → 0.89 |
-| Gelatinous Cube | 2.31 → 1.15 | 0.57 → 0.46 | 8.27 → 2.49 | 1.37 → 0.96 |
-| Dragon | 2.16 → 1.03 | 0.46 → 0.37 | 7.67 → 1.86 | 1.14 → 0.58 |
+| Scene | M4 Max compile | M4 Max render |
+| --- | ---: | ---: |
+| Classroom 2 | 2.32 → 1.15 | 3.49 → 2.52 |
+| Bathroom | 2.34 → 1.01 | 3.20 → 2.49 |
+| BMW M6 | 2.13 → 0.88 | 1.55 → 0.97 |
+| House | 2.15 → 0.93 | 1.63 → 1.30 |
+| Kitchen | 2.12 → 0.92 | 2.69 → 1.98 |
+| Blender Cover Remix | 2.35 → 1.15 | 1.34 → 0.91 |
+| LEGO Technic Bugatti Chiron | 2.13 → 1.01 | 1.46 → 1.15 |
+| 2025 Yamaha MT-09 SP V4 | 2.34 → 1.16 | 1.97 → 1.62 |
+| Gelatinous Cube | 2.31 → 1.15 | 2.60 → 2.02 |
+| Dragon | 2.16 → 1.03 | 1.76 → 1.32 |
 
 </details>
 
