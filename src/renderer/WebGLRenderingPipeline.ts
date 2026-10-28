@@ -1,3 +1,4 @@
+import type {DisplayParityAccumulation} from './displayParityDiagnostics.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WebGLAov} from './WebGLAov.js';
 import {aovMask} from './aov.js';
@@ -53,6 +54,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
   let sampleSequenceOffset = 0;
   const aov=new WebGLAov(renderer);
   let aovCamera: Camera | undefined;
+  let displayTrace: string[] | undefined;
   let sampleCount = 0;
   let elapsedFrameTime = 32;
   let elapsedTileTime: number | undefined;
@@ -206,6 +208,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       bloomState.owner = targetKey; bloomState.settings = bloomSettings;
       bloomPass.setBrightThreshold(bloomThreshold);
       bloomPass.setRadius(bloomRadius);
+      displayTrace?.push('Bloom:SceneLinear');
       bloomPass.createPass(colorTexture);
     } else if (bloomEnabled && sampleCount < 10) {
       currentBloomIntensity = 0;
@@ -216,6 +219,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       shadowCatcherEnabled: +resolvedHasShadowCatcher,
       outputMode: output === 'shadow' ? 1 : 0
     });
+    displayTrace?.push('Compose:DisplayEncoded');
     composePass.createPass({
       colorTex: colorTexture,
       foregroundTex: rayTraceOutputPass.getOutput('foreground'),
@@ -242,7 +246,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
         shadowCatcher: rayTraceOutputPass.getOutput('shadowCatcher'),
         strength: pendingDenoiser.strength,
         shape: pendingDenoiser.shape
-      });
+      }, displayTrace);
       denoisedTexture = copy.copy(filtered, renderWidth, renderHeight, denoisedTexture); denoiseValid = true;
       pendingDenoiser = undefined;
     }
@@ -253,8 +257,10 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
       displayTexture = aov.visualize(aovKind,aovDisplayOptions);
     } else if (output === 'normal' || output === 'albedo') {
+      displayTrace?.push('AOV:Raw');
       displayTexture = rayTraceOutputPass.getOutput(output);
     } else if (output === 'shadowCatcher') {
+      displayTrace?.push('AOV:Raw');
       displayTexture = rayTraceOutputPass.getOutput('shadowCatcher');
     }
     presentationTexture = copy.copy(displayTexture, renderWidth, renderHeight, presentationTexture);
@@ -533,7 +539,33 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       return undefined;
     },
     getTotalSamplesRendered: () => sampleCount,
-    getDiagnostics: () => ({ ...rayTracePass.getDiagnostics(), shaderCompilation: renderer.getShaderCompilationDiagnostics() }),
+    getDiagnostics: () => ({ ...rayTracePass.getDiagnostics(), shaderCompilation: renderer.getShaderCompilationDiagnostics(),
+      displayParity: {
+        record(trace?: string[]) { displayTrace = trace; },
+        load(input: DisplayParityAccumulation) {
+          setSize(input.width, input.height);
+          denoiseValid = false; pendingDenoiser = undefined;
+          const texture = (data: Float32Array) => {
+            const t = new Texture2D({width: input.width, height: input.height,
+              source: {data, width: input.width, height: input.height}, type: constants.FLOAT,
+              minFilter: constants.NEAREST, magFilter: constants.NEAREST});
+            return t;
+          };
+          const shadow = Float32Array.from({length: input.width * input.height * 4}, (_, i) =>
+            i % 4 === 3 ? input.moments[Math.floor(i / 4) * 4 + 2] : input.shadow[Math.floor(i / 4) * 8 + i % 4]);
+          const background = Float32Array.from(shadow, (_, i) => input.shadow[Math.floor(i / 4) * 8 + 4 + i % 4]);
+          const inputs = {color: texture(input.color), albedo: texture(input.albedo), normal: texture(input.normal),
+            moments: texture(Float32Array.from(input.moments, (v, i) => i % 4 === 2 ? input.samples : v)),
+            shadowCatcher: texture(shadow), catcherBackground: texture(background), catcherMoments: texture(input.moments)};
+          rayTracePass.getDiagnostics().loadAccumulation(inputs, input.catcher);
+          sampleCount = resolvedSamples = input.samples;
+          resolvedHasShadowCatcher = input.catcher; isFirstFrame = false;
+          rayTraceOutputPass.setSize(renderWidth, renderHeight);
+          rayTraceOutputPass.setSampleCount(sampleCount);
+          rayTraceOutputPass.createPass(rayTracePass);
+        }
+      }
+    }),
     flushDiagnostics: async () => { },
     setShadowCatcherParams(color: ColorRGB, alpha: number) {
       const changed =

@@ -1,101 +1,65 @@
-// Same procedural accumulation on each real GPU backend; production display passes.
-import {customDenoiseLayersMain} from '/src/renderer/wgsl/customDenoise.wgsl.ts';
-import {WGPUFullQuadPass} from '/src/renderer/WGPUFullQuadPass.ts';
-import {composeDefine, composeMain, compositeDenoiseOutputMain, compositeDenoiseDisplayMain, linearToSrgbDefine} from '/src/renderer/wgsl/compose.frag.wgsl.ts';
-import {WGPUJNLMDenoisePass} from '/src/renderer/WGPUJNLMDenoiser.ts';
-import WGPUBloomPass from '/src/renderer/WGPUBloomPass.ts';
-import {WebGLDevice, Texture2D, FrameBuffer, constants} from '/src/renderer/webgl.ts';
-import {WebGLFullQuadPass} from '/src/renderer/WebGLFullQuadPass.ts';
-import {composeFragment} from '/src/renderer/glsl/webglPipeline.frag.ts';
-import {WebGLJNLMDenoisePass} from '/src/renderer/WebGLJNLMDenoiser.ts';
-import WebGLBloomPass from '/src/renderer/WebGLBloomPass.ts';
+// Fixed additive inputs; all display decisions and trace nodes belong to production.
+import {makeWGPURenderTargets} from '/src/renderer/WGPURenderingPipeline.ts';
+import {makeWebGLRenderTargets} from '/src/renderer/WebGLRenderingPipeline.ts';
+import {WebGLDevice} from '/src/renderer/webgl.ts';
 import {JNLM_DEFAULT_SHAPE} from '/src/renderer/jnlm.ts';
 import table from '/tests/fixtures/display-order.json';
 const size=16, count=size*size, samples=32;
 const backend=new URLSearchParams(location.search).has('webgl')?'webgl':'webgpu';
 const save=(name,body)=>fetch('/evidence/'+backend+'-'+name,{method:'POST',body});
-// Native/WebGPU masks store shadow opacity; WebGL stores visibility.
-// A deterministic 32-sample image with bounded noise and a broad bright region.
-const colors=Float32Array.from({length:count*4},(_,i)=>i%4===3?1:
-  (i/4%size<8?2:6)*[1,.5,.25][i%4]+((Math.floor(i/4)*1664525+19)>>>0)%13*.002);
 const repeat=v=>Float32Array.from({length:count*4},(_,i)=>v[i%4]);
-const albedos=repeat([.3,.4,.5,1]), normals=repeat([.5,.5,1,1]), zeros=repeat([0,0,0,0]);
-const moments=new Float32Array(count*12);
-for(let i=0;i<count;i++){const p=colors.subarray(i*4,i*4+4),l=p[0]*.2126+p[1]*.7152+p[2]*.0722;moments.set([l*samples,(l*l+10)*samples,0,0],i*12+8);}
-let trace=[];
-const records=[];
-const observe=(object,method,record)=>{const original=object[method].bind(object);object[method]=(...args)=>{trace.push(...record());return original(...args);};};
-const settings=row=>({exposure:row.exposure??1,toneMappingParams:[row.tone??0,0],colorGradingParams:[1,1,0,0],
- hdrOutputEnabled:+row.hdr,flatBackgroundColor:[0,0,0,0],shadowCatcherColor:[0,0,0],shadowCatcherAlpha:1,
- shadowCatcherEnabled:+!!row.catcher,bloomIntensity:row.bloom?.2:0});
-async function webgpu(){
- const adapter=await navigator.gpu.requestAdapter(),device=await adapter.requestDevice({requiredLimits:{maxColorAttachmentBytesPerSample:40}});const errors=[];
- device.addEventListener('uncapturederror',e=>errors.push(e.error.message));
- const texture=data=>{const t=device.createTexture({size:[size,size],format:'rgba32float',usage:GPUTextureUsage.COPY_SRC|GPUTextureUsage.COPY_DST|GPUTextureUsage.TEXTURE_BINDING});device.queue.writeTexture({texture:t},data,{bytesPerRow:size*16},[size,size]);return t;};
- const buffer=data=>{const b=device.createBuffer({size:data.byteLength,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC});device.queue.writeBuffer(b,0,data);return b;};
- const color=texture(colors),albedo=texture(albedos),normal=texture(normals),zero=texture(zeros);
- const catcherColor=texture(colors.map((x,i)=>i%4===3?.5:x)),catcherFiltered=texture(colors.map((x,i)=>i%4===3?.5:x*.5)),catcherAlbedo=texture(repeat([.3,.4,.5,.5])),catcherMask=texture(repeat([.5,0,0,.25]));
- const layers=new WGPUFullQuadPass('Custom HDR layers',device,{textureWillBeRead:true,inputs:['originalTex','filteredTex','foregroundTex','backgroundTex'],outputs:['foreground','background'],fsMain:customDenoiseLayersMain});layers.setSize(size,size);layers.setOutputParams({foreground:{format:'rgba32float'},background:{format:'rgba32float'}});
- const acc=buffer(moments),nrm=buffer(repeat([0,0,samples,samples]));
- const pass=new WGPUFullQuadPass('compose',device,{textureWillBeRead:true,inputs:['colorTex','foregroundTex','catcherBackgroundTex','flatBackgroundMaskTex','shadowCatcherTex','bloomTex'],outputs:['color','denoiseColor','denoiseAlbedo'],fsDefine:composeDefine,fsMain:composeMain+compositeDenoiseOutputMain,
- uniforms:Object.entries(settings({})).map(([label,data])=>({label,data,type:Array.isArray(data)?'vec'+data.length+'f':'f32'}))});
- pass.setSize(size,size);
- const encode=new WGPUFullQuadPass('filtered display',device,{textureWillBeRead:true,inputs:['colorTex','composedTex'],outputs:['color'],fsDefine:linearToSrgbDefine,fsMain:compositeDenoiseDisplayMain,uniforms:[{label:'denoisedAlpha',type:'f32',data:0}]});encode.setSize(size,size);
- const read=async(t)=>{const b=device.createBuffer({size:count*16,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});const e=device.createCommandEncoder();e.copyTextureToBuffer({texture:t},{buffer:b,bytesPerRow:size*16},[size,size]);device.queue.submit([e.finish()]);await b.mapAsync(GPUMapMode.READ);const f=new Float32Array(b.getMappedRange().slice(0));b.unmap();b.destroy();return f;};
- const bloom=new WGPUBloomPass(device);bloom.setSize(size,size);bloom.setBrightThreshold(1);bloom.setRadius(.6);
- const jnlm=new WGPUJNLMDenoisePass(device);
- let active;
- observe(layers,'createPass',()=>['CorrectLayers:SceneLinear']);
- observe(pass,'createPass',()=>['Compose:'+(active.filter==='jnlm'&&active.output===0?'DisplayLinear':'DisplayEncoded')]);
- observe(bloom,'createPass',()=>['Bloom:SceneLinear']);
- observe(jnlm,'encode',()=>['Denoise:DisplayLinear']);
- observe(encode,'createPass',()=>['Encode:DisplayEncoded']);
- for(const row of table.cases){
-  active=row;trace=[];
-  pass.setOutputParams({color:{format:'rgba32float'},denoiseColor:{format:'rgba32float'},denoiseAlbedo:{format:'rgba8unorm'}});for(const [key,value] of Object.entries(settings(row)))pass.setUniform(key,value);
-  const e=device.createCommandEncoder();if(row.bloom)bloom.createPass(e,color);
-  let foreground=row.catcher?catcherColor:color,background=zero;
-  if(row.filter==='scene'){layers.createPass(e,{originalTex:catcherColor,filteredTex:catcherFiltered,foregroundTex:catcherColor,backgroundTex:zero});foreground=layers.getOutput('foreground');background=layers.getOutput('background');}
-  pass.createPass(e,{colorTex:row.filter==='scene'?catcherFiltered:row.catcher?catcherColor:color,foregroundTex:foreground,catcherBackgroundTex:background,flatBackgroundMaskTex:row.catcher?catcherAlbedo:albedo,shadowCatcherTex:row.catcher?catcherMask:zero,bloomTex:row.bloom?bloom.getOutput():zero});
-  let result=pass.getOutput('color');
-  if(row.output){result=row.output===1?normal:row.output===4?zero:albedo;trace=['AOV:Raw'];}
-  else if(row.filter==='jnlm'){
-   const filtered=jnlm.encode(e,{width:size,height:size,accumulation:acc,normalAccumulation:nrm,color:pass.getOutput('denoiseColor'),albedo,normal,shadowCatcher:zero,strength:3,shape:JNLM_DEFAULT_SHAPE});
-   const t=device.createTexture({size:[size,size],format:'rgba32float',usage:GPUTextureUsage.COPY_SRC|GPUTextureUsage.COPY_DST|GPUTextureUsage.TEXTURE_BINDING});e.copyBufferToTexture({buffer:filtered,bytesPerRow:size*16},{texture:t},[size,size]);
-   encode.setOutputParams({color:{format:'rgba32float'}});encode.createPass(e,{colorTex:t,composedTex:pass.getOutput('denoiseColor')});result=encode.getOutput('color');
-  }
-  device.queue.submit([e.finish()]);let values=await read(result);
-  if(row.hdr&&!row.output)values=values.map((x,i)=>i%4===3?x:x<=.04045?x/12.92:((x+.055)/1.055)**2.4);
-  if(row.hdr&&!row.output)trace.push('Decode:DisplayLinear');records.push({name:row.name,trace});
+function accumulation(catcher){
+ const color=Float32Array.from({length:count*4},(_,i)=>i%4===3?(catcher?.5:1)*samples:
+  ((Math.floor(i/4)%size<8?2:6)*[1,.5,.25][i%4]+((Math.floor(i/4)*1664525+19)>>>0)%13*.002)*samples*(catcher?.5:1));
+ const albedo=repeat([.3*samples,.4*samples,.5*samples,samples*(catcher?.5:1)]),normal=repeat([0,0,samples,samples]);
+ const moments=new Float32Array(count*4),shadow=new Float32Array(count*8);
+ for(let i=0;i<count;i++){
+  const l=(color[i*4]*.2126+color[i*4+1]*.7152+color[i*4+2]*.0722)/samples;
+  moments.set([l*samples,(l*l+10)*samples,catcher?8:0,catcher?16:0],i*4);
+  if(catcher)shadow.set([16,0,0,8,0,0,0,0],i*8);
+ }
+ // GPU accumulations use bottom-row-first coordinates.
+ for(const [data,stride] of [[color,4],[albedo,4],[normal,4],[moments,4],[shadow,8]]){
+  const top=data.slice();for(let y=0;y<size;y++)data.set(top.subarray((size-1-y)*size*stride,(size-y)*size*stride),y*size*stride);
+ }
+ return {width:size,height:size,samples,catcher:!!catcher,color,albedo,normal,moments,shadow};
+}
+window.runBenchmark=async()=>{
+ const canvas=document.querySelector('canvas');canvas.width=canvas.height=size;
+ let device,renderer,pipeline;const errors=[];
+ if(backend==='webgpu'){
+  const adapter=await navigator.gpu.requestAdapter();device=await adapter.requestDevice({requiredLimits:{maxColorAttachmentBytesPerSample:40}});
+  device.addEventListener('uncapturederror',e=>errors.push(e.error.message));pipeline=makeWGPURenderTargets(canvas,device);
+ }else{renderer=new WebGLDevice({canvas,parallelShaderCompile:false});pipeline=makeWebGLRenderTargets(renderer);}
+ const records=[];
+ try{for(const row of table.cases.filter(r=>backend!=='webgl'||!r.hdr&&r.webgl!==false)){
+  const target=pipeline.createTarget(row.name);target.activate();
+  const diagnostics=target.getDiagnostics().displayParity;
+  target.setToneMappingParams({exposure:row.exposure??1,toneMapping:['agx','aces','cineon','reinhard','linear'][row.tone??0]});
+  target.setBloomParams({intensity:row.bloom?.2:0,threshold:1,radius:.6});
+  target.setOutput(['final','normal','albedo','shadow','shadowCatcher'][row.output]);
+  if(row.hdr&&!target.setHDROutputEnabled(true))throw Error('HDR surface unavailable');
+  diagnostics.load(accumulation(row.catcher));
+  const trace=[];diagnostics.record(trace);
+  // A scene filter publishes through the custom-denoiser path; its deterministic
+  // stand-in scales RGB, preserving alpha through the production coverage pass.
+  if(row.filter==='scene')await target.performDenoise({kind:'custom',denoiser:{denoise(input){
+   const shader=device.createShaderModule({code:'@group(0) @binding(0) var<storage,read> src:array<vec4f>; @group(0) @binding(1) var<storage,read_write> dst:array<vec4f>; @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id:vec3u){if(id.x<arrayLength(&src)){dst[id.x]=vec4f(src[id.x].rgb*.5,src[id.x].a);}}'});
+   const p=device.createComputePipeline({layout:'auto',compute:{module:shader,entryPoint:'main'}}),e=device.createCommandEncoder(),pass=e.beginComputePass();
+   pass.setPipeline(p);pass.setBindGroup(0,device.createBindGroup({layout:p.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:input.color}},{binding:1,resource:{buffer:input.output}}]}));pass.dispatchWorkgroups(Math.ceil(count/64));pass.end();device.queue.submit([e.finish()]);
+  }}});
+  else {target.drawPostProcess();if(row.filter==='jnlm')await target.performDenoise({kind:'jnlm',denoiser:{strength:3,shape:JNLM_DEFAULT_SHAPE}});}
+  target.present();
+  const {data}=await target.readPresentation();diagnostics.record();
+  // LinearHDRSurface: comparison-only decode, never part of the execution trace.
+  const values=row.hdr&&!row.output?data.map((x,i)=>i%4===3?x:x<=.04045?x/12.92:((x+.055)/1.055)**2.4):data;
+  records.push({name:row.name,trace});
   await save(row.name+(row.hdr?'.f32':'.rgba8'),row.hdr?values:Uint8Array.from(values,x=>Math.round(Math.max(0,Math.min(1,x))*255)));
+  pipeline.releaseTarget(target);
  }
  await save('trace.json',JSON.stringify(records));
- if(errors.length)throw Error(errors.join('\n'));device.destroy();
-}
-async function webgl(){
- const renderer=new WebGLDevice({canvas:document.querySelector('canvas'),parallelShaderCompile:false}),gl=renderer.gl;
- const tex=data=>new Texture2D({source:{data,width:size,height:size},type:constants.FLOAT,minFilter:constants.NEAREST,magFilter:constants.NEAREST});
- const color=tex(colors),albedo=tex(albedos),normal=tex(normals),zero=tex(zeros);
- const catcherColor=tex(colors.map((x,i)=>i%4===3?.5:x)),catcherMask=tex(repeat([.5,0,0,.75]));
- const moment=tex(Float32Array.from({length:count*4},(_,i)=>i%4===0?moments[Math.floor(i/4)*12+8]:i%4===1?moments[Math.floor(i/4)*12+9]:i%4===2?samples:1));
- const pass=new WebGLFullQuadPass('compose',renderer,{shader:composeFragment,outputParams:{color:{type:constants.UNSIGNED_BYTE}}});pass.setSize(size,size);
- const bloom=new WebGLBloomPass(renderer);bloom.setSize(size,size);bloom.setBrightThreshold(1);bloom.setRadius(.6);
- const jnlm=new WebGLJNLMDenoisePass(renderer),fbo=new FrameBuffer();
- observe(pass,'createPass',()=>['Compose:DisplayEncoded']);
- observe(bloom,'createPass',()=>['Bloom:SceneLinear']);
- observe(jnlm,'render',()=>['Decode:DisplayLinear','Denoise:DisplayLinear','Encode:DisplayEncoded']);
- for(const row of table.cases.filter(r=>!r.hdr&&r.webgl!==false)){
-  trace=[];
-  if(row.bloom)bloom.createPass(color);
-  pass.setUniforms({exposure:row.exposure??1,bloomIntensity:row.bloom?.2:0,toneMappingMode:row.tone??0,shadowCatcherEnabled:+!!row.catcher});
-  pass.createPass({colorTex:row.catcher?catcherColor:color,foregroundTex:row.catcher?catcherColor:color,catcherBackgroundTex:zero,shadowCatcherTex:row.catcher?catcherMask:zero,bloomTex:row.bloom?bloom.getOutput():zero});
-  let result=pass.getOutput('color');if(row.output){result=row.output===1?normal:row.output===4?zero:albedo;trace=['AOV:Raw'];}
-  else if(row.filter==='jnlm')result=jnlm.render({width:size,height:size,moments:moment,color:result,albedo,normal,shadowCatcher:zero,strength:3,shape:JNLM_DEFAULT_SHAPE});
-  fbo.bind(renderer,[result]);const bytes=new Uint8Array(count*4);
-  if(!result.isByteEncoded){const f=new Float32Array(count*4);gl.readPixels(0,0,size,size,gl.RGBA,gl.FLOAT,f);bytes.set(f.map(x=>Math.round(Math.max(0,Math.min(1,x))*255)));}else gl.readPixels(0,0,size,size,gl.RGBA,gl.UNSIGNED_BYTE,bytes);
-  records.push({name:row.name,trace});await save(row.name+'.rgba8',bytes);
- }
- await save('trace.json',JSON.stringify(records));
- if(gl.getError())throw Error('WebGL error');
-}
-window.runBenchmark=async()=>{await(backend==='webgl'?webgl():webgpu());return{passed:true,backend,cases:table.cases.filter(r=>backend!=='webgl'||!r.hdr&&r.webgl!==false).length};};
+ if(device)await device.queue.onSubmittedWorkDone();
+ if(errors.length)throw Error(errors.join('\n'));if(renderer?.gl.getError())throw Error('WebGL error');
+ return {passed:true,backend,cases:records.length};
+ }finally{pipeline.dispose();if(device){await device.queue.onSubmittedWorkDone();device.destroy();}}
+};

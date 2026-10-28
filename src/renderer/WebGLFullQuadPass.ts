@@ -155,6 +155,14 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     if (!Object.values(this._outputTextures).includes(texture)) texture.dispose(this._renderer.gl);
   }
 
+  // Internal fixed-accumulation loader; transfer ownership to the selected target.
+  loadDiagnosticOutputs(outputs: Partial<Record<O, Texture2D>>) {
+    for (const name of Object.keys(outputs) as O[]) {
+      this._outputTextures[name]?.dispose(this._renderer.gl);
+      this._outputTextures[name] = outputs[name]!;
+    }
+  }
+
   getOutput(name: O) {
     return this._outputTextures[name];
   }

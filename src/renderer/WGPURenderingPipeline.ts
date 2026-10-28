@@ -1,3 +1,4 @@
+import type {DisplayParityAccumulation} from './displayParityDiagnostics.js';
 import {hdrResolveWGSL} from './wgsl/compose.frag.wgsl.js';
 import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
 import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
@@ -161,6 +162,7 @@ function makeWGPUAccumulationTarget(
       tileCount: number;
     }
     | undefined;
+  let displayTrace: string[] | undefined;
   let diagnosticsReadbackPromise: Promise<void> = Promise.resolve();
 
   let isFirstFrame = true;
@@ -715,6 +717,7 @@ output.color = color;
       }));
       layers.setOutputParams({foreground: {format: 'rgba32float'}, background: {format: 'rgba32float'}});
       layers.setSize(renderWidth, renderHeight);
+      displayTrace?.push('CorrectLayers:SceneLinear');
       layers.createPass(encoder, {originalTex: getFrameInput('color'), filteredTex: denoisedTexture,
         foregroundTex: foregroundTexture, backgroundTex: catcherBackgroundTexture});
       foregroundTexture = layers.getOutput('foreground');
@@ -736,11 +739,13 @@ output.color = color;
       bloomState.owner = targetKey; bloomState.settings = bloomSettings; bloomSamples = sampleCount;
       bloomPass.setBrightThreshold(bloomThreshold);
       bloomPass.setRadius(bloomRadius);
+      displayTrace?.push('Bloom:SceneLinear');
       bloomPass.createPass(encoder, colorTexture);
     } else if (bloomEnabled && sampleCount < 10) {
       bloomIntensityToUpdate = 0;
     }
     composePass.setUniform('bloomIntensity', bloomIntensityToUpdate);
+    displayTrace?.push('Compose:DisplayLinear+DisplayEncoded');
     composePass.createPass(encoder, {
       colorTex: colorTexture,
       foregroundTex: foregroundTexture,
@@ -751,6 +756,7 @@ output.color = color;
       bloomTex: bloomEnabled && bloomPass ? bloomPass.getOutput() : colorTexture
     });
     if (denoiseValid && !denoisedHDR && denoisedDisplayLinear && denoisedTexture) {
+      displayTrace?.push('Encode:DisplayEncoded');
       compositeDenoiseDisplayPass.createPass(encoder, {
         colorTex: denoisedTexture,
         composedTex: composePass.getOutput('denoiseColor')
@@ -780,8 +786,10 @@ output.color = color;
       ) ?? false;
 
     if (output === 'normal' || output === 'albedo') {
+      displayTrace?.push('AOV:Raw');
       displayTexture = getFrameInput(output);
     } else if (output === 'shadowCatcher') {
+      displayTrace?.push('AOV:Raw');
       displayTexture = getFrameInput('shadowCatcher');
     }
 
@@ -1172,6 +1180,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     jnlmPass ??= scratch.get('jnlm', () => new WGPUJNLMDenoisePass(device));
     const rayBuffers = rayTracePass.getOutputBuffer();
     const encoder = device.createCommandEncoder({ label: 'JNLM denoise' });
+    displayTrace?.push('Denoise:DisplayLinear');
     const output = jnlmPass.encode(encoder, {
       width: renderWidth,
       height: renderHeight,
@@ -1223,6 +1232,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       const normal = copyGuide('Custom normal', getFrameInput('normal'), true);
       const output = scratch.get('Custom output', () => new WGPUScratchBuffer(device)).get(width * height * 16, true);
       const aovs=requestedAovs.length?aov.snapshot(requestedAovs):undefined;
+      displayTrace?.push('Denoise:SceneLinear');
       try {await denoiser.denoise({device, width, height, color, albedo, normal, output, aovs}, {signal: controller.signal, schedule});}
       finally {if(aovs)void device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>aov.releaseSnapshot(aovs));}
       if (controller.signal.aborted || disposed || generation !== denoiseGeneration) return false;
@@ -1386,6 +1396,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       if (generation !== denoiseGeneration) return Promise.resolve();
       // Snapshot the complete raw composition; never feed a previous denoise
       // back into the network during progressive updates.
+      displayTrace?.push('Denoise:DisplayLinear');
       return runOIDNPhase(generation, (finish, fail) =>
         denoiser.tileExecute({
           ...convergingTileOptions,
@@ -1720,6 +1731,31 @@ width: renderWidth, height: renderHeight,
     getDiagnostics() {
       return {
         ...rayTracePass.getDiagnostics(),
+        displayParity: {
+          record(trace?: string[]) { displayTrace = trace; },
+          load(input: DisplayParityAccumulation) {
+            cancelDenoise(); clearDenoisedOutput();
+            setSize(input.width, input.height);
+            rayTracePass.useTarget(targetKey);
+            rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
+            const buffers = rayTracePass.getOutputBuffer();
+            const shadow = new Float32Array(input.width * input.height * 12);
+            for (let i = 0; i < input.width * input.height; i++) {
+              shadow.set(input.shadow.subarray(i * 8, i * 8 + 8), i * 12);
+              shadow.set(input.moments.subarray(i * 4, i * 4 + 4), i * 12 + 8);
+            }
+            for (const [buffer, data] of [[buffers.color, input.color], [buffers.albedo, input.albedo],
+              [buffers.normal, input.normal], [buffers.shadowCatcher, shadow]] as const) device.queue.writeBuffer(buffer, 0, data);
+            sampleCount = resolvedSamples = input.samples;
+            resolvedHasShadowCatcher = input.catcher;
+            isFirstFrame = false; postProcessPending = false; bloomSamples = 0;
+            rayTraceOutputPass.setSampleCount(sampleCount);
+            rayTraceOutputPass.setSampleTileGrid(1, 1);
+            const encoder = device.createCommandEncoder();
+            rayTraceOutputPass.createPass(encoder, buffers, resolvedHasShadowCatcher);
+            device.queue.submit([encoder.finish()]);
+          }
+        },
         hdrPresentation: {
           requested: hdrOutputRequested,
           active: surface.hdr,

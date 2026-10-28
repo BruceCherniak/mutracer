@@ -314,7 +314,7 @@ export class WebGLJNLMDenoisePass {
   }
 
   /** Runs the denoiser and returns the display-encoded result. */
-  render(inputs: WebGLJNLMInputs): Texture2D {
+  render(inputs: WebGLJNLMInputs, trace?: string[]): Texture2D {
     const { width, height, shape } = inputs;
     const passes = [this._guidePass, this._variancePass, ...this._filterPasses];
     passes.forEach((pass) => pass.setSize(width, height));
@@ -343,6 +343,10 @@ export class WebGLJNLMDenoisePass {
         decodeInput: i === 0,
         encodeOutput: i === iterations - 1
       });
+      if (trace) {
+        if (i === 0) trace.push('Decode:DisplayLinear', 'Denoise:DisplayLinear');
+        if (i === iterations - 1) trace.push('Encode:DisplayEncoded');
+      }
       pass.createPass({
         guideTex: guide,
         colorTex: color,
