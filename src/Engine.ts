@@ -26,7 +26,7 @@ import { WebGLDevice as WebGLRenderer } from './renderer/webgl.js';
 import type { RenderPipeline, RenderTarget } from './renderer/renderPipeline.js';
 import type { RenderingDiagnostics } from './renderer/RenderingPipeline.js';
 import type { TinyBvhLayout } from './tinybvh/TinyBvhBuilder.js';
-import type {OwnedDenoiser} from './renderer/denoiser.js';
+import type {OwnedDenoiser} from './renderer/ownedDenoiser.js';
 import type {Denoiser} from './Render.js';
 export type { DepthSampleArea } from './renderer/depthQuery.js';
 

@@ -28,3 +28,10 @@ it('preserves the order and duplication of the platform linker arguments', () =>
     .toEqual(['kernel32.lib', 'C:\\SDK path\\runtime.lib']);
   expect(() => nativeLinkArguments('build failed')).toThrow();
 });
+
+it('removes terminal formatting from rustc linker arguments', () => {
+  expect(nativeLinkArguments('\u001b[1m\u001b[92mnote\u001b[0m: native-static-libs: -lc++ -framework Metal -lc++\u001b[0m\n'))
+    .toEqual(['-lc++', '-framework', 'Metal', '-lc++']);
+  expect(nativeLinkArguments('\u001b[92mnote: native-static-libs: kernel32.lib "C:\\SDK path\\runtime.lib"\u001b[0m\r\n'))
+    .toEqual(['kernel32.lib', 'C:\\SDK path\\runtime.lib']);
+});

@@ -55,8 +55,13 @@ function checkStaticDependencies(file) {
     if (!specifier || !ts.isStringLiteral(specifier)) continue;
     const name = specifier.text;
     if (/^oidn-web(?:gpu)?(?:\/|$)/.test(name)) throw new Error(`Static OIDN dependency in ${file}.`);
-    if (name.startsWith('.') && name.endsWith('.js')) checkStaticDependencies(path.resolve(path.dirname(file), name));
+    if (name.startsWith('.') && name.endsWith('.js')) {
+      const target = path.resolve(path.dirname(file), name);
+      checkStaticDependencies(file.endsWith('.d.ts') ? target.replace(/\.js$/, '.d.ts') : target);
+    }
   }
 }
 checkStaticDependencies(path.join(declarationsRoot, 'main.js'));
 console.log('Main ESM static dependency graph does not import oidn-webgpu.');
+checkStaticDependencies(path.join(declarationsRoot, 'main.d.ts'));
+console.log('Main declaration dependency graph does not import oidn-webgpu.');

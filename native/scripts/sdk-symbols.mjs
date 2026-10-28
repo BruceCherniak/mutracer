@@ -1,3 +1,5 @@
+import {stripVTControlCharacters} from 'node:util';
+
 // The C declarations, including unavailable-platform stubs, define the shared ABI.
 // Do not use mt_* wildcards: private callbacks can use the same prefix.
 export function publicApiSymbols(headers) {
@@ -22,7 +24,7 @@ export function checkSdkExports(expected, actual) {
 }
 
 export function nativeLinkArguments(output) {
-  const match = /native-static-libs: ([^\r\n]+)/.exec(output);
+  const match = /native-static-libs: ([^\r\n]+)/.exec(stripVTControlCharacters(output));
   if (!match) throw Error('rustc did not report native-static-libs');
   // rustc emits linker arguments (including repeated framework/library flags).
   // Keep order and quoted Windows SDK paths; never send this text to a shell.

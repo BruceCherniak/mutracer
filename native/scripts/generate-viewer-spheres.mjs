@@ -11,7 +11,10 @@ const chunks=[geometry.position.array,geometry.normal.array,geometry.uv.array,ge
 });
 const header=Buffer.alloc(16);chunks.forEach((c,i)=>header.writeUInt32LE(c.length,4*i));
 const data=Buffer.concat([header,...chunks]);
-const materials='[\n'+scene.meshes.map(mesh=>JSON.stringify({name:mesh.name,transform:mesh.transform,values:mesh.materials[0]})).join(',\n')+'\n]\n';
+// Native consumes these values as f32. Canonicalize at that precision so tiny
+// JS math differences between Node versions/platforms do not change the asset.
+const materials='[\n'+scene.meshes.map(mesh=>JSON.stringify({name:mesh.name,transform:mesh.transform,values:mesh.materials[0]},
+ (_key,value)=>typeof value==='number'?Math.fround(value):value)).join(',\n')+'\n]\n';
 for(const [name,bytes] of [['spheres.bin',data],['spheres.json',Buffer.from(materials)]]) {
  const path=new URL('../viewer/assets/'+name,import.meta.url);
  if(process.argv.includes('--check')) {if(!readFileSync(path).equals(bytes))throw Error('Regenerate native material spheres: '+name);}

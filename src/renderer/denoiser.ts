@@ -1,6 +1,5 @@
 import type {Denoiser} from '../Render.js';
 import type {JNLMDenoiser} from './jnlm.js';
-import type {OIDNDenoiser} from './oidnNetwork.js';
 
 export interface OIDNWebGPUData {
   data: GPUBuffer | GPUTexture;
@@ -55,7 +54,3 @@ export type DenoiserHandle =
   | {kind: 'jnlm'; denoiser: JNLMDenoiser}
   | {kind: 'oidn'; denoiser: OIDNWeb}
   | {kind: 'custom'; denoiser: Denoiser; aovs?: readonly import('./aov.js').AovKind[]};
-/** Only these handles are owned and released by the engine. */
-export type OwnedDenoiser =
-  | {kind: 'jnlm'; denoiser: JNLMDenoiser}
-  | {kind: 'oidn'; denoiser: OIDNDenoiser};
