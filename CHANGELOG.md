@@ -5,12 +5,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- Surface AOVs (`render.aovs`, `aovSamples`): depth, position, ID, motion and directional reflectance outputs on WebGPU and WebGL 2, shown through `display.channel`, read back per kind and passed to custom denoisers.
+- `render.refine(kind)` traces one AOV without adding beauty samples.
+- `batchSamples` lets one `refine()` submit several samples within the time budget, so still renders no longer cap at one sample per frame.
+- `ProceduralSky` clear-sky environment textures.
+- `EquirectBackground` with `intensity` and rotation, synchronized from Three.js `backgroundIntensity` and `backgroundRotation`.
+- Experimental WebGPU bindless material textures with `textureBinding: 'auto'`, falling back to the atlas.
+
 ### Changed
 
 - SDR display and denoising use sRGB encoding on all backends, replacing the browser's gamma 2.2 approximation. Dark and midtone pixels can change.
+- Intermediate progressive denoising updates are at least 500 ms apart.
+- Faster WebGPU shader compilation, especially on Windows.
+
+### Deprecated
+
+- `allowMultipleSamplesPerFrame`; use `batchSamples`.
 
 ### Fixed
 
+- Shadow catcher contact shadows no longer weaken under environment light from below the receiver, or near emissive meshes on WebGPU.
+- WebGL 2 waits for asynchronously compiled programs before drawing.
 - Diagnostic channels show their original images without color denoising; native albedo display now matches browser values.
 - Native HDR presentation applies JNLM to extended-range composition and can show completed display-linear denoising results.
 
