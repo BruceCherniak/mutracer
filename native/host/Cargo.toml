@@ -1,0 +1,63 @@
+[package]
+name = "mutracer-native-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+ash = { version = "=0.38.0", default-features = false, features = ["std", "loaded"] }
+oidn-webgpu = { package = "oidn-webgpu-native", version = "=0.2.0" }
+gltf = { version = "=1.4.1", features = ["KHR_materials_ior", "KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "extensions"], optional = true }
+meshopt = {version = "=0.6.2", optional = true}
+base64 = {version = "0.22", optional = true}
+percent-encoding = {version = "2", optional = true}
+image = { version = "=0.25.8", default-features = false, features = ["png", "jpeg", "hdr", "webp"], optional = true }
+anyhow = "1"
+bytemuck = { version = "1", features = ["min_const_generics"] }
+glam = "=0.30.9"
+libloading = "=0.8.9"
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl"] }
+pollster = "=0.4.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+png = "=0.18.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["metal"] }
+objc2 = "=0.6.5"
+objc2-metal = { version = "=0.3.2", default-features = false, features = ["std", "MTLAccelerationStructureTypes"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan"] }
+
+[build-dependencies]
+cc = "=1.8.0"
+serde_json = "1"
+
+[dev-dependencies]
+naga = { version = "=30.0.1", features = ["spv-out", "hlsl-out"] }
+
+[features]
+default = ["gltf"]
+gltf = ["dep:gltf", "dep:image", "dep:meshopt", "dep:base64", "dep:percent-encoding"]
+viewer-support = ["gltf"]
+# Opt in to Vulkan interop on macOS for portability-driver validation.
+vulkan-interop = ["wgpu/vulkan-portability"]
+
+[[bin]]
+name = "incremental-oracle"
+path = "diagnostics/incremental-oracle.rs"
+
+[[bin]]
+name = "gpu-availability"
+path = "diagnostics/gpu-availability.rs"
+
+[[bin]]
+name = "ray-query-probe"
+path = "diagnostics/ray-query-probe.rs"

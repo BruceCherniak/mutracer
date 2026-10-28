@@ -12,6 +12,23 @@ import {
 import { computeMeshesBoundingBox } from '../../src/util/mesh';
 
 describe('Geometry attributes', () => {
+  it('retains all attribute storage types and union-typed index attributes', () => {
+    for (const array of [new Float32Array([1, 2, 3]), new Uint16Array([1, 2, 3]),
+      new Uint32Array([1, 2, 3]), new Int32Array([1, 2, 3])]) {
+      const attribute = new Attribute(array, 3), item: number[] = [];
+      Attribute.getItem(attribute, item, 0);
+      expect(item).toEqual([1, 2, 3]);
+      expect(Attribute.getCount(attribute)).toBe(1);
+      expect(attribute.array).toBe(array);
+    }
+    for (const array of [new Uint16Array([0, 1, 2]), new Uint32Array([0, 1, 2])]) {
+      const indices: Attribute<Uint16Array | Uint32Array> = new Attribute(array, 1);
+      const geometry = new Geometry({ position: new Attribute(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3), indices });
+      expect(geometry.indices).toBe(indices);
+      expect(geometry.indices.array).toBe(array);
+      expect(geometry.triangleCount).toBe(1);
+    }
+  });
   it('reads values and reports vertex count', () => {
     const attribute = new Attribute(new Float32Array([1, 2, 3, 4, 5, 6]), 3);
     const item: number[] = [];

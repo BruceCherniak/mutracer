@@ -29,6 +29,15 @@ function syntaxErrors(code: string) {
 }
 
 describe('viewer code snippet', () => {
+  it('uses the library sky with the selected solar time and grounded background', () => {
+    const code = generateCode(snapshot({ envId: 'sky', skyTime: 9, background: 'grounded' }, { environmentUrl: null }));
+    expect(syntaxErrors(code)).toEqual([]);
+    expect(code).toContain('new ProceduralSky({ time: 9 })');
+    expect(code).toContain('scene, camera, controls, environment');
+    expect(code).toContain('texture: environment');
+    expect(code).not.toContain('HDRLoader');
+    expect(code).not.toContain('./environment.hdr');
+  });
   it('recreates metadata lights without adding an HDRI to an emissive scene', () => {
     const code = generateCode(snapshot({ envId: 'model', background: 'grounded' }, {
       environmentUrl: null, blackEnvironment: true,
@@ -60,6 +69,27 @@ describe('viewer code snippet', () => {
     expect(code).toContain("denoiser: { schedule: 'progressive', type: 'jnlm', strength: 2 }");
     expect(code).toContain("denoiser: { schedule: 'every-sample', type: 'jnlm', strength: 2 }");
     expect(code).toContain('coalesceSceneUpdates: true');
+  });
+
+  it('declares AOVs on both renders and retains the display mapping', () => {
+    const code = generateCode(snapshot({output: 'depth', aovDepthFar: 20}));
+    expect(syntaxErrors(code)).toEqual([]);
+    expect(code).toContain("channel: 'depth'");
+    expect(code).toMatch(/aovDepthRange: \[0,\s*20\]/);
+    expect(code.match(/aovs: \[/g)).toHaveLength(2);
+    expect(code).toContain("preview: { aovs: ['depth'],");
+    expect(code).not.toContain("aovs: ['depth',");
+  });
+
+  it('omits preview AOV passes for beauty and only integrates reflectance when displayed', () => {
+    const beauty = generateCode(snapshot({output: 'final'}));
+    expect(syntaxErrors(beauty)).toEqual([]);
+    expect(beauty).not.toContain('aovs:');
+    for (const output of ['diffuseAlbedo', 'specularAlbedo'] as const) {
+      const code = generateCode(snapshot({output}));
+      expect(syntaxErrors(code)).toEqual([]);
+      expect(code).toContain(`preview: { aovs: ['${output}'],`);
+    }
   });
 
   it('uses JNLM on WebGL like the viewer', () => {

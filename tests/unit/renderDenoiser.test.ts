@@ -42,7 +42,8 @@ describe('per-render denoising', () => {
     const {engine, targets} = renderFixture(); const render = new Render(engine, {maxSamples: 8, denoiser: {type: 'jnlm', schedule}});
     for (let i = 0; i < 8; i++) {render.refine(); await settle();}
     expect(render.samples).toBe(8);
-    expect(targets[0].performDenoise).toHaveBeenCalledTimes(schedule === 'converged' ? 1 : schedule === 'progressive' ? 3 : 8); engine.dispose();
+    // Progressive filters sample 1, then the final budget within its 500 ms floor.
+    expect(targets[0].performDenoise).toHaveBeenCalledTimes(schedule === 'converged' ? 1 : schedule === 'progressive' ? 2 : 8); engine.dispose();
   });
   it('serializes inference and discards queued jobs invalidated by engine input changes', async () => {
     const {engine, targets, camera} = renderFixture(); const a = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}}), b = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}});
@@ -180,14 +181,14 @@ it('waits for active shared inference before prewarming the same network for ano
 
 
 describe('progressive denoiser schedule', () => {
-  function setup(denoiseMs = 0, maxSamples = 10000) {
+  function setup(denoiseMs = 0, maxSamples = 10000, sampleMs = 10) {
     let clock = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => clock);
     const {engine, targets} = renderFixture();
     const render = new Render(engine, {maxSamples, denoiser: {type: 'jnlm', schedule: 'progressive'}});
     render.refine();
     const target = targets[0], trace = vi.mocked(target.trace).getMockImplementation()!;
-    vi.mocked(target.trace).mockImplementation((camera, cap) => { clock += 10; return trace(camera, cap); });
+    vi.mocked(target.trace).mockImplementation((camera, cap) => { clock += sampleMs; return trace(camera, cap); });
     let finish!: (complete: boolean) => void;
     vi.mocked(target.performDenoise!).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
     async function nextUpdate() {
@@ -205,19 +206,26 @@ describe('progressive denoiser schedule', () => {
     }
     return {engine, render, nextUpdate};
   }
-  it.each([0, 2000])('doubles from sample four without skipping updates with %i ms inference', async duration => {
-    const {engine, nextUpdate} = setup(duration);
+  it.each([0, 2000])('doubles from sample four when samples take longer than the 500 ms floor (%i ms inference)', async duration => {
+    const {engine, nextUpdate} = setup(duration, 10000, 200);
+    const updates = [];
+    for (let i = 0; i < 6; i++) updates.push(await nextUpdate());
+    expect(updates).toEqual([1, 4, 8, 16, 32, 64]); engine.dispose();
+  });
+  it('keeps intermediate updates 500 ms apart when samples arrive quickly', async () => {
+    const {engine, nextUpdate} = setup();
     const updates = [];
     for (let i = 0; i < 7; i++) updates.push(await nextUpdate());
-    expect(updates).toEqual([1, 4, 8, 16, 32, 64, 128]); engine.dispose();
+    // 10 ms samples: the first count past 500 ms, then doubling.
+    expect(updates).toEqual([1, 51, 102, 204, 408, 816, 1632]); engine.dispose();
   });
   it('updates at least every ten seconds', async () => {
     const {engine, nextUpdate} = setup(); const updates = [];
     for (let i = 0; i < 12; i++) updates.push(await nextUpdate());
-    expect(updates.slice(-4)).toEqual([512, 1024, 2025, 3026]); engine.dispose();
+    expect(updates.slice(-4)).toEqual([3634, 4635, 5636, 6637]); engine.dispose();
   });
   it('denoises the final sample count between doubling thresholds', async () => {
-    const {engine, render, nextUpdate} = setup(0, 20); const updates = [];
+    const {engine, render, nextUpdate} = setup(0, 20, 200); const updates = [];
     for (let i = 0; i < 5; i++) updates.push(await nextUpdate());
     expect(updates).toEqual([1, 4, 8, 16, 20]); expect(render.status).toBe('finished'); engine.dispose();
   });

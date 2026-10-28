@@ -63,9 +63,24 @@
         <p class="drop__error" id="drop-error" role="alert" hidden></p>
       </section>
 
-      <section class="examples" aria-labelledby="examples-title">
-        <h2 id="examples-title">Examples <span>Khronos &amp; Sketchfab · loaded on demand</span></h2>
-        <ul class="cards" id="cards"></ul>
+      <section class="examples" aria-label="Examples">
+        <div class="collection-tabs" role="tablist" aria-label="Example collections">
+          <button id="collection-tab" type="button" role="tab" aria-selected="true" aria-controls="collection-panel">MuTracer Collection</button>
+          <span class="collection-tabs__research" role="presentation">
+            <button id="research-tab" type="button" role="tab" aria-selected="false" aria-controls="research-panel" tabindex="-1">glTF Research Scenes</button>
+            <a class="collection-tabs__source" href="https://github.com/ErfanMo77/gltf-research-scenes" target="_blank" rel="noopener noreferrer" aria-label="glTF Research Scenes source (opens in a new tab)" title="Open glTF Research Scenes source in a new tab">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M15 3h6v6M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+              </svg>
+            </a>
+          </span>
+        </div>
+        <div id="collection-panel" role="tabpanel" aria-labelledby="collection-tab" tabindex="0">
+          <ul class="cards" id="cards"></ul>
+        </div>
+        <div id="research-panel" role="tabpanel" aria-labelledby="research-tab" tabindex="0" hidden>
+          <ul class="cards cards--research" id="research-cards"></ul>
+        </div>
       </section>
 
       <section class="features" aria-labelledby="features-title">

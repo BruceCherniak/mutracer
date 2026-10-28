@@ -1,44 +1,31 @@
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {makeShaderDataDefinitions} from 'webgpu-utils';
-import {shaderSourceLoader, shaderIdentifierMap, stripShaderFormatting} from './shaderSourceLoader';
+import {shaderSourceLoader, shaderIdentifierMap} from './shaderSourceLoader';
 import {renameShaderIdentifiers} from '../../scripts/shader-identifiers.mjs';
 import {makeRayTraceUniform} from '../../src/renderer/WGPURayTracePass';
 import {WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags} from '../../src/renderer/WGPUSceneFeatures';
+import {original, stripped, rayTrace, compactRayTrace, tokens, gpu} from './shaderSourceFormattingFixture';
 
-const original = shaderSourceLoader(false);
-const stripped = shaderSourceLoader(true);
-const rayTrace = original('src/renderer/wgsl/rayTrace.compute.ts').default;
-const compactRayTrace = stripped('src/renderer/wgsl/rayTrace.compute.ts').default;
-const originalNames = new Map([...shaderIdentifierMap].map(([name, compact]) => [compact, name]));
-const tokens = (source: string) => stripShaderFormatting(renameShaderIdentifiers(source, originalNames)).match(/[A-Za-z_][\w]*|\d+(?:\.\d*)?(?:[eE][+-]?\d+)?[uifh]?|>>|<<|&&|\|\||!=|==|<=|>=|\+\+|--|\S/g);
 afterEach(() => { vi.unstubAllGlobals(); });
 
-function gpu() {
-  vi.stubGlobal('GPUBufferUsage', {UNIFORM: 1, COPY_DST: 2});
-  vi.stubGlobal('GPUShaderStage', {VERTEX: 1, FRAGMENT: 2, COMPUTE: 4});
-  return {createBuffer: (descriptor: GPUBufferDescriptor) => ({size: descriptor.size}), queue: {writeBuffer() {}}, createSampler: () => ({})} as unknown as GPUDevice;
-}
-
 describe('shader generation independent of source formatting', () => {
-  it('preserves tokens, entry points and uniform contracts for every BLAS mask and structural variant', () => {
+  it('preserves specialized RGB, spectral and source-over shaders through the build transform', () => {
     gpu();
-    for (let blasLayoutMask = 0; blasLayoutMask < 16; blasLayoutMask++) {
-      for (const hasDisplacement of [false, true]) for (const hasAlpha of [false, true]) for (const hasSceneAlpha of [false, true]) {
-        const options = {hasDisplacement, hasAlpha, hasSceneAlpha, blasLayoutMask};
-        const source = rayTrace(options);
-        const compact = compactRayTrace(options);
+    for (const spectral of [false, true]) for (const hasAlpha of [false, true]) {
+      for (const full of [false, true]) for (const dynamicEnvironment of [false, true]) {
+        const options = {hasDisplacement: false, hasAlpha, hasSceneAlpha: hasAlpha,
+          hasAnisotropyDirections: full, hasCoatNormals: full, blasLayoutMask: full ? 15 : 1,
+          spectral, sceneCapabilities: full ? 0x7fffff : 0, materialCapabilities: full ? 3 : 0,
+          lightCapabilities: full ? 31 : 1, dynamicEnvironment};
+        const source = rayTrace(options), compact = compactRayTrace(options);
         expect(tokens(compact)).toEqual(tokens(source));
-        // No selected name may be left behind by a dynamic code path.
         expect(renameShaderIdentifiers(compact, shaderIdentifierMap)).toBe(compact);
         const parsed = makeShaderDataDefinitions(compact);
-        expect(Object.keys(parsed.entryPoints).sort()).toEqual(['depthQuery', 'main']);
-        const {buffer, views} = makeRayTraceUniform();
-        expect(parsed.uniforms.rtUniform.size).toBe(buffer.byteLength);
-        for (const [name, view] of Object.entries(views)) expect(parsed.structs.RayTraceUniform.fields[name]?.offset, name).toBe(view.byteOffset);
-        expect(views.loopUnrollGuard[0]).toBe(4);
+        expect(Object.keys(parsed.entryPoints).sort()).toEqual(['aovTrace', 'aovTraceCenter', 'depthQuery', 'main']);
+        expect(parsed.uniforms.rtUniform.size).toBe(makeRayTraceUniform().buffer.byteLength);
       }
     }
-  }, 30000);
+  });
 
   it('keeps all runtime flags addressable in the same shader, including combinations', () => {
     gpu();

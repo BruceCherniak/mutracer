@@ -125,7 +125,8 @@ vec2 loadGuide(ivec2 p) {
 // Premultiplied linear color.
 vec4 loadColor(ivec2 p) {
   vec4 c = load_colorTex(p, 0);
-  if (decodeInput) c.rgb = pow(max(c.rgb, 0.0), vec3(2.2));
+  if (decodeInput) c.rgb = mix(pow((max(c.rgb, 0.0) + 0.055) / 1.055, vec3(2.4)),
+    c.rgb / 12.92, lessThanEqual(c.rgb, vec3(0.04045)));
   return vec4(c.rgb * c.a, c.a);
 }
 
@@ -155,7 +156,8 @@ void main() {
   if (centerNormalTexel.a <= 0.0 && load_shadowCatcherTex(p, 0).r <= 0.0) {
     vec4 c = loadColor(p);
     vec3 rgb = c.rgb / max(c.a, 1e-6);
-    if (encodeOutput) rgb = pow(max(rgb, 0.0), vec3(1.0 / 2.2));
+    if (encodeOutput) rgb = mix(1.055 * pow(max(rgb, 0.0), vec3(1.0 / 2.4)) - 0.055,
+      rgb * 12.92, lessThanEqual(rgb, vec3(0.0031308)));
     out_color = vec4(rgb, c.a);
     out_guide = vec4(loadGuide(p), 0.0, 1.0);
     return;
@@ -244,7 +246,8 @@ void main() {
   vec3 rgb = filtered.a > 1e-6
     ? filtered.rgb / max(filtered.a, 1e-6)
     : center.rgb / max(center.a, 1e-6);
-  if (encodeOutput) rgb = pow(max(rgb, 0.0), vec3(1.0 / 2.2));
+  if (encodeOutput) rgb = mix(1.055 * pow(max(rgb, 0.0), vec3(1.0 / 2.4)) - 0.055,
+      rgb * 12.92, lessThanEqual(rgb, vec3(0.0031308)));
   out_color = vec4(rgb, filtered.a);
   out_guide = vec4(
     (guideSum + centerGuide.x * centerWeight) / totalWeight,
@@ -311,7 +314,7 @@ export class WebGLJNLMDenoisePass {
   }
 
   /** Runs the denoiser and returns the display-encoded result. */
-  render(inputs: WebGLJNLMInputs): Texture2D {
+  render(inputs: WebGLJNLMInputs, trace?: string[]): Texture2D {
     const { width, height, shape } = inputs;
     const passes = [this._guidePass, this._variancePass, ...this._filterPasses];
     passes.forEach((pass) => pass.setSize(width, height));
@@ -340,6 +343,10 @@ export class WebGLJNLMDenoisePass {
         decodeInput: i === 0,
         encodeOutput: i === iterations - 1
       });
+      if (trace) {
+        if (i === 0) trace.push('Decode:DisplayLinear', 'Denoise:DisplayLinear');
+        if (i === iterations - 1) trace.push('Encode:DisplayEncoded');
+      }
       pass.createPass({
         guideTex: guide,
         colorTex: color,

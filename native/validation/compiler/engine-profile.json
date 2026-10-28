@@ -1,0 +1,21 @@
+{
+  "profile_format": 1,
+  "name": "mutracer_engine_probe",
+  "entry": "engine-probe.ts",
+  "emission": "llvm",
+  "abi": {
+    "prefix": "mutracer_",
+    "init_symbol": "mutracer_init",
+    "sink_register_symbol": "mutracer_set_panic_sink",
+    "collect_symbol": "mutracer_collect",
+    "result_reset_symbol": "mutracer_reset"
+  },
+  "exports": [
+    {
+      "export": "probeEngine",
+      "symbol": "mutracer_probe_engine",
+      "params": [],
+      "returns": "void"
+    }
+  ]
+}

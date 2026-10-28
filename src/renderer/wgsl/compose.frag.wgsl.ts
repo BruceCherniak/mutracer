@@ -99,7 +99,8 @@ fn gradeColor(inputColor: vec3f) -> vec3f {
 }
 `;
 
-export const composeMain = /* wgsl */ `
+export function createComposeMain(sdrEncoding: 'gamma22' | 'srgb' = 'srgb'): string {
+  return /* wgsl */ `
 
 var finalColor = load_colorTex(uv, 0);
 var bloomTexel = vec4(0.0);
@@ -116,7 +117,7 @@ if (!hdrOutput) {
   gradedColor = applyToneMapping(gradedColor);
 }
 let encodedDisplay = select(
-  pow(max(gradedColor, vec3f(0.0)), vec3f(1.0 / 2.2)),
+  ${sdrEncoding === 'srgb' ? 'linearToSrgb(gradedColor)' : 'pow(max(gradedColor, vec3f(0.0)), vec3f(1.0 / 2.2))'},
   linearToSrgb(gradedColor),
   hdrOutput
 );
@@ -139,7 +140,7 @@ if (flatBackgroundColor.a > 0.5) {
       unbloomedColor = applyToneMapping(unbloomedColor);
     }
     let encodedUnbloomed = select(
-      pow(max(unbloomedColor, vec3f(0.0)), vec3f(1.0 / 2.2)),
+      ${sdrEncoding === 'srgb' ? 'linearToSrgb(unbloomedColor)' : 'pow(max(unbloomedColor, vec3f(0.0)), vec3f(1.0 / 2.2))'},
       linearToSrgb(unbloomedColor),
       hdrOutput
     );
@@ -172,13 +173,13 @@ if (shadowCatcherEnabled > 0.5) {
       foregroundColor = applyToneMapping(foregroundColor);
       backgroundColor = applyToneMapping(backgroundColor);
     }
-    foregroundColor = select(pow(max(foregroundColor, vec3f(0.0)), vec3f(1.0 / 2.2)), linearToSrgb(foregroundColor), hdrOutput);
-    backgroundColor = select(pow(max(backgroundColor, vec3f(0.0)), vec3f(1.0 / 2.2)), linearToSrgb(backgroundColor), hdrOutput);
+    foregroundColor = select(${sdrEncoding === 'srgb' ? 'linearToSrgb(foregroundColor)' : 'pow(max(foregroundColor, vec3f(0.0)), vec3f(1.0 / 2.2))'}, linearToSrgb(foregroundColor), hdrOutput);
+    backgroundColor = select(${sdrEncoding === 'srgb' ? 'linearToSrgb(backgroundColor)' : 'pow(max(backgroundColor, vec3f(0.0)), vec3f(1.0 / 2.2))'}, linearToSrgb(backgroundColor), hdrOutput);
     if (flatBackgroundColor.a > 0.5) {
       var unbloomedBackground = gradeColor(background.rgb / max(background.a, 0.000001) * exposure);
       unbloomedBackground *= 1.0 - toneMappingParams.y * vignetteEdge;
       if (!hdrOutput) { unbloomedBackground = applyToneMapping(unbloomedBackground); }
-      let encodedUnbloomedBackground = select(pow(max(unbloomedBackground, vec3f(0.0)), vec3f(1.0 / 2.2)), linearToSrgb(unbloomedBackground), hdrOutput);
+      let encodedUnbloomedBackground = select(${sdrEncoding === 'srgb' ? 'linearToSrgb(unbloomedBackground)' : 'pow(max(unbloomedBackground, vec3f(0.0)), vec3f(1.0 / 2.2))'}, linearToSrgb(unbloomedBackground), hdrOutput);
       let bloomSpill = select(vec3f(0.0), max(backgroundColor - encodedUnbloomedBackground, vec3f(0.0)), bloomIntensity > 0.0);
       backgroundColor = linearToSrgb(max(flatBackgroundColor.rgb, vec3f(0.0))) + bloomSpill;
     }
@@ -201,20 +202,22 @@ output.color = finalColor;
 
 // output.color = load_bloomTex(uv, 0) * bloomIntensity;
 `;
+}
+export const composeMain = createComposeMain();
 
 // Preserve the existing display composition, but give OIDN a floating-point,
 // linear-light image. Alpha is deliberately not used as a second color layer.
-export const compositeDenoiseOutputMain = /* wgsl */ `
-let encoded = max(finalColor.rgb, vec3f(0.0));
-let displayLinear = select(
-  pow(encoded, vec3f(2.2)),
-  select(pow((encoded + 0.055) / 1.055, vec3f(2.4)), encoded / 12.92,
-    encoded <= vec3f(0.04045)),
-  hdrOutput
-);
-output.denoiseColor = vec4f(displayLinear, finalColor.a);
+export function createCompositeDenoiseColorMain(output = 'output.denoiseColor', input = 'finalColor', sdrEncoding: 'gamma22' | 'srgb' = 'srgb'): string {
+  const srgbDecode = 'select(pow((encoded + 0.055) / 1.055, vec3f(2.4)), encoded / 12.92, encoded <= vec3f(0.04045))';
+  return /* wgsl */ `
+let encoded = max(${input}.rgb, vec3f(0.0));
+let displayLinear = ${sdrEncoding === 'srgb' ? srgbDecode : `select(pow(encoded, vec3f(2.2)), ${srgbDecode}, hdrOutput)`};
+${output} = vec4f(displayLinear, ${input}.a);
 
-// The receiver is invisible: its visible texture is the displayed background,
+`;
+}
+export function createCompositeDenoiseAlbedoMain(output = 'output.denoiseAlbedo'): string {
+  return /* wgsl */ `// The receiver is invisible: its visible texture is the displayed background,
 // not the neutral reflectance used for its lighting estimate. Match the beauty
 // reconstruction filter, including mixed foreground/receiver primary samples.
 // Exclude the stochastic shadow and bloom so neither is preserved as texture.
@@ -234,16 +237,40 @@ if (shadowCatcherEnabled > 0.5 && flatBackgroundColor.a < 0.5) {
     compositeAlbedo += backgroundWeight * (clamp(backgroundAlbedo, vec3f(0.0), vec3f(1.0)) - vec3f(1.0));
   }
 }
-output.denoiseAlbedo = vec4f(clamp(compositeAlbedo, vec3f(0.0), vec3f(1.0)), rawAlbedo.a);
+${output} = vec4f(clamp(compositeAlbedo, vec3f(0.0), vec3f(1.0)), rawAlbedo.a);
 `;
+}
+export const compositeDenoiseOutputMain = createCompositeDenoiseColorMain() + createCompositeDenoiseAlbedoMain();
 
-export const compositeDenoiseDisplayMain = /* wgsl */ `
+export function createCompositeDenoiseDisplayMain(sdrEncoding: 'gamma22' | 'srgb' = 'srgb'): string {
+  return /* wgsl */ `
 let denoised = load_colorTex(uv, 0);
 // Keep the original primary coverage, including transparency. OIDN only
 // filters RGB; filtering coverage separately reintroduces silhouette seams.
 // The built-in filter weights color and coverage together and may replace it.
 let alpha = select(load_composedTex(uv, 0).a, clamp(denoised.a, 0.0, 1.0), denoisedAlpha > 0.5);
 let linear = max(denoised.rgb, vec3f(0.0));
-let encoded = select(pow(linear, vec3f(1.0 / 2.2)), linearToSrgb(linear), hdrOutputEnabled > 0.5);
+let encoded = ${sdrEncoding === 'srgb' ? 'linearToSrgb(linear)' : 'select(pow(linear, vec3f(1.0 / 2.2)), linearToSrgb(linear), hdrOutputEnabled > 0.5)'};
 output.color = vec4f(select(vec3f(0.0), encoded, alpha > 0.0), alpha);
+`;
+}
+
+export const compositeDenoiseDisplayMain = createCompositeDenoiseDisplayMain();
+
+// Shared hit normalization; CPU readback retains its f32 reference path.
+export const hdrResolveWGSL = /* wgsl */ `
+fn hdr_resolve_component(color: f32, count: f32, hit: f32, minimum_count: f32, rgb: bool) -> f32 {
+if (count <= 0.0) {
+return 0.0;
+}
+let total = max(count, minimum_count);
+let divisor = select(total, hit, (rgb && (hit > 0.0)));
+return (color / divisor);
+}
+fn hdr_flat_component(color: f32, coverage: f32, flat: bool, rgb: bool) -> f32 {
+if ((flat && rgb) && (coverage > 0.0)) {
+return (color * coverage);
+}
+return color;
+}
 `;

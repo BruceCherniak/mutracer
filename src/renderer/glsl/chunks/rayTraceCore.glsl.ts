@@ -4,7 +4,7 @@
 
 import { createShaderMixin, glsl, Shader } from '../../shader.js';
 import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
-import { CONSTANT_SPOT_LIGHT } from '../../lightsUtil.js';
+import { CONSTANT_SPOT_LIGHT } from '../../lightConstants.js';
 
 export default createShaderMixin({
   uniforms: {

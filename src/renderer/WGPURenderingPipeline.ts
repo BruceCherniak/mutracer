@@ -1,9 +1,17 @@
+import type {DisplayParityAccumulation, DisplayParityTarget} from './displayParityDiagnostics.js';
+import {hdrResolveWGSL} from './wgsl/compose.frag.wgsl.js';
+import {oidnAuxiliaryDefine} from './wgsl/oidnAuxiliary.wgsl.js';
+import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
+import {WGPUAov} from './WGPUAov.js';
+import {aovMask} from './aov.js';
+import {scheduleFrame} from '../util/frame.js';
 import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
 import { WGPUScratchBuffer } from './WGPUScratchBuffer.js';
 import { WGPUScratchTexture } from './WGPUScratchTexture.js';
 import { ScratchPool } from './ScratchPool.js';
+import { GPUTraceQueue } from './GPUTraceQueue.js';
 import { makeRenderPipeline, type TraceSettings, type RenderPipeline } from './renderPipeline.js';
 import { textureBytes } from './gpuMemory.js';
 import type { TargetPipeline } from './accumulationTarget.js';
@@ -11,11 +19,12 @@ import type { TargetPipeline } from './accumulationTarget.js';
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { SceneBackground } from '../scene/Scene.js';
+import type { SceneBackground } from '../scene/Scene.js';
 import Camera from '../scene/Camera.js';
 
 import { WGPUFullQuadPass } from './WGPUFullQuadPass.js';
 import WGPURayTracePass from './WGPURayTracePass.js';
+import type {MaterialTextureSelection} from './wgpuBindless.js';
 import {
   composeMain,
   composeDefine,
@@ -25,9 +34,9 @@ import {
 } from './wgsl/compose.frag.wgsl.js';
 import halton from './halton.js';
 import { makeTileRender, makeTileRenderWithPredict } from './TileRender.js';
-import { ToneMappingParams } from './RenderingPipeline.js';
-import { DisplayChannel } from './RenderingPipeline.js';
-import { ColorRGB } from '../types.js';
+import type { ToneMappingParams } from './RenderingPipeline.js';
+import type { DisplayChannel } from './RenderingPipeline.js';
+import type { ColorRGB } from '../types.js';
 import { WGPURayTraceOutputPass } from './WGPURayTraceOutput.js';
 import { vec3 } from '../math.js';
 
@@ -42,12 +51,7 @@ export const oidnAlbedoSrgbEncodeMain = /* wgsl */ `
 if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
 let index = globalId.x + globalId.y * u32(imageSize.x);
 let raw = textureLoad(in_albedo, vec2u(globalId.xy), 0);
-let linear = clamp(raw.rgb, vec3f(0.0), vec3f(1.0));
-let encoded = select(
-  1.055 * pow(linear, vec3f(1.0 / 2.4)) - 0.055,
-  12.92 * linear,
-  linear <= vec3f(0.0031308)
-);
+let encoded = oidnEncodeAlbedo(raw.rgb);
 out_albedo[index] = vec4f(encoded, raw.a);
 `;
 
@@ -55,12 +59,7 @@ export const oidnAlbedoSrgbDecodeMain = /* wgsl */ `
 if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
 let index = globalId.x + globalId.y * u32(imageSize.x);
 let filtered = in_albedo[index];
-let encoded = clamp(filtered.rgb, vec3f(0.0), vec3f(1.0));
-let linear = select(
-  pow((encoded + 0.055) / 1.055, vec3f(2.4)),
-  encoded / 12.92,
-  encoded <= vec3f(0.04045)
-);
+let linear = oidnDecodeAlbedo(filtered.rgb);
 var result = linear;
 let surfaceCoverage = textureLoad(in_rawAlbedo, vec2i(globalId.xy), 0).a;
 if (preserveSurfaceTexture != 0u) {
@@ -91,11 +90,12 @@ out_albedo[index] = vec4f(result, surfaceCoverage);
 export const oidnNormalSanitizeMain = /* wgsl */ `
 if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
 let index = globalId.x + globalId.y * u32(imageSize.x);
-out_normal[index] = vec4f(clamp(in_normal[index].rgb, vec3f(0.0), vec3f(1.0)), 1.0);
+out_normal[index] = vec4f(oidnSanitizeNormal(in_normal[index].rgb), 1.0);
 `;
 
 export interface WGPURenderingPipelineOptions {
   presentationFormat?: GPUTextureFormat;
+  materialTextures?: MaterialTextureSelection;
 }
 
 function createTimeQuery(device: GPUDevice) {
@@ -129,7 +129,8 @@ function makeWGPUAccumulationTarget(
   rayTracePass: WGPURayTracePass,
   surface: WGPUCanvasSurface,
   scratch: ScratchPool,
-  customJobs: Set<Promise<unknown>>
+  customJobs: Set<Promise<unknown>>,
+  traceQueue: GPUTraceQueue
 ) {
   let sampleRenderedCallback: (
     sampleCount: number,
@@ -137,11 +138,18 @@ function makeWGPUAccumulationTarget(
     frameTime: number
   ) => void = () => { };
 
-  let allowMultipleSamplesPerFrame = false;
+  let batchSamples = false;
+  let realtimeBatchBudgetMs = Infinity;
+  // Samples traced between display frames skip the resolve and composition;
+  // the next presentation or read resolves them once.
+  let realtimeDeferPostProcess = false;
+  let postProcessPending = false;
   let offlineSamplesPerBatch = 0;
   let deferPostProcess = false;
   let sampleSequenceOffset = 0;
 
+  const aov = new WGPUAov(device);
+  let aovCamera: Camera | undefined;
   let sampleCount = 0;
   let elapsedFrameTime = 32;
   let elapsedTileTime: number | undefined;
@@ -154,6 +162,7 @@ function makeWGPUAccumulationTarget(
       tileCount: number;
     }
     | undefined;
+  let displayTrace: string[] | undefined;
   let diagnosticsReadbackPromise: Promise<void> = Promise.resolve();
 
   let isFirstFrame = true;
@@ -182,6 +191,8 @@ function makeWGPUAccumulationTarget(
   let maxTimePerTile = 21;
 
   let bloomIntensity = 0;
+  // Sample count of this accumulation's last bloom refresh.
+  let bloomSamples = 0;
   let bloomThreshold = 1;
   let bloomRadius = 0.6;
 
@@ -195,6 +206,7 @@ function makeWGPUAccumulationTarget(
   let hdrOutputRequested = false;
   let hdrOutputActive = false;
   let output: DisplayChannel = 'final';
+  let aovDisplayOptions: AovDisplayOptions = DEFAULT_AOV_DISPLAY;
   let shadowCatcherColor = vec3.create();
   let shadowCatcherAlpha = 1;
 
@@ -323,12 +335,14 @@ query, getMemoryBytes: () => query ? query.resolveBuffer.size + query.resultBuff
     inputs: ['colorTex', 'coverageTex'],
     outputs: ['color'],
     uniforms: [{ label: 'flatBackgroundColor', type: 'vec4f', data: [0, 0, 0, 0] }],
+    fsDefine: hdrResolveWGSL,
     fsMain: /* wgsl */ `
 var color = load_colorTex(uv, 0);
 let coverage = clamp(load_coverageTex(uv, 0).a, 0.0, 1.0);
-if (flatBackgroundColor.a > 0.5 && coverage > 0.0) {
-  color = vec4f(color.rgb * coverage, color.a);
-}
+color = vec4f(
+  hdr_flat_component(color.r, coverage, flatBackgroundColor.a > 0.5, true),
+  hdr_flat_component(color.g, coverage, flatBackgroundColor.a > 0.5, true),
+  hdr_flat_component(color.b, coverage, flatBackgroundColor.a > 0.5, true), color.a);
 output.color = color;
 `
   }));
@@ -415,7 +429,6 @@ output.color = color;
     fsMain: compositeDenoiseDisplayMain,
     fsDefine: linearToSrgbDefine,
     uniforms: [
-      { label: 'hdrOutputEnabled', type: 'f32', data: 0 },
       { label: 'denoisedAlpha', type: 'f32', data: 0 }
     ],
     outputs: ['color'], inputs: ['colorTex', 'composedTex']
@@ -436,6 +449,7 @@ output.color = color;
       inputs: ['albedo'],
       outputs: ['albedo'],
       uniforms: auxiliaryPassUniforms,
+      csDefine: oidnAuxiliaryDefine,
       csMain: oidnAlbedoSrgbEncodeMain
     }
   ));
@@ -448,6 +462,7 @@ output.color = color;
       uniforms: [...auxiliaryPassUniforms, {
         label: 'preserveSurfaceTexture', type: 'u32', data: 0
       }],
+      csDefine: oidnAuxiliaryDefine,
       csMain: oidnAlbedoSrgbDecodeMain
     }
   ));
@@ -458,6 +473,7 @@ output.color = color;
       inputs: ['normal'],
       outputs: ['normal'],
       uniforms: auxiliaryPassUniforms,
+      csDefine: oidnAuxiliaryDefine,
       csMain: oidnNormalSanitizeMain
     }
   ));
@@ -632,7 +648,6 @@ output.color = color;
     composePass.setUniform('shadowCatcherAlpha', shadowCatcherAlpha);
     compositeDenoiseDisplayPass.setSize(renderWidth, renderHeight);
     compositeDenoiseDisplayPass.setOutputParams({ color: { format: composeColorFormat } });
-    compositeDenoiseDisplayPass.setUniform('hdrOutputEnabled', +hdrOutputActive);
     compositeDenoiseDisplayPass.setUniform('denoisedAlpha', denoiseValid && denoisedDisplayLinear ? +rayTracePass.needsDenoiseAlpha() : 0);
   }
   function snapshotInput(encoder: GPUCommandEncoder, key: string, texture: GPUTexture, exact = false) {
@@ -665,6 +680,13 @@ output.color = color;
     }
     composePass.setUniform('flatBackgroundColor', resolvedFlatBackground);
     rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);
+    const aovKind = displayAovKind(output);
+    if (aovKind && sampleCount === 0) {
+      if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
+      if (!aov.samples) return;
+      finishPresentation(encoder, aov.visualize(aovKind, aovDisplayOptions, hdrOutputActive));
+      return;
+    }
     if (resolvedSamples < 1) return;
     prepareComposition();
     if (denoiseValid) denoisedTexture = prepareDenoisedTexture(
@@ -695,17 +717,18 @@ output.color = color;
       }));
       layers.setOutputParams({foreground: {format: 'rgba32float'}, background: {format: 'rgba32float'}});
       layers.setSize(renderWidth, renderHeight);
+      displayTrace?.push('CorrectLayers:SceneLinear');
       layers.createPass(encoder, {originalTex: getFrameInput('color'), filteredTex: denoisedTexture,
         foregroundTex: foregroundTexture, backgroundTex: catcherBackgroundTexture});
       foregroundTexture = layers.getOutput('foreground');
       catcherBackgroundTexture = layers.getOutput('background');
     }
     const bloomEnabled = bloomIntensity > 0.0;
-    // Progressive accumulation refreshes bloom every ten samples.
-    const samplesSkipped = sampleCount < 10 || sampleCount % 10 > 0;
+    // Progressive accumulation refreshes bloom after every ten new samples,
+    // including when several samples are resolved at once.
     const bloomState = scratch.get('bloom state', () => ({ owner: undefined as object | undefined, settings: '', dispose() { } }));
     const bloomSettings = `${bloomThreshold}/${bloomRadius}/${+(denoiseValid && denoisedHDR)}`;
-    const needsUpdateBloom = bloomEnabled && sampleCount >= 10 && (!samplesSkipped || bloomState.owner !== targetKey || bloomState.settings !== bloomSettings);
+    const needsUpdateBloom = bloomEnabled && sampleCount >= 10 && (sampleCount - bloomSamples >= 10 || bloomState.owner !== targetKey || bloomState.settings !== bloomSettings);
     let bloomIntensityToUpdate = bloomIntensity;
     if (needsUpdateBloom) {
       if (!bloomPass) {
@@ -713,14 +736,16 @@ output.color = color;
         bloomPass.setSize(renderWidth, renderHeight);
       }
       bloomPass.setSize(renderWidth, renderHeight);
-      bloomState.owner = targetKey; bloomState.settings = bloomSettings;
+      bloomState.owner = targetKey; bloomState.settings = bloomSettings; bloomSamples = sampleCount;
       bloomPass.setBrightThreshold(bloomThreshold);
       bloomPass.setRadius(bloomRadius);
+      displayTrace?.push('Bloom:SceneLinear');
       bloomPass.createPass(encoder, colorTexture);
     } else if (bloomEnabled && sampleCount < 10) {
       bloomIntensityToUpdate = 0;
     }
     composePass.setUniform('bloomIntensity', bloomIntensityToUpdate);
+    displayTrace?.push('Compose:DisplayLinear+DisplayEncoded');
     composePass.createPass(encoder, {
       colorTex: colorTexture,
       foregroundTex: foregroundTexture,
@@ -731,6 +756,7 @@ output.color = color;
       bloomTex: bloomEnabled && bloomPass ? bloomPass.getOutput() : colorTexture
     });
     if (denoiseValid && !denoisedHDR && denoisedDisplayLinear && denoisedTexture) {
+      displayTrace?.push('Encode:DisplayEncoded');
       compositeDenoiseDisplayPass.createPass(encoder, {
         colorTex: denoisedTexture,
         composedTex: composePass.getOutput('denoiseColor')
@@ -740,6 +766,14 @@ output.color = color;
       (denoiseValid && denoisedBuffer ? (denoisedHDR ? composePass.getOutput('color') : denoisedDisplayLinear
         ? compositeDenoiseDisplayPass.getOutput('color') : denoisedTexture) : undefined) ||
       composePass.getOutput('color');
+    if (aovKind) {
+      if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
+      displayTexture = aov.visualize(aovKind, aovDisplayOptions, hdrOutputActive);
+    }
+    finishPresentation(encoder, displayTexture);
+  }
+
+  function finishPresentation(encoder: GPUCommandEncoder, displayTexture: GPUTexture) {
     const activeHDRPeakMeter = hdrOutputActive
       ? (hdrPeakMeter ??= scratch.get('hdrPeak', () => new WGPUHDRPeakMeter(device)))
       : undefined;
@@ -752,8 +786,10 @@ output.color = color;
       ) ?? false;
 
     if (output === 'normal' || output === 'albedo') {
+      displayTrace?.push('AOV:Raw');
       displayTexture = getFrameInput(output);
     } else if (output === 'shadowCatcher') {
+      displayTrace?.push('AOV:Raw');
       displayTexture = getFrameInput('shadowCatcher');
     }
 
@@ -783,6 +819,12 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
   }
 
+  function flushPostProcess() {
+    if (!postProcessPending) return;
+    postProcessPending = false;
+    drawPostProcess(device.createCommandEncoder(), false, true);
+  }
+
   function trace(camera: Camera, maxSamples: number) {
     // A call to draw means accumulation has been invalidated. Cancel OIDN
     // before checking shader compilation: pipeline-affecting parameter changes
@@ -798,8 +840,12 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
     // Update the camera before compiling and sampling.
     rayTracePass.setCamera(camera);
+    aovCamera = camera;
     const resetAccumulation = isFirstFrame;
+    if (resetAccumulation) aov.reset();
     if (resetAccumulation) {
+      postProcessPending = false;
+      bloomSamples = 0;
       denoiseValid = false;
       tileTimingGeneration++;
       elapsedTileTime = undefined;
@@ -818,6 +864,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       sampleCount = 0;
       return true;
     }
+    if (execution?.aovs?.length && !rayTracePass.prepareAovs(execution.aovs)) return true;
 
     // Keep the last completed denoise visible while a static while-converging batch
     // accumulates, including the incomplete first sample after a scene edit.
@@ -848,11 +895,25 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
 
     const frameSampleCount = sampleCount;
+    const sampleTimeMs = lastGpuTraceTiming?.estimatedFullFrameTimeMs;
+    const realtime = offlineSamplesPerBatch === 0 && batchSamples;
+    const realtimeBudget = Math.min(maxTimePerTile, realtimeBatchBudgetMs);
+    if (realtime && !resetAccumulation && !isPredictingFrame && sampleTimeMs !== undefined &&
+      traceQueue.available(realtimeBudget) < Math.min(sampleTimeMs, realtimeBudget)) return false;
+    // Only batch a measured, unchanged full-frame workload. New cameras get
+    // their first sample immediately; expensive samples retain tiled execution.
+    const realtimeBatch = realtime && sampleCount > 0 &&
+      !resetAccumulation && !isPredictingFrame && lastGpuTraceTiming?.tileCount === 1 && sampleTimeMs !== undefined &&
+      sampleTimeMs <= realtimeBudget / 2;
+    const realtimeSamples = realtimeBatch
+      ? Math.min(64, Math.floor(traceQueue.available(realtimeBudget) / sampleTimeMs!)) : 1;
+    if (realtimeBatch && realtimeSamples === 0) return false;
+    const batchStarted = performance.now();
     _startRecordFrameTime(!resetAccumulation);
     const renderSampleTarget = maxSamples;
     const batchTarget = Math.min(
       renderSampleTarget,
-      sampleCount + Math.max(offlineSamplesPerBatch, 1)
+      sampleCount + (offlineSamplesPerBatch > 0 ? offlineSamplesPerBatch : realtimeSamples)
     );
     do {
       let {
@@ -867,9 +928,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
       rayTraceOutputPass.setSampleTileGrid(columns, rows);
 
-      if (offlineSamplesPerBatch > 0 && columns * rows === 1) {
+      if ((offlineSamplesPerBatch > 0 || realtimeBatch) && columns * rows === 1) {
         samplesPerFrame = batchTarget - sampleCount;
-      } else if (!allowMultipleSamplesPerFrame) {
+      } else if (!batchSamples) {
         samplesPerFrame = 1;
       }
 
@@ -884,10 +945,17 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
           sample(sampleCount === 0, [1, 1]);
           sampleCount++;
           samplesSubmitted++;
+          if (realtime && !isPredictingFrame && sampleTimeMs !== undefined) traceQueue.track(sampleTimeMs);
+          if (realtimeBatch) {
+            // Encoding many tiny samples must also leave the main thread free
+            // to receive camera input. Yield before encoding another batch.
+            if (performance.now() - batchStarted >= 4) break;
+          }
         }
       } else {
         rayTracePass.setSampleTiles(columns, rows, xIndex, yIndex);
         sample(sampleCount === 0 && isFirstTile, [columns, rows]);
+        if (realtime && !isPredictingFrame && sampleTimeMs !== undefined) traceQueue.track(sampleTimeMs / (columns * rows));
         if (isLastTile) sampleCount++;
       }
     } while (
@@ -905,12 +973,17 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       return false;
     }
 
-    if (sampleCount !== frameSampleCount && (!deferPostProcess || sampleCount >= renderSampleTarget)) {
+    if (sampleCount !== frameSampleCount && execution?.aovs?.length) {
+      rayTracePass.renderAovs(aov, camera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
+    }
+    if (sampleCount !== frameSampleCount && realtime && realtimeDeferPostProcess && sampleCount < renderSampleTarget) {
+      postProcessPending = true;
+    } else if (sampleCount !== frameSampleCount && (!deferPostProcess || sampleCount >= renderSampleTarget)) {
+      postProcessPending = false;
       const encoder = device.createCommandEncoder();
       drawPostProcess(encoder, sampleCount >= renderSampleTarget, true);
     }
     if (sampleCount !== frameSampleCount) {
-
       sampleRenderedCallback(
         sampleCount,
         frameSampleCount === 0,
@@ -1056,7 +1129,6 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       hdrPeakMeter?.reset();
     }
     compositeDenoiseDisplayPass.setOutputParams({ color: { format: composeColorFormat } });
-    compositeDenoiseDisplayPass.setUniform('hdrOutputEnabled', hdrOutputActive ? 1 : 0);
     composePass.setUniform('hdrOutputEnabled', hdrOutputActive ? 1 : 0);
     return wasActive !== hdrOutputActive;
   }
@@ -1108,6 +1180,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     jnlmPass ??= scratch.get('jnlm', () => new WGPUJNLMDenoisePass(device));
     const rayBuffers = rayTracePass.getOutputBuffer();
     const encoder = device.createCommandEncoder({ label: 'JNLM denoise' });
+    displayTrace?.push('Denoise:DisplayLinear');
     const output = jnlmPass.encode(encoder, {
       width: renderWidth,
       height: renderHeight,
@@ -1143,7 +1216,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   function performCustomDenoise(
     denoiser: import('../Render.js').Denoiser,
     schedule: import('../Render.js').DenoiseSchedule,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    requestedAovs: readonly import('./aov.js').AovKind[] = []
   ): Promise<boolean> {
     const generation = denoiseGeneration;
     const controller = activeCustomController = new AbortController();
@@ -1157,7 +1231,10 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       const albedo = copyGuide('Custom albedo', getFrameInput('albedo'), true);
       const normal = copyGuide('Custom normal', getFrameInput('normal'), true);
       const output = scratch.get('Custom output', () => new WGPUScratchBuffer(device)).get(width * height * 16, true);
-      await denoiser.denoise({device, width, height, color, albedo, normal, output}, {signal: controller.signal, schedule});
+      const aovs=requestedAovs.length?aov.snapshot(requestedAovs):undefined;
+      displayTrace?.push('Denoise:SceneLinear');
+      try {await denoiser.denoise({device, width, height, color, albedo, normal, output, aovs}, {signal: controller.signal, schedule});}
+      finally {if(aovs)void device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>aov.releaseSnapshot(aovs));}
       if (controller.signal.aborted || disposed || generation !== denoiseGeneration) return false;
       const coverage = scratch.get('custom coverage', () => new WGPUComputePass('Custom coverage', device, {
         inputs: ['filtered', 'original'], outputs: ['color'], uniforms: auxiliaryPassUniforms,
@@ -1189,7 +1266,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   ): Promise<boolean> {
     cancelDenoise();
     if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
-    if (attachedDenoiser.kind === 'custom') return performCustomDenoise(attachedDenoiser.denoiser, denoiseSchedule, signal);
+    if (output !== 'final' && output !== 'shadow') return Promise.resolve(true);
+    flushPostProcess();
+    if (attachedDenoiser.kind === 'custom') return performCustomDenoise(attachedDenoiser.denoiser, denoiseSchedule, signal, attachedDenoiser.aovs);
     denoisedHDR = false;
     if (attachedDenoiser.kind === 'jnlm') return performJNLMDenoise(attachedDenoiser.denoiser);
     const denoiser: OIDNWeb = attachedDenoiser.denoiser;
@@ -1213,7 +1292,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
         wholeImage: denoiseSchedule === 'every-sample'
       } : {}),
       // A preview frame is one whole-image pass. Settled images can take many
-      // tiles; oidn-web 0.5 runs those back to back by default, which starves
+      // tiles; oidn-webgpu runs those back to back by default, which starves
       // the page at 4K, so pace them to display frames instead.
       scheduling: denoiseSchedule === 'every-sample' ? 'event-loop' as const : 'animation-frame' as const
     };
@@ -1317,6 +1396,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       if (generation !== denoiseGeneration) return Promise.resolve();
       // Snapshot the complete raw composition; never feed a previous denoise
       // back into the network during progressive updates.
+      displayTrace?.push('Denoise:DisplayLinear');
       return runOIDNPhase(generation, (finish, fail) =>
         denoiser.tileExecute({
           ...convergingTileOptions,
@@ -1436,6 +1516,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       diagnosticsReadbackPromise
     ]).then(() => {
       rayTracePass.releaseTarget(targetKey);
+      aov.dispose();
       denoisedBuffer?.destroy();
       presentationTexture?.destroy();
       displayPostProcess.dispose();
@@ -1462,9 +1543,18 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     configure(settings: TraceSettings) {
       const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin'] as const;
       if (!execution || timingKeys.some(key => execution![key] !== settings[key])) invalidateTilePrediction();
-      execution = { ...settings };
+      if (settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16) < 1)) throw new RangeError('aovSamples must be a positive integer');
+      const previousMask = aovMask(execution?.aovs ?? []), nextMask = aovMask(settings.aovs ?? []);
+      if (previousMask !== nextMask || execution?.aovSamples !== settings.aovSamples) aov.samples = 0;
+      execution = { ...settings, aovs: [...(settings.aovs ?? [])] };
+      // Presentation may still name the previous preview's AOV. Drop that
+      // selection before tracing with a smaller set; Display validates and
+      // reapplies the current channel when the new image is presented.
+      const displayedAov = displayAovKind(output);
+      if (displayedAov && !settings.aovs?.includes(displayedAov)) output = 'final';
+      if (previousMask && !nextMask) { aov.dispose(); aov.history.clear(); aov.width = aov.height = 0; aov.reset(); }
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
-      allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
+      batchSamples = settings.batchSamples;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
       tileRender.setMaxTiles(settings.maxTiles);
       tileRenderWithPredict?.setDesiredMsPerTile(maxTimePerTile);
@@ -1475,6 +1565,10 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     canCompleteSampleWithin(timeBudgetMs: number) {
       return (lastGpuTraceTiming?.estimatedFullFrameTimeMs ?? elapsedFrameTime) <= timeBudgetMs;
     },
+    setRealtimeBatchBudget(milliseconds) { realtimeBatchBudgetMs = milliseconds; },
+    setRealtimeDeferPostProcess(defer) { realtimeDeferPostProcess = defer; },
+    getRealtimeSampleTime() { return lastGpuTraceTiming?.tileCount === 1 ? lastGpuTraceTiming.estimatedFullFrameTimeMs : undefined; },
+    whenTraceAvailable() { return traceQueue.whenAvailable(); },
     get presentationComplete() { return !!presentationTexture; },
     get presentationDenoised() { return presentationDenoised; },
     present() {
@@ -1488,7 +1582,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     getMemory() {
       return {
 width: renderWidth, height: renderHeight,
-        bytes: rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + displayPostProcess.getMemoryBytes() + (denoisedBuffer?.size ?? 0)
+        bytes: aov.bytes + rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + displayPostProcess.getMemoryBytes() + (denoisedBuffer?.size ?? 0)
 };
     },
     isFirstFrame() {
@@ -1496,6 +1590,7 @@ width: renderWidth, height: renderHeight,
     },
 
     restartSamples() {
+      aov.reset();
       // Input edits reset accumulation, not learned throughput. Re-arming a
       // hidden probe here starves continuously changing scenes of visible samples.
       tileTimingGeneration++;
@@ -1503,7 +1598,7 @@ width: renderWidth, height: renderHeight,
       preserveDenoisedOutput = false;
       denoiseValid = false;
       presentationDenoised = false;
-      resolvedSamples = 0;
+      resolvedSamples = 0; postProcessPending = false; bloomSamples = 0;
       (tileRenderWithPredict || tileRender).reset();
       isPredictingFrame = false;
       isFirstFrame = true;
@@ -1511,8 +1606,8 @@ width: renderWidth, height: renderHeight,
     },
 
     getOutputTexture(kind) {
-      if (resolvedSamples < 1) return;
-      if (kind === 'hdr') return getFrameInput('color');
+      flushPostProcess();
+      if (kind === 'hdr') return resolvedSamples > 0 ? getFrameInput('color') : undefined;
       return displayPostProcess.output ?? presentationTexture;
     },
     applyPostProcesses(passes, render) {
@@ -1520,8 +1615,9 @@ width: renderWidth, height: renderHeight,
     },
     trace,
     drawPostProcess() {
-      const encoder = device.createCommandEncoder();
-      drawPostProcess(encoder, true);
+      const resolve = postProcessPending;
+      postProcessPending = false;
+      drawPostProcess(device.createCommandEncoder(), true, resolve);
     },
     performDenoise,
     cancelDenoise,
@@ -1535,9 +1631,10 @@ width: renderWidth, height: renderHeight,
       const bytesPerRow = Math.ceil(width * 16 / 256) * 256;
       const buffer = device.createBuffer({ size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       const encoder = device.createCommandEncoder();
-      readbackPass.setSize(width, height);
-      readbackPass.createPass(encoder, { inputTex: image });
-      encoder.copyTextureToBuffer({ texture: readbackPass.getOutput('color') }, { buffer, bytesPerRow }, { width, height });
+      const presentationReadback=hdrOutputActive && displayAovKind(output) ? scratch.get('AOV encoded readback',()=>new WGPUFullQuadPass('AOV encoded readback',device,{textureWillBeRead:true,inputs:['inputTex'],outputs:['color'],fsMain:`let c=load_inputTex(uv,0);let rgb=select(1.055*pow(max(c.rgb,vec3f(0.0)),vec3f(1.0/2.4))-0.055,12.92*c.rgb,c.rgb<=vec3f(0.0031308));output.color=vec4f(rgb,c.a);`})) : readbackPass;
+      presentationReadback.setOutputParams({color:{format:'rgba32float'}});presentationReadback.setSize(width,height);
+      presentationReadback.createPass(encoder,{inputTex:image});
+      encoder.copyTextureToBuffer({texture:presentationReadback.getOutput('color')},{buffer,bytesPerRow},{width,height});
       device.queue.submit([encoder.finish()]);
       try {
         await buffer.mapAsync(GPUMapMode.READ);
@@ -1547,7 +1644,27 @@ width: renderWidth, height: renderHeight,
         return { width, height, data };
       } finally { buffer.unmap(); buffer.destroy(); }
     },
+    aovReady(kind) { return !!execution?.aovs?.includes(kind) && aov.samples > 0; },
+    getAovSamples() { return aov.samples; },
+    restartAovs() { aov.reset(); },
+    refineAovs(camera, samples = sampleCount) {
+      if (samples < 1 || !execution?.aovs?.length) return true;
+      rayTracePass.setCamera(camera); aovCamera = camera;
+      rayTracePass.updatePipeline();
+      if (rayTracePass.isCompilingShader() || !rayTracePass.isPipelineReady()) return false;
+      return rayTracePass.renderAovs(aov, camera, samples, execution.aovSamples ?? 16, execution.aovs);
+    },
+    async readAov(kind) {
+      if (!execution?.aovs?.includes(kind) || !aovCamera || (sampleCount < 1 && aov.samples < 1)) throw new Error('AOV output is not ready');
+      rayTracePass.setCamera(aovCamera);
+      while (!rayTracePass.renderAovs(aov, aovCamera, Math.max(sampleCount, aov.samples), execution.aovSamples ?? 16, execution.aovs)) {
+        if (disposed) throw new Error('AOV compilation was interrupted');
+        await new Promise<void>(resolve => scheduleFrame(() => resolve()));
+      }
+      return aov.read(kind);
+    },
     async readOutput(kind) {
+      flushPostProcess();
       rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);
       const width = renderWidth, height = renderHeight;
       const bytesPerRow = Math.ceil(width * 16 / 256) * 256;
@@ -1611,6 +1728,35 @@ width: renderWidth, height: renderHeight,
       return sampleCount;
     },
 
+    /** @internal */
+    _displayParity() {
+      return {
+        record(trace?: string[]) { displayTrace = trace; },
+        load(input: DisplayParityAccumulation) {
+          cancelDenoise(); clearDenoisedOutput();
+          setSize(input.width, input.height);
+          rayTracePass.useTarget(targetKey);
+          rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
+          const buffers = rayTracePass.getOutputBuffer();
+          const shadow = new Float32Array(input.width * input.height * 12);
+          for (let i = 0; i < input.width * input.height; i++) {
+            shadow.set(input.shadow.subarray(i * 8, i * 8 + 8), i * 12);
+            shadow.set(input.moments.subarray(i * 4, i * 4 + 4), i * 12 + 8);
+          }
+          for (const [buffer, data] of [[buffers.color, input.color], [buffers.albedo, input.albedo],
+            [buffers.normal, input.normal], [buffers.shadowCatcher, shadow]] as const) device.queue.writeBuffer(buffer, 0, data);
+          sampleCount = resolvedSamples = input.samples;
+          resolvedHasShadowCatcher = input.catcher;
+          isFirstFrame = false; postProcessPending = false; bloomSamples = 0;
+          rayTraceOutputPass.setSampleCount(sampleCount);
+          rayTraceOutputPass.setSampleTileGrid(1, 1);
+          const encoder = device.createCommandEncoder();
+          rayTraceOutputPass.createPass(encoder, buffers, resolvedHasShadowCatcher);
+          device.queue.submit([encoder.finish()]);
+        }
+      };
+    },
+
     getDiagnostics() {
       return {
         ...rayTracePass.getDiagnostics(),
@@ -1670,6 +1816,7 @@ width: renderWidth, height: renderHeight,
       sampleRenderedCallback = cb;
     },
 
+    setAovDisplayOptions(options: AovDisplayOptions) { aovDisplayOptions={...options,depthRange:[...options.depthRange]}; },
     setOutput(nextOutput: DisplayChannel) {
       if (output === nextOutput) return false;
       output = nextOutput;
@@ -1677,12 +1824,13 @@ width: renderWidth, height: renderHeight,
     },
 
     dispose
-  } satisfies TargetPipeline;
+  } satisfies TargetPipeline & DisplayParityTarget;
 }
 
 /** Independent render targets, without preview or presentation policy. */
 export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanvas, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
-  const rayTracePass = new WGPURayTracePass(device);
+  const rayTracePass = new WGPURayTracePass(device, options.materialTextures);
+  const traceQueue = new GPUTraceQueue(device.queue);
   const customJobs = new Set<Promise<unknown>>();
   const scratch = new ScratchPool(work => {
     // A cancelled custom filter can keep submitting GPU work until its promise settles.
@@ -1693,7 +1841,7 @@ export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanva
   });
   const surface = scratch.get('canvas', () => new WGPUCanvasSurface(canvas, device, options.presentationFormat ?? navigator.gpu.getPreferredCanvasFormat()));
   return makeRenderPipeline(rayTracePass, () => {
-    const target = makeWGPUAccumulationTarget(canvas, device, rayTracePass, surface, scratch, customJobs);
+    const target = makeWGPUAccumulationTarget(canvas, device, rayTracePass, surface, scratch, customJobs, traceQueue);
     return target;
   }, false, scratch);
 }

@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import Engine from '../../src/Engine';
 import Camera from '../../src/scene/Camera';
+import type {AovKind} from '../../src/renderer/aov.js';
 import type { Scene } from '../../src/scene/Scene';
 import type { RenderPipeline, RenderTarget, TraceSettings } from '../../src/renderer/renderPipeline';
 
@@ -14,12 +15,23 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
     readDepthSamples: vi.fn(async () => new Float32Array([1])), getDiagnostics: vi.fn(() => ({targets: targets.map(t => ({label: t.label, ...t.getMemory()}))})), dispose: vi.fn(),
     createTarget(label) {
       let samples = 0, first = true, partial = 0, complete = false, width = 1, height = 1;
+      let aovSamples = 0, enabled: readonly AovKind[] = [], aovCap = 16;
       let sequenceOffset = 0, variance = false, samplesPerBatch = 0;
       let callback = (_count: number, _first: boolean, _time: number) => {};
       const target = {
-        label, invalidateDenoisedOutput: vi.fn(), configure: vi.fn((_settings: TraceSettings) => {}), synchronizeBackground: vi.fn(),
+        label, invalidateDenoisedOutput: vi.fn(), configure: vi.fn((settings: TraceSettings) => {
+          if (JSON.stringify(enabled) !== JSON.stringify(settings.aovs ?? []) || aovCap !== (settings.aovSamples ?? 16)) aovSamples = 0;
+          enabled = [...(settings.aovs ?? [])]; aovCap = settings.aovSamples ?? 16;
+        }), synchronizeBackground: vi.fn(),
         activate: vi.fn(() => { active = label; operations.push({id: label, kind: 'activate'}); }),
         isFirstFrame: () => first, getTotalSamplesRendered: () => samples,
+        getAovSamples: () => aovSamples,
+        restartAovs: vi.fn(() => {aovSamples = 0;}),
+        aovReady: (kind: AovKind) => enabled.includes(kind) && aovSamples > 0,
+        refineAovs: vi.fn((camera: Camera, count = samples) => {
+          aovSamples = Math.min(count, aovCap);
+          operations.push({id: label, kind: 'aov', camera: camera.clone(), cap: count}); return true;
+        }),
         get presentationComplete() { return complete; }, get presentationDenoised() { return false; },
         canCompleteSampleWithin: vi.fn(() => options.fits ?? true),
         trace: vi.fn((camera: Camera, cap: number) => {
@@ -27,13 +39,13 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
           operations.push({id: label, kind: 'draw', camera: camera.clone(), cap});
           first = false;
           if (samples < cap && ++partial >= (options.tiles ?? 1)) {
-            partial = 0; samples = Math.min(cap, samples + (samplesPerBatch || 1)); complete = true; callback(samples, samples === 1, options.frameTimeMs ?? 20);
+            partial = 0; samples = Math.min(cap, samples + (samplesPerBatch || 1)); complete = true; if (enabled.length) aovSamples = Math.min(samples, aovCap); callback(samples, samples === 1, options.frameTimeMs ?? 20);
           }
           return false;
         }),
         present: vi.fn(() => { if (active !== label) throw new Error('Wrong present target'); operations.push({id: label, kind: 'present'}); }),
         readPresentation: vi.fn(async () => ({width, height, data: new Float32Array(width * height * 4).fill(.5)})),
-        restartSamples: vi.fn(() => { samples = 0; first = true; partial = 0; }),
+        restartSamples: vi.fn(() => { samples = 0; first = true; partial = 0; aovSamples = 0; }),
         setSize: vi.fn((w: number, h: number) => {width = w; height = h;}),
         getMemory: () => ({width, height, bytes: width * height * 16}),
         setOnSampleRendered: vi.fn((fn: typeof callback) => {callback = fn;}),
@@ -47,7 +59,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
         setVarianceMoments: vi.fn((value: boolean) => {variance = value;}), setAdaptiveSamplingTargets: vi.fn(),
         cancelDenoise: vi.fn(), performDenoise: vi.fn(async () => true), setPreserveDenoisedOutput: vi.fn(),
         setToneMappingParams: vi.fn(() => false), setBloomParams: vi.fn(() => false), setHDROutputEnabled: vi.fn(() => false),
-        setOutput: vi.fn(() => false), setShadowCatcherParams: vi.fn(() => false),
+        setAovDisplayOptions:vi.fn(), setOutput: vi.fn(() => false), setShadowCatcherParams: vi.fn(() => false),
         drawPostProcess: vi.fn(), dispose: vi.fn(),
       } as unknown as RenderTarget;
       targets.push(target); return target;

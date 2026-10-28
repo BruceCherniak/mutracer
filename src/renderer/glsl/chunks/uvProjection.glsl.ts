@@ -1,5 +1,5 @@
 import { glsl } from '../../shader.js';
-import { uvProjectionConstants } from '../../MaterialTable.js';
+import { uvProjectionConstants } from '../../materialConstants.js';
 
 export default glsl`
 vec2 sphericalProjection(vec3 pos) {

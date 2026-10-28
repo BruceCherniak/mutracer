@@ -1,6 +1,5 @@
 import type {Denoiser} from '../Render.js';
 import type {JNLMDenoiser} from './jnlm.js';
-import type {OIDNDenoiser} from './oidnNetwork.js';
 
 export interface OIDNWebGPUData {
   data: GPUBuffer | GPUTexture;
@@ -18,9 +17,9 @@ export interface OIDNWeb {
     albedo: OIDNWeb;
     normal: OIDNWeb;
   };
-  /** Optional serializable execution details exposed by native oidn-web. */
+  /** Optional serializable execution details exposed by native oidn-webgpu. */
   getRuntimeInfo?: () => unknown;
-  /** Optional shape preparation supported by newer oidn-web runtimes. */
+  /** Optional shape preparation supported by newer oidn-webgpu runtimes. */
   prepareForImage?: (
     width: number,
     height: number,
@@ -54,8 +53,4 @@ export interface OIDNWeb {
 export type DenoiserHandle =
   | {kind: 'jnlm'; denoiser: JNLMDenoiser}
   | {kind: 'oidn'; denoiser: OIDNWeb}
-  | {kind: 'custom'; denoiser: Denoiser};
-/** Only these handles are owned and released by the engine. */
-export type OwnedDenoiser =
-  | {kind: 'jnlm'; denoiser: JNLMDenoiser}
-  | {kind: 'oidn'; denoiser: OIDNDenoiser};
+  | {kind: 'custom'; denoiser: Denoiser; aovs?: readonly import('./aov.js').AovKind[]};

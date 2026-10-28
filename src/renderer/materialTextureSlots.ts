@@ -1,7 +1,7 @@
 import { MATERIAL_TEXTURE_NAMES, type MaterialTextureName } from '../scene/materialTextureNames.js';
 export { MATERIAL_TEXTURE_NAMES };
 export type { MaterialTextureName };
-import { MATERIAL_LAYOUT, materialLayoutFields } from './materialLayout.js';
+import { MATERIAL_LAYOUT, materialLayoutFields } from './materialLayoutSchema.js';
 
 // Internal slots only. Order is the legacy atlas/index contract. Color spaces
 // describe decoding at the sample site; textures share the same stored atlas.
@@ -140,23 +140,43 @@ const textureNamesMatch: [Exclude<MaterialTextureName, SlotName> | Exclude<SlotN
 void textureNamesMatch;
 export type MaterialTextureIndex = typeof slots[number]['index'];
 
-export const MATERIAL_TEXTURE_SLOTS = slots.map(slot => {
+interface TextureSlotDescriptor {
+  property: MaterialTextureName;
+  index: MaterialTextureIndex;
+  target: string;
+  channel: string;
+  colorSpace: 'srgb' | 'linear';
+  operation: 'multiply' | 'custom';
+  define: string | null;
+  feature: string | null;
+  featureBit: number;
+  sampling: 'manual' | 'multiply';
+}
+const descriptors: readonly TextureSlotDescriptor[] = slots;
+export const MATERIAL_TEXTURE_SLOTS = descriptors.map(slot => {
   const field = materialLayoutFields().find(field => field.source === slot.index);
   if (!field) throw new Error(`Missing packed texture index: ${slot.property}`);
-  return { ...slot, packed: {
+  return { property: slot.property, index: slot.index, target: slot.target,
+    channel: slot.channel, colorSpace: slot.colorSpace, operation: slot.operation,
+    define: slot.define, feature: slot.feature, featureBit: slot.featureBit,
+    sampling: slot.sampling, packed: {
     row: field.row, component: field.component, wgslField: field.name,
     glslRow: `MAT_ROW_${MATERIAL_LAYOUT[field.row].name}`,
     glslComponent: 'xyzw'[field.component]
   } };
 });
-
-export const MATERIAL_TEXTURE_FEATURE_BITS = Object.fromEntries(slots.flatMap(slot => slot.feature
-  ? [[slot.feature, slot.featureBit]] : []));
-export const MATERIAL_TEXTURE_DEFINES = slots.flatMap(slot => slot.define ? [slot.define] : []);
-
+export const MATERIAL_TEXTURE_FEATURE_BITS: Record<string, number> = {};
+export const MATERIAL_TEXTURE_DEFINES: string[] = [];
+for (const slot of descriptors) {
+  if (slot.feature) MATERIAL_TEXTURE_FEATURE_BITS[slot.feature] = slot.featureBit;
+  if (slot.define) MATERIAL_TEXTURE_DEFINES.push(slot.define);
+}
 export function materialTextureFeatures(defines: Record<string, string | number>) {
-  return Object.fromEntries(MATERIAL_TEXTURE_SLOTS.flatMap(slot => slot.feature && slot.define
-    ? [[slot.feature, +defines[slot.define] > 0]] : []));
+  const result: Record<string, boolean> = {};
+  for (const slot of MATERIAL_TEXTURE_SLOTS) {
+    if (slot.feature && slot.define) result[slot.feature] = Number(defines[slot.define]) > 0;
+  }
+  return result;
 }
 
 // Call at each original sample site: alpha resolution and combined maps must

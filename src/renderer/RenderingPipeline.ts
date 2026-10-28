@@ -7,9 +7,9 @@ import Camera from '../scene/Camera.js';
 import Mesh from '../scene/Mesh.js';
 import Geometry from '../scene/Geometry.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
-import { SceneBackground, SceneLight } from '../scene/Scene.js';
-import { ColorRGB } from '../types.js';
-import { TextureAtlasStats } from './MaterialTable.js';
+import type { SceneBackground, SceneLight } from '../scene/Scene.js';
+import type { ColorRGB } from '../types.js';
+import type { TextureAtlasStats } from './MaterialTable.js';
 import type {
   OfflineAdaptiveSamplingOptions,
   OfflineAdaptiveSamplingResult
@@ -44,7 +44,8 @@ export type DisplayChannel =
   | 'shadow'
   | 'albedo'
   | 'normal'
-  | 'shadowCatcher';
+  | 'shadowCatcher'
+  | import('./aov.js').AovKind;
 
 /** Primary-ray policy for glTF BLEND materials. */
 export type AlphaBlendStrategy =
@@ -135,6 +136,22 @@ export interface RenderingDiagnostics {
     peakDisplayValue?: number;
   };
   textureAtlas?: TextureAtlasStats;
+  /** Material texture storage selection and estimated payload; driver allocation overhead is excluded. */
+  materialTextures?: {
+    requested: 'atlas' | 'auto';
+    active: 'atlas' | 'bindless';
+    /** Reason auto selected atlas; undefined when no fallback occurred. */
+    fallbackReason?: string;
+    textureCount: number;
+    estimatedBytes: number;
+    scale: number;
+    /** Metadata buffer bytes; zero for atlas. */
+    metadataBytes: number;
+    /** Resource-table slots; zero for atlas. */
+    resourceTableCapacity: number;
+    /** Payload and metadata waiting for previous GPU submissions; zero when none. */
+    retiredBytes: number;
+  };
   /** Shader compilation measurements: current WebGPU batch or cumulative WebGL programs. */
   shaderCompilation?: ShaderCompilationDiagnostics;
   /** Light-selection table summary (WebGPU). */
@@ -162,30 +179,8 @@ export interface RenderingDiagnostics {
   };
 }
 
-export const DEFAULT_BEVEL_SAMPLES = 8;
-export const MIN_BEVEL_SAMPLES = 1;
-export const MAX_BEVEL_SAMPLES = 32;
+export {DEFAULT_BEVEL_SAMPLES, MIN_BEVEL_SAMPLES, MAX_BEVEL_SAMPLES, DEFAULT_DIRECT_LIGHT_CANDIDATES, MIN_DIRECT_LIGHT_CANDIDATES, MAX_DIRECT_LIGHT_CANDIDATES, normalizeDirectLightCandidates, normalizeBevelSamples} from './renderingLimits.js';
 
-/** Light candidates resampled per NEE estimate by the WebGPU path tracer. */
-export const DEFAULT_DIRECT_LIGHT_CANDIDATES = 4;
-export const MIN_DIRECT_LIGHT_CANDIDATES = 1;
-export const MAX_DIRECT_LIGHT_CANDIDATES = 16;
-
-export function normalizeDirectLightCandidates(candidates: number) {
-  if (!Number.isFinite(candidates)) return DEFAULT_DIRECT_LIGHT_CANDIDATES;
-  return Math.min(
-    MAX_DIRECT_LIGHT_CANDIDATES,
-    Math.max(MIN_DIRECT_LIGHT_CANDIDATES, Math.round(candidates))
-  );
-}
-
-export function normalizeBevelSamples(samples: number) {
-  if (!Number.isFinite(samples)) return DEFAULT_BEVEL_SAMPLES;
-  return Math.min(
-    MAX_BEVEL_SAMPLES,
-    Math.max(MIN_BEVEL_SAMPLES, Math.round(samples))
-  );
-}
 /** Shared scene resources; uploaded once per committed revision. */
 export interface SceneResources {
   /** Returns true when scene geometry, materials, or instance transforms changed. */
@@ -262,7 +257,14 @@ export interface RenderPasses {
     cb: (sampleCount: number, isFirstFrame: boolean, frameTime: number) => void
   ): void;
   setOutput(output: DisplayChannel): boolean;
+  setAovDisplayOptions?(options: import('./aovDisplay.js').AovDisplayOptions): void;
   dispose(): void;
+  aovReady?(kind: import('./aov.js').AovKind): boolean;
+  /** Updates optional surface outputs without tracing beauty; false while compiling. */
+  refineAovs?(camera: Camera, samples?: number): boolean;
+  restartAovs?(): void;
+  getAovSamples?(): number;
+  readAov?(kind: import('./aov.js').AovKind): Promise<{width: number; height: number; data: Float32Array | Uint32Array}>;
   readOutput(kind: 'hdr' | 'denoised' | 'albedo' | 'normal'): Promise<{
     data: Float32Array;
     width: number;

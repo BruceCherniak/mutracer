@@ -1,7 +1,5 @@
 import Texture from '../scene/Texture.js';
 
-const toChar = String.fromCharCode;
-
 const MINELEN = 8;
 const MAXELEN = 0x7fff;
 
@@ -27,7 +25,7 @@ function setToPixels(
 function uint82string(array: Uint8Array, offset: number, size: number) {
   let str = '';
   for (let i = offset; i < size; i++) {
-    str += toChar(array[i]);
+    str += String.fromCharCode(array[i]);
   }
   return str;
 }
@@ -124,7 +122,7 @@ export function parseRGBE(
   let i;
   // find empty line, next line is resolution info
   for (i = 2; i < size; i++) {
-    if (toChar(data[i]) === '\n' && toChar(data[i + 1]) === '\n') {
+    if (String.fromCharCode(data[i]) === '\n' && String.fromCharCode(data[i + 1]) === '\n') {
       break;
     }
   }
@@ -136,7 +134,7 @@ export function parseRGBE(
   i += 2;
   let str = '';
   for (; i < size; i++) {
-    const _char = toChar(data[i]);
+    const _char = String.fromCharCode(data[i]);
     if (_char === '\n') {
       break;
     }

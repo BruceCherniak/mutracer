@@ -12,3 +12,10 @@ dist-site/
 
 dist-oidn-weights/
 plans/
+.native-build
+.cache/tinybvh/
+native/**/*.lib.ll
+native/host/target/
+
+.cache/
+native/toolchain/node_modules

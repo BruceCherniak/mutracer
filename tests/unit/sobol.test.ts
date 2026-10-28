@@ -2,11 +2,11 @@ import { expect, it } from 'vitest';
 import { sobol2D, owen, zIndex, morton2 } from './sobolReference';
 import { zSobolLog2SPP, samplingPatternCode } from '../../src/renderer/sampling';
 function net(points: number[][], k: number) {
+  // Coordinate bounds are independent of the elementary-interval partition.
+  expect(points.find(([x, y]) => !(x >= 0 && x < 1 && y >= 0 && y < 1))).toBeUndefined();
   for (let a = 0; a <= k; a++) {
     const counts = new Uint16Array(2**k);
     for (const [x,y] of points) {
-      expect(x).toBeGreaterThanOrEqual(0); expect(x).toBeLessThan(1);
-      expect(y).toBeGreaterThanOrEqual(0); expect(y).toBeLessThan(1);
       counts[Math.floor(x*2**a) + Math.floor(y*2**(k-a))*2**a]++;
     }
     expect(Array.from(counts)).toEqual(Array(2**k).fill(1));

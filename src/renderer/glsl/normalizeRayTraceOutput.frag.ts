@@ -12,6 +12,7 @@ const normalizeRayTraceOutput = new FragmentShader({
     albedoTex: Shader.uniform('sampler2D'),
     normalTex: Shader.uniform('sampler2D'),
     shadowCatcherTex: Shader.uniform('sampler2D'),
+    catcherMomentsTex: Shader.uniform('sampler2D'),
 
     sampleCount: Shader.uniform('float', 1),
     lightScale: Shader.uniform('vec2', [1, 1])
@@ -29,7 +30,14 @@ void main() {
   float guideCount = max(normalTexel.a, 1.0);
   vec3 albedo = albedoTexel.rgb / guideCount;
   vec3 normal = normalTexel.rgb / guideCount;
-  vec4 shadowCatcher= sample_shadowCatcherTex(uv) / sampleCount;
+  vec4 shadowCatcher = sample_shadowCatcherTex(uv);
+  // Alpha sums occluded light samples and catcherMoments.w all valid ones.
+  // Their ratio is the shadow opacity of catcher samples; the output alpha
+  // keeps the visibility convention of non-catcher samples counting as 1.
+  float sampleTotal = sample_catcherMomentsTex(uv).w;
+  float opacity = sampleTotal > 0.0 ? shadowCatcher.a / sampleTotal : 0.0;
+  shadowCatcher /= sampleCount;
+  shadowCatcher.a = 1.0 - shadowCatcher.r * opacity;
   vec4 lightTexel = sample_colorTex(uv);
   // vec2 hit = sample_hitTex(uv).rg;
   // average the color by hit count.

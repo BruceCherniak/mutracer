@@ -1,3 +1,7 @@
+import type {DisplayParityAccumulation, DisplayParityTarget} from './displayParityDiagnostics.js';
+import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
+import {WebGLAov} from './WebGLAov.js';
+import {aovMask} from './aov.js';
 import {scheduleFrame} from '../util/frame.js';
 import type {DenoiserHandle} from './denoiser.js';
 import { WebGLScratchCopy } from './WebGLScratchCopy.js';
@@ -10,11 +14,11 @@ import { readRgbaPixels } from './WebGLReadback.js';
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
 import Camera from '../scene/Camera.js';
-import { ColorRGB } from '../types.js';
+import type { ColorRGB } from '../types.js';
 import { vec3 } from '../math.js';
 import halton from './halton.js';
 import { makeTileRender } from './TileRender.js';
-import {
+import type {
   DisplayChannel,
   ToneMappingParams
 } from './RenderingPipeline.js';
@@ -44,10 +48,13 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     _isFirstFrame: boolean,
     _frameTime: number
   ) => { };
-  let allowMultipleSamplesPerFrame = false;
+  let batchSamples = false;
   let offlineSamplesPerBatch = 0;
   let deferPostProcess = false;
   let sampleSequenceOffset = 0;
+  const aov=new WebGLAov(renderer);
+  let aovCamera: Camera | undefined;
+  let displayTrace: string[] | undefined;
   let sampleCount = 0;
   let elapsedFrameTime = 32;
   let elapsedTileTime: number | undefined;
@@ -81,6 +88,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
   let tint = 0;
   let vignette = 0;
   let output: DisplayChannel = 'final';
+  let aovDisplayOptions: AovDisplayOptions = DEFAULT_AOV_DISPLAY;
   let pageLeaveTime = performance.now();
   let pageInvisibleTime = 0;
   const shadowCatcherColor = vec3.create();
@@ -171,6 +179,14 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
 
   function drawPostProcess(_forceNeedsDenoise = false, resolve = false) {
     if (resolve) { resolvedSamples = sampleCount; resolvedHasShadowCatcher = rayTracePass.hasShadowCatcher(); }
+    const aovKind = displayAovKind(output);
+    if (aovKind && sampleCount === 0) {
+      if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
+      if (!aov.samples) return;
+      presentationTexture = copy.copy(aov.visualize(aovKind,aovDisplayOptions), renderWidth, renderHeight, presentationTexture);
+      presentationDenoised = false;
+      return;
+    }
     if (resolvedSamples === 0) return;
     if (resolve) {
       rayTraceOutputPass.setSampleCount(sampleCount);
@@ -192,6 +208,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       bloomState.owner = targetKey; bloomState.settings = bloomSettings;
       bloomPass.setBrightThreshold(bloomThreshold);
       bloomPass.setRadius(bloomRadius);
+      displayTrace?.push('Bloom:SceneLinear');
       bloomPass.createPass(colorTexture);
     } else if (bloomEnabled && sampleCount < 10) {
       currentBloomIntensity = 0;
@@ -202,6 +219,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       shadowCatcherEnabled: +resolvedHasShadowCatcher,
       outputMode: output === 'shadow' ? 1 : 0
     });
+    displayTrace?.push('Compose:DisplayEncoded');
     composePass.createPass({
       colorTex: colorTexture,
       foregroundTex: rayTraceOutputPass.getOutput('foreground'),
@@ -228,16 +246,21 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
         shadowCatcher: rayTraceOutputPass.getOutput('shadowCatcher'),
         strength: pendingDenoiser.strength,
         shape: pendingDenoiser.shape
-      });
+      }, displayTrace);
       denoisedTexture = copy.copy(filtered, renderWidth, renderHeight, denoisedTexture); denoiseValid = true;
       pendingDenoiser = undefined;
     }
 
     let displayTexture =
       (output === 'final' && denoiseValid && denoisedTexture) || composePass.getOutput('color');
-    if (output === 'normal' || output === 'albedo') {
+    if (aovKind) {
+      if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
+      displayTexture = aov.visualize(aovKind,aovDisplayOptions);
+    } else if (output === 'normal' || output === 'albedo') {
+      displayTrace?.push('AOV:Raw');
       displayTexture = rayTraceOutputPass.getOutput(output);
     } else if (output === 'shadowCatcher') {
+      displayTrace?.push('AOV:Raw');
       displayTexture = rayTraceOutputPass.getOutput('shadowCatcher');
     }
     presentationTexture = copy.copy(displayTexture, renderWidth, renderHeight, presentationTexture);
@@ -275,7 +298,11 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     }
 
     rayTracePass.setCamera(camera);
+    aovCamera=camera;
+    if (!rayTracePass.preparePrograms()) return true;
     const resetAccumulation = isFirstFrame;
+    if(resetAccumulation) aov.reset();
+    if (execution?.aovs?.length && !rayTracePass.prepareAovs(aov,camera,renderWidth,renderHeight,execution.aovs)) return true;
     if (resetAccumulation) {
       tileTimingGeneration++;
       elapsedTileTime = undefined;
@@ -299,7 +326,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     if (offlineSamplesPerBatch > 0 && tile.isFirstTile && tile.isLastTile) {
       tile.samplesPerFrame = offlineSamplesPerBatch;
     } else if (
-      !allowMultipleSamplesPerFrame ||
+      !batchSamples ||
       !(tile.isFirstTile && tile.isLastTile)
     ) {
       tile.samplesPerFrame = 1;
@@ -314,6 +341,9 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
           height: tile.tileHeight
         });
         if (tile.isLastTile) sampleCount++;
+      }
+      if(sampleCount!==frameSampleCount){
+      if(execution?.aovs?.length) rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,Math.max(sampleCount,aov.samples),execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
       }
       if (sampleCount !== frameSampleCount && (!deferPostProcess || sampleCount >= maxSamples)) {
         drawPostProcess(sampleCount >= maxSamples, true);
@@ -389,9 +419,17 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     invalidateDenoisedOutput() { pendingDenoiser = undefined; denoiseValid = false; preserveDenoisedOutput = false; },
     synchronizeBackground() { },
     configure(settings: TraceSettings) {
-      execution = { ...settings };
+      if(settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16)<1)) throw new RangeError('aovSamples must be a positive integer');
+      const previousMask = aovMask(execution?.aovs ?? []), nextMask = aovMask(settings.aovs ?? []);
+      if (previousMask !== nextMask || execution?.aovSamples !== settings.aovSamples) aov.samples = 0;
+      execution = { ...settings, aovs: [...(settings.aovs ?? [])] };
+      // A reduced preview set can retire the previously displayed AOV before
+      // Display applies its next channel after tracing.
+      const displayedAov = displayAovKind(output);
+      if (displayedAov && !settings.aovs?.includes(displayedAov)) output = 'final';
+      if(previousMask && !nextMask){aov.dispose();aov.history.clear();aov.width=aov.height=0;aov.reset();}
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
-      allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
+      batchSamples = settings.batchSamples;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
       tileRender.setMaxTiles(settings.maxTiles);
     },
@@ -413,12 +451,13 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     getMemory() {
       return {
         width: renderWidth, height: renderHeight,
-        bytes: rayTracePass.getTargetMemoryBytes(targetKey)
+        bytes: aov.bytes + rayTracePass.getTargetMemoryBytes(targetKey)
           + rayTraceOutputPass.getMemoryBytes() + (presentationTexture?.getMemoryBytes() ?? 0) + (denoisedTexture?.getMemoryBytes() ?? 0)
       };
     },
     isFirstFrame: () => isFirstFrame,
     restartSamples(_preserveTemporalHistory = false) {
+      aov.reset();
       tileRender.reset();
       isFirstFrame = true;
       sampleCount = 0;
@@ -431,6 +470,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
         return Promise.reject(new Error('This denoiser requires WebGPU.'));
       }
       if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
+      if (output !== 'final' && output !== 'shadow') return Promise.resolve(true);
       pendingDenoiser = filter.denoiser;
       drawPostProcess(true);
       return Promise.resolve(true);
@@ -499,6 +539,34 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       return undefined;
     },
     getTotalSamplesRendered: () => sampleCount,
+    /** @internal */
+    _displayParity() {
+      return {
+        record(trace?: string[]) { displayTrace = trace; },
+        load(input: DisplayParityAccumulation) {
+          setSize(input.width, input.height);
+          denoiseValid = false; pendingDenoiser = undefined;
+          const texture = (data: Float32Array) => {
+            const t = new Texture2D({width: input.width, height: input.height,
+              source: {data, width: input.width, height: input.height}, type: constants.FLOAT,
+              minFilter: constants.NEAREST, magFilter: constants.NEAREST});
+            return t;
+          };
+          const shadow = Float32Array.from({length: input.width * input.height * 4}, (_, i) =>
+            i % 4 === 3 ? input.moments[Math.floor(i / 4) * 4 + 2] : input.shadow[Math.floor(i / 4) * 8 + i % 4]);
+          const background = Float32Array.from(shadow, (_, i) => input.shadow[Math.floor(i / 4) * 8 + 4 + i % 4]);
+          const inputs = {color: texture(input.color), albedo: texture(input.albedo), normal: texture(input.normal),
+            moments: texture(Float32Array.from(input.moments, (v, i) => i % 4 === 2 ? input.samples : v)),
+            shadowCatcher: texture(shadow), catcherBackground: texture(background), catcherMoments: texture(input.moments)};
+          rayTracePass._loadDiagnosticAccumulation(inputs, input.catcher);
+          sampleCount = resolvedSamples = input.samples;
+          resolvedHasShadowCatcher = input.catcher; isFirstFrame = false;
+          rayTraceOutputPass.setSize(renderWidth, renderHeight);
+          rayTraceOutputPass.setSampleCount(sampleCount);
+          rayTraceOutputPass.createPass(rayTracePass);
+        }
+      };
+    },
     getDiagnostics: () => ({ ...rayTracePass.getDiagnostics(), shaderCompilation: renderer.getShaderCompilationDiagnostics() }),
     flushDiagnostics: async () => { },
     setShadowCatcherParams(color: ColorRGB, alpha: number) {
@@ -529,6 +597,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       sampleRenderedCallback = cb;
     },
 
+    setAovDisplayOptions(options: AovDisplayOptions) { aovDisplayOptions={...options,depthRange:[...options.depthRange]}; },
     setOutput(nextOutput: DisplayChannel) {
       if (output === nextOutput) return false;
       output = nextOutput;
@@ -540,6 +609,23 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       const width = presentationTexture.width, height = presentationTexture.height;
       return { width, height, data: readRgbaPixels(renderer.gl, width, height, presentationTexture.isByteEncoded) };
     },
+    aovReady(kind) { return !!execution?.aovs?.includes(kind) && aov.samples > 0; },
+    getAovSamples() { return aov.samples; },
+    restartAovs() { aov.reset(); },
+    refineAovs(camera, samples = sampleCount) {
+      if (samples < 1 || !execution?.aovs?.length) return true;
+      rayTracePass.setCamera(camera); aovCamera = camera;
+      return rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,samples,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
+    },
+    async readAov(kind) {
+      if(!execution?.aovs?.includes(kind) || !aovCamera || (sampleCount<1 && aov.samples<1)) throw new Error('AOV output is not ready');
+      rayTracePass.setCamera(aovCamera);
+      while (!rayTracePass.renderAovs(aov,aovCamera,renderWidth,renderHeight,Math.max(sampleCount,aov.samples),execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset)) {
+        if (disposed || renderer.gl.isContextLost()) throw new Error('AOV compilation was interrupted');
+        await new Promise<void>(resolve => scheduleFrame(() => resolve()));
+      }
+      return aov.read(kind);
+    },
     async readOutput(kind) {
       if (kind === 'denoised' && (!denoisedTexture || !denoiseValid)) kind = 'hdr';
       const texture = kind === 'denoised' ? denoisedTexture! : rayTraceOutputPass.getOutput(kind === 'hdr' ? 'color' : kind);
@@ -550,12 +636,13 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       if (disposed) return; disposed = true;
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
 
+      aov.dispose();
       rayTracePass.releaseTarget(targetKey);
       rayTraceOutputPass.dispose();
       presentationTexture?.dispose(renderer.gl);
       denoisedTexture?.dispose(renderer.gl);
     }
-  } satisfies TargetPipeline;
+  } satisfies TargetPipeline & DisplayParityTarget;
 }
 
 /** Independent render targets, without preview or presentation policy. */

@@ -1,0 +1,150 @@
+[
+  {
+    "id": "three-point",
+    "name": "Three-point",
+    "tag": "Key, fill, rim · 4:1",
+    "lights": [
+      {
+        "name": "Key", "azimuth": -40, "elevation": 30, "distance": 3, "width": 1.4, "height": 1.8,
+        "power": 1
+      },
+      {
+        "name": "Fill", "azimuth": 50, "elevation": 10, "distance": 3.5, "width": 1.8, "height": 1.8,
+        "power": 0.25
+      },
+      {
+        "name": "Rim", "azimuth": 155, "elevation": 35, "distance": 3, "width": 0.5, "height": 2,
+        "power": 0.8
+      }
+    ]
+  },
+  {
+    "id": "rembrandt",
+    "name": "Rembrandt",
+    "tag": "High 45° key · 8:1",
+    "lights": [
+      {
+        "name": "Key", "azimuth": -45, "elevation": 45, "distance": 2.8, "width": 1.2, "height": 1.2,
+        "power": 1.2
+      },
+      {
+        "name": "Fill", "azimuth": 40, "elevation": 0, "distance": 3.5, "width": 1.6, "height": 2,
+        "power": 0.15
+      }
+    ]
+  },
+  {
+    "id": "butterfly",
+    "name": "Butterfly",
+    "tag": "Key above the lens",
+    "lights": [
+      {
+        "name": "Key", "azimuth": 0, "elevation": 50, "distance": 3, "width": 1.4, "height": 1,
+        "power": 1.1
+      },
+      {
+        "name": "Hair", "azimuth": 180, "elevation": 55, "distance": 3, "width": 1.6, "height": 0.4,
+        "power": 0.4
+      }
+    ]
+  },
+  {
+    "id": "clamshell",
+    "name": "Clamshell",
+    "tag": "Top and bottom fill",
+    "lights": [
+      {
+        "name": "Top", "azimuth": 0, "elevation": 40, "distance": 2.8, "width": 2, "height": 0.9,
+        "power": 1
+      },
+      {
+        "name": "Bottom", "azimuth": 0, "elevation": -12, "distance": 2.6, "width": 2, "height": 0.6,
+        "power": 0.4
+      },
+      {
+        "name": "Kicker left", "azimuth": -145, "elevation": 15, "distance": 3, "width": 0.4,
+        "height": 2.2, "power": 0.35
+      },
+      {
+        "name": "Kicker right", "azimuth": 145, "elevation": 15, "distance": 3, "width": 0.4,
+        "height": 2.2, "power": 0.35
+      }
+    ]
+  },
+  {
+    "id": "split",
+    "name": "Split",
+    "tag": "One key at 90°",
+    "lights": [
+      {
+        "name": "Key", "azimuth": -90, "elevation": 10, "distance": 2.8, "width": 1, "height": 2.2,
+        "power": 1.2
+      }
+    ]
+  },
+  {
+    "id": "rim",
+    "name": "Rim",
+    "tag": "Twin strips behind",
+    "lights": [
+      {
+        "name": "Strip left", "azimuth": -130, "elevation": 15, "distance": 3, "width": 0.45,
+        "height": 2.6, "power": 1
+      },
+      {
+        "name": "Strip right", "azimuth": 130, "elevation": 15, "distance": 3, "width": 0.45,
+        "height": 2.6, "power": 1
+      },
+      {
+        "name": "Top", "azimuth": 0, "elevation": 75, "distance": 3, "width": 1.5, "height": 1.5,
+        "power": 0.15
+      }
+    ]
+  },
+  {
+    "id": "high-key",
+    "name": "High key",
+    "tag": "Soft, low contrast",
+    "lights": [
+      {
+        "name": "Front", "azimuth": 0, "elevation": 20, "distance": 3.5, "width": 3, "height": 2.4,
+        "power": 0.7
+      },
+      {
+        "name": "Left", "azimuth": -70, "elevation": 25, "distance": 3.5, "width": 2.4,
+        "height": 2.4, "power": 0.5
+      },
+      {
+        "name": "Right", "azimuth": 70, "elevation": 25, "distance": 3.5, "width": 2.4,
+        "height": 2.4, "power": 0.5
+      },
+      {
+        "name": "Top", "azimuth": 0, "elevation": 85, "distance": 3.5, "width": 3, "height": 3,
+        "power": 0.5
+      }
+    ]
+  },
+  {
+    "id": "tabletop",
+    "name": "Tabletop",
+    "tag": "Overhead and strips",
+    "lights": [
+      {
+        "name": "Overhead", "azimuth": 0, "elevation": 80, "distance": 3, "width": 3, "height": 2,
+        "power": 1
+      },
+      {
+        "name": "Strip left", "azimuth": -75, "elevation": 10, "distance": 3, "width": 0.5,
+        "height": 2.4, "power": 0.45
+      },
+      {
+        "name": "Strip right", "azimuth": 75, "elevation": 10, "distance": 3, "width": 0.5,
+        "height": 2.4, "power": 0.45
+      },
+      {
+        "name": "Back", "azimuth": 180, "elevation": 30, "distance": 3, "width": 1.6, "height": 0.6,
+        "power": 0.3
+      }
+    ]
+  }
+]

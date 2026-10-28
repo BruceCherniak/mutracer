@@ -2,7 +2,7 @@ import {
   LIGHT_CHOICE_ANALYTIC,
   LIGHT_CHOICE_EMISSIVE_TRIANGLE,
   LIGHT_CHOICE_ENVIRONMENT
-} from '../../lightSampling.js';
+} from '../../lightConstants.js';
 
 export default /*wgsl */ `
 fn light_sample_sphere(light: Light, scatterPos: vec3f, randomV2: vec2f, lightSample: ptr<function, LightSampleRec>) {
@@ -185,26 +185,30 @@ fn sampleAnalyticLight(
   result: ptr<function, LightSampleRec>
 ) {
   let lightType = i32(light.litType);
-  if (lightType == RECT_LIGHT) {
+  if (HAS_SCENE_RECT_LIGHT && lightType == RECT_LIGHT) {
     light_sample_rect(light, shadingPoint, samplePoint, result);
     return;
   }
-  if (lightType == SPHERE_LIGHT) {
+  if (HAS_SCENE_SPHERE_LIGHT && lightType == SPHERE_LIGHT) {
     light_sample_sphere(light, shadingPoint, samplePoint, result);
     return;
   }
-  if (lightType == SPOT_LIGHT) {
+  if (HAS_SCENE_SPOT_LIGHT && lightType == SPOT_LIGHT) {
     light_sample_spot(light, shadingPoint, samplePoint, result);
     return;
   }
-  if (lightType == DIRECTIONAL_LIGHT) {
+  if (HAS_SCENE_DIRECTIONAL_LIGHT && lightType == DIRECTIONAL_LIGHT) {
     light_sample_directional(light, result);
   }
 }
 
 fn sampleEnvLight(randomV2: vec2f, lightSample: ptr<function, LightSampleRec>) {
   var uv: vec2f;
-  (*lightSample).direction = sampleEnvmap(randomV2, &uv, &(*lightSample).pdf);
+  // Naga's SPIR-V writer cannot pass a struct-member pointer as a call argument.
+  var pdf: f32;
+  let direction = sampleEnvmap(randomV2, &uv, &pdf);
+  (*lightSample).pdf = pdf;
+  (*lightSample).direction = direction;
   (*lightSample).emission = textureLinear(envMap, uv).rgb;
   (*lightSample).dist = INF;
 }
@@ -338,7 +342,7 @@ fn sampleLightChoiceTable(
     fract(scaledChoice) < columnChoice.probability
   );
   let choice = getLightChoiceFromTable(tableOffset, selectedIndex);
-  if (choice.sourceType == ${LIGHT_CHOICE_ENVIRONMENT}) {
+  if (USE_ENVMAP && choice.sourceType == ${LIGHT_CHOICE_ENVIRONMENT}) {
     (*lightSample).sourceType = 0u;
     (*lightSample).sourceIndex = u32(choice.sourceIndex);
     sampleEnvLight(rnd.xy, lightSample);
@@ -353,7 +357,7 @@ fn sampleLightChoiceTable(
     (*lightSample).selectionPmf = light.selectionPmf;
     (*lightSample).pdf *= light.selectionPmf;
   }
-  else if (choice.sourceType == ${LIGHT_CHOICE_EMISSIVE_TRIANGLE}) {
+  else if (HAS_SCENE_EMISSIVE_LIGHT && choice.sourceType == ${LIGHT_CHOICE_EMISSIVE_TRIANGLE}) {
     (*lightSample).sourceType = 1u;
     (*lightSample).sourceIndex = u32(choice.sourceIndex);
     sampleEmissiveTriangleLight(

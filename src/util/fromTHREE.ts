@@ -19,8 +19,8 @@ import SphereLight from '../scene/SphereLight.js';
 import SpotLight from '../scene/SpotLight.js';
 import IESProfile from '../scene/IESProfile.js';
 import Camera from '../scene/Camera.js';
-import { ColorRGB, ColorRGBA } from '../types.js';
-import { GroundedSkyboxBackground, Scene, SceneLight } from '../scene/Scene.js';
+import type { ColorRGB, ColorRGBA } from '../types.js';
+import type { Scene, SceneLight } from '../scene/Scene.js';
 import { mat4 } from '../math.js';
 import { generateVertexNormals, updateBoundingBox, updateDynamicTangents } from './geometry.js';
 import { THREEDeformation, isDeformingMesh } from './threeDeformation.js';
@@ -701,6 +701,8 @@ function reverseTangentHandedness(geometry: Geometry) {
 
 /** Options for one-shot conversion and persistent Three.js synchronization. */
 export interface FromTHREESceneOptions {
+  /** Override scene.environment with a MuTracer equirectangular texture or ProceduralSky. Default undefined uses the Three.js environment. Intensity and rotation still use the Three.js scene values. */
+  environment?: Texture;
   /** Custom material conversion. Default undefined uses built-in conversion; returning null skips every mesh using this material. THREESync invokes once per source material identity/version, so the result cannot depend on a particular mesh. Returned materials are caller-owned; engine.update detects parameter edits. */
   convertMaterial?(material: THREE.Material): OpenPBRMaterial | null | undefined;
   /** Custom light conversion. Default undefined uses built-in conversion; returning null skips this light. THREESync invokes once per source light identity and numeric userData.mutracerVersion (default undefined, never rerun). Returned lights are retained by identity and remain caller-owned. */
@@ -736,7 +738,7 @@ interface ConversionStore {
   deformations: WeakMap<THREE.Mesh, THREEDeformation>;
   poseChanged: boolean;
   meshes: WeakMap<THREE.Mesh, Map<number, Mesh>>;
-  lights: WeakMap<THREE.Object3D | THREE.Texture, SceneLight>;
+  lights: WeakMap<THREE.Object3D | THREE.Texture | Texture, SceneLight>;
   instanceMeshes: WeakMap<THREE.Mesh, Map<number, InstancedMesh>>;
   // Automatic-projection variants, pruned each update.
   projectionVariants: Map<THREE.Material, Map<string, MaterialVariant>>;
@@ -784,7 +786,7 @@ function geometryStateMatches(geometry: THREE.BufferGeometry, state: readonly un
   }
   return field === state.length;
 }
-function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Texture, value: SceneLight) {
+function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Texture | Texture, value: SceneLight) {
   const cached = store.lights.get(source);
   if (!cached || cached.type !== value.type) {
     store.lights.set(source, value);
@@ -1042,7 +1044,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             let batch = batchesByGroup.get(groupIndex);
             if (!batch) {
               batch = new InstancedMesh(geometry, variant, {count: instanceCount});
-              batch.transform = child.matrixWorld.elements.slice() as mat4.Mat4Array;
+              batch.transform = child.matrixWorld.elements.slice() as number[];
               batchesByGroup.set(groupIndex, batch);
             }
             batch.geometry = geometry;
@@ -1081,7 +1083,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             let mesh = meshGroups.get(groupIndex);
             if (!mesh) {
               mesh = new Mesh(geometry, material);
-              mesh.transform = child.matrixWorld.elements.slice() as mat4.Mat4Array;
+              mesh.transform = child.matrixWorld.elements.slice() as number[];
               meshGroups.set(groupIndex, mesh);
             }
             mesh.geometry = geometry;
@@ -1113,7 +1115,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         intensity: child.intensity
       });
       worldMatrix.compose(worldPosition, worldRotation, child.scale.clone().set(1, 1, 1));
-      light.transform = worldMatrix.elements.slice() as mat4.Mat4Array;
+      light.transform = worldMatrix.elements.slice() as number[];
       lights.push(retainLight(store, child, light));
     } else if (isSpotLight(child)) {
       const worldPosition = child.getWorldPosition(child.position.clone());
@@ -1163,9 +1165,10 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   });
 
   const threeEnvironment = scene.environment as THREE.DataTexture | null;
-  const environmentMap = convertDataTexture(threeEnvironment, store.equirectTextures);
-  const environmentLight = threeEnvironment && environmentMap
-    ? retainLight(store, threeEnvironment, new EnvironmentLight({map: environmentMap, intensity: scene.environmentIntensity})) as EnvironmentLight
+  const environmentMap = options.environment ?? convertDataTexture(threeEnvironment, store.equirectTextures);
+  const environmentSource = options.environment ?? threeEnvironment;
+  const environmentLight = environmentSource && environmentMap
+    ? retainLight(store, environmentSource, new EnvironmentLight({map: environmentMap, intensity: scene.environmentIntensity})) as EnvironmentLight
     : undefined;
   if (environmentLight) {
     environmentLight.transform = scene.matrix.clone().makeRotationFromEuler(scene.environmentRotation).elements.slice();
@@ -1174,7 +1177,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
 
   const grounded = scene.userData.mutracerGroundedSkybox as
     | {
-        texture: THREE.DataTexture;
+        texture: THREE.DataTexture | Texture;
         height: number;
         radius: number;
         groundHeight?: number;
@@ -1183,10 +1186,10 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         intensity?: number;
       }
     | undefined;
-  const groundedTexture = grounded && convertDataTexture(grounded.texture, store.equirectTextures);
+  const groundedTexture = grounded && (grounded.texture instanceof Texture ? grounded.texture : convertDataTexture(grounded.texture, store.equirectTextures));
   const hideEnvironmentBackground =
     scene.userData.mutracerHiddenBackground === true;
-  let background: GroundedSkyboxBackground | ColorRGBA | Texture | undefined =
+  let background: Scene['background'] =
     hideEnvironmentBackground
       ? [0, 0, 0, 0]
       : grounded && groundedTexture
@@ -1208,11 +1211,24 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
               : convertDataTexture(scene.background as THREE.DataTexture, store.equirectTextures)
           : undefined;
 
+  // Grounded skyboxes own their level-ground yaw and intensity; Three.js
+  // backgroundRotation and backgroundIntensity apply only to the explicit
+  // equirectangular background.
+  const rotation = scene.backgroundRotation;
+  const rotated = !!rotation && (rotation.x !== 0 || rotation.y !== 0 || rotation.z !== 0);
+  const intensity = scene.backgroundIntensity ?? 1;
+  if (background instanceof Texture && (rotated || intensity !== 1)) {
+    background = {type: 'Equirect', map: background,
+      transform: rotated ? scene.matrix.clone().makeRotationFromEuler(rotation).elements.slice() : undefined,
+      intensity: intensity !== 1 ? intensity : undefined};
+  }
+
   const oldBackground = store.background;
   if (Array.isArray(background) && Array.isArray(oldBackground) && snapshotsEqual(background, oldBackground)) {
     background = oldBackground;
   } else if (background && oldBackground && !Array.isArray(background) && !Array.isArray(oldBackground)
-    && !(background instanceof Texture) && !(oldBackground instanceof Texture)) {
+    && !(background instanceof Texture) && !(oldBackground instanceof Texture)
+    && background.type === oldBackground.type) {
     // Compare by values, ignoring the newly constructed wrapper's identity.
     if (snapshotsEqual(snapshotFields(background).slice(1), snapshotFields(oldBackground).slice(1))) background = oldBackground;
     else { Object.assign(oldBackground, background); background = oldBackground; }
@@ -1398,7 +1414,7 @@ export function fromTHREECamera(
   threeCamera.updateWorldMatrix(true, false);
   camera.zoom = threeCamera.zoom;
   camera.transform =
-    threeCamera.matrixWorld.elements.slice() as mat4.Mat4Array;
+    threeCamera.matrixWorld.elements.slice() as number[];
   const perspective = threeCamera as THREE.PerspectiveCamera;
   if (perspective.isPerspectiveCamera) {
     if (perspective.focus > 0) camera.focusDistance = perspective.focus;

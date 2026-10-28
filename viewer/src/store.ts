@@ -1,11 +1,14 @@
 import { create } from 'zustand';
 import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
-import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChannel } from '@meimu/mutracer';
+import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChannel, AovKind, AovIdComponent } from '@meimu/mutracer';
 import type { TextureSampling } from './engine/modelCache';
 import type { MaterialValues, TextureKey } from './engine/materialParams';
 import { STUDIO_PRESETS } from './engine/studio';
+import { DEFAULT_SKY_TIME, SKY_TIME_RANGE } from './engine/sky';
 import { historyLabels, onHistoryChange, pushHistory, type HistoryItem } from './history';
 import { readURLSettings, URL_SETTINGS_FIELDS } from './urlSettings';
+
+export const VIEWER_AOVS: AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'];
 
 export type EnvResolution = '1k' | '2k' | '4k';
 
@@ -27,6 +30,8 @@ export interface Settings {
   envId: string;
   envIntensity: number;
   envRotation: number;
+  /** Local solar time of the procedural sky, in hours. */
+  skyTime: number;
   envResolution: EnvResolution;
   background: 'environment' | 'grounded' | 'color' | 'transparent';
   /**
@@ -72,6 +77,10 @@ export interface Settings {
   bloomRadius: number;
   vignette: number;
   output: DisplayChannel;
+  aovDepthFar: number;
+  aovPositionScale: number;
+  aovMotionScale: number;
+  aovIdComponent: AovIdComponent;
   previewEnabled: boolean;
   previewMaxResolutionScale: number;
 
@@ -102,6 +111,7 @@ export const DEFAULT_SETTINGS: Settings = {
   envId: 'sky',
   envIntensity: 1,
   envRotation: 0,
+  skyTime: DEFAULT_SKY_TIME,
   envResolution: '1k',
   background: 'environment',
   backgroundColor: '#2a2b30',
@@ -139,6 +149,10 @@ export const DEFAULT_SETTINGS: Settings = {
   bloomRadius: 0.6,
   vignette: 0,
   output: 'final',
+  aovDepthFar: 10,
+  aovPositionScale: 1,
+  aovMotionScale: 16,
+  aovIdComponent: 'object',
   previewEnabled: true,
   previewMaxResolutionScale: 0.5,
   cameraIndex: -1,
@@ -270,7 +284,14 @@ export interface ViewerState {
   focusArea: FocusAreaState;
   lens: LensInfo;
   paused: boolean;
-  ui: { tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean; exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean; mobileTab: InspectorTab | 'scene' };
+  ui: {
+    tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean;
+    /** Viewport debug overlay expanded. */
+    debug: boolean;
+    exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean;
+    examplesPinned: boolean; examplesOpen: boolean; examplesCollection: 'models' | 'research' | null;
+    mobileTab: InspectorTab | 'scene';
+  };
   export: { stage: 'pilot' | 'final' | 'denoising'; samples: number; target: number } | null;
 }
 
@@ -329,11 +350,13 @@ function validateSettings(settings: Settings): Settings {
   };
   return {
     ...settings,
+    output: settings.output === 'shadow' ? 'final' : settings.output,
     lighting: settings.lighting === 'studio' ? 'studio' : 'environment',
     studioPreset: STUDIO_PRESETS.some((p) => p.id === settings.studioPreset) ? settings.studioPreset : DEFAULT_SETTINGS.studioPreset,
     studioIntensity: number('studioIntensity', 0, 20),
     studioAmbient: number('studioAmbient', 0, 2),
     studioSize: number('studioSize', 0.1, 4),
+    skyTime: number('skyTime', SKY_TIME_RANGE[0], SKY_TIME_RANGE[1]),
     studioAmbientColor: /^#[0-9a-f]{6}$/i.test(settings.studioAmbientColor) ? settings.studioAmbientColor : DEFAULT_SETTINGS.studioAmbientColor,
     toneMapping: allowed.includes(settings.toneMapping) ? settings.toneMapping : 'agx',
     hdrOutputEnabled: settings.hdrOutputEnabled === true,
@@ -384,10 +407,14 @@ export const useViewer = create<ViewerState>(() => ({
     right: storedUi.right ?? true,
     hidden: false,
     focusFrame: storedUi.focusFrame !== false,
+    debug: storedUi.debug === true,
     exportOpen: false,
     codeOpen: false,
     helpOpen: false,
     textureBrowser: false,
+    examplesPinned: storedUi.examplesPinned === true,
+    examplesOpen: false,
+    examplesCollection: null,
     mobileTab: storedUi.tab ?? 'material'
   },
   export: null
@@ -399,7 +426,7 @@ const UNDOABLE_EXCLUDED = new Set<keyof Settings>(['cameraIndex', 'projection', 
 const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   lighting: 'Lighting mode', studioPreset: 'Studio preset', studioIntensity: 'Studio intensity', studioRotation: 'Studio rotation',
   studioSize: 'Studio light size', studioAmbient: 'Studio ambient', studioAmbientColor: 'Ambient color', envId: 'Environment',
-  envIntensity: 'Environment intensity', envRotation: 'Environment rotation', envResolution: 'Environment resolution',
+  envIntensity: 'Environment intensity', envRotation: 'Environment rotation', skyTime: 'Time of day', envResolution: 'Environment resolution',
   background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
   groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
@@ -476,8 +503,8 @@ export function showToast(message: string, tone: 'info' | 'error' = 'info', acti
 
 useViewer.subscribe((state, prev) => {
   if (state.ui !== prev.ui) {
-    const { tab, left, right, focusFrame } = state.ui;
-    writeStorage(UI_KEY, { tab, left, right, focusFrame });
+    const { tab, left, right, focusFrame, debug, examplesPinned } = state.ui;
+    writeStorage(UI_KEY, { tab, left, right, focusFrame, debug, examplesPinned });
   }
   if (state.settings !== prev.settings) {
     writeStorage(RENDER_KEY, Object.fromEntries(RENDER_FIELDS.map((key) => [key, state.settings[key]])));

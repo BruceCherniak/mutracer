@@ -12,5 +12,13 @@
   "assets": {
     "directory": "./dist-site",
     "not_found_handling": "none"
+  },
+  "env": {
+    "dev": {
+      "name": "mutracer-dev",
+      "routes": [
+        { "pattern": "mutracer-dev.meimu-studio.com", "custom_domain": true }
+      ]
+    }
   }
 }

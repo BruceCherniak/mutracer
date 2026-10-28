@@ -1,6 +1,7 @@
 import type { Vec3 } from '../types.js';
 import { generateVertexNormals } from '../util/geometry.js';
 import { vec3 } from '../math.js';
+import { attributeLength, attributeValue } from './attributeData.js';
 
 type AttributeData = Float32Array | Uint16Array | Uint32Array | Int32Array;
 export class Attribute<T extends AttributeData = AttributeData> {
@@ -11,18 +12,28 @@ export class Attribute<T extends AttributeData = AttributeData> {
     this.itemSize = itemSize;
   }
 
-  static getItem(attr: Attribute, out: number[], vertexIndex: number) {
+  // Keep concrete storage through calls: native generic class layouts differ.
+  static getItem<A extends Attribute>(attr: A, out: number[], vertexIndex: number) {
     const array = attr.array;
     const itemSize = attr.itemSize;
     const offset = vertexIndex * itemSize;
     for (let i = 0; i < itemSize; i++) {
-      out[i] = array[offset + i];
+      out[i] = attributeValue(array, offset + i);
     }
   }
 
-  static getCount(attr: Attribute) {
-    return attr.array.length / attr.itemSize;
+  static getCount<A extends Attribute>(attr: A) {
+    return attributeLength(attr.array) / attr.itemSize;
   }
+}
+
+// Retain union-parameter Attributes accepted by the public API, while also
+// naming concrete instantiations so native union conversion has exact arms.
+type IndexAttribute = Attribute<Uint16Array | Uint32Array> | Attribute<Uint16Array> | Attribute<Uint32Array>;
+function sequentialIndices(count: number): Attribute<Uint32Array> {
+  const indices = new Uint32Array(count);
+  for (let i = 0; i < indices.length; i++) indices[i] = i;
+  return new Attribute(indices, 1);
 }
 
 export type AttributeName =
@@ -32,21 +43,13 @@ export type AttributeName =
   | 'uv'
   | 'uv1'
   | 'color';
-export const AVAILABLE_ATTRIBUTES: AttributeName[] = [
-  'position',
-  'normal',
-  'tangent',
-  'uv',
-  'uv1',
-  'color'
-];
 
 /** Triangle geometry construction data. */
 export interface GeometryInit {
   /** Required vertex positions in scene units, itemSize 3. */
   position: Attribute<Float32Array>;
   /** Triangle vertex indices, itemSize 1. Default: sequential indices 0..vertexCount-1. */
-  indices?: Attribute<Uint16Array | Uint32Array>;
+  indices?: IndexAttribute;
   /** Vertex normals, itemSize 3. Default: generated smooth area-weighted normals. */
   normal?: Attribute<Float32Array>;
   /** Vertex tangents (XYZ, optional W handedness). Default undefined. */
@@ -85,8 +88,33 @@ export default class Geometry {
   uv1?: Attribute<Float32Array>;
   /** Optional vertex RGB colors. Default undefined. */
   color?: Attribute<Float32Array>;
-  /** Required triangle vertex indices; three entries per triangle. */
-  indices: Attribute<Uint16Array | Uint32Array>;
+  /**
+   * Required triangle vertex indices; three entries per triangle.
+   * Uint16 input may retain a cached Uint32 copy, costing 4 extra bytes per index.
+   */
+  indices: IndexAttribute;
+  private _indexSource: Uint16Array | Uint32Array | undefined;
+  private _indexVersion = -1;
+  private _indices32 = new Uint32Array(0);
+
+  /** @internal Canonical CPU/GPU indices; public index storage remains caller-owned. */
+  get indexArray(): Uint32Array {
+    const source = this.indices.array;
+    if (source instanceof Uint32Array) {
+      if (this._indexSource) {
+        this._indexSource = undefined;
+        this._indices32 = new Uint32Array(0);
+        this._indexVersion = -1;
+      }
+      return source;
+    }
+    if (this._indexSource !== source || this._indexVersion !== this.topologyVersion || this._indices32.length !== source.length) {
+      this._indices32 = new Uint32Array(source);
+      this._indexSource = source;
+      this._indexVersion = this.topologyVersion;
+    }
+    return this._indices32;
+  }
   /** Optional per-vertex raw material indices, itemSize 1. All three triangle corners must match. Default undefined selects material 0. */
   materialIndex?: Attribute<Int32Array>;
 
@@ -97,7 +125,7 @@ export default class Geometry {
   };
   constructor(data: GeometryInit) {
     this.position = data.position;
-    this.indices = data.indices ?? new Attribute(Uint32Array.from({ length: this.vertexCount }, (_, index) => index), 1);
+    this.indices = data.indices ?? sequentialIndices(this.vertexCount);
     this.normal = data.normal ?? new Attribute(new Float32Array(this.vertexCount * 3), 3);
     if (!data.normal) generateVertexNormals(this);
 
@@ -141,7 +169,7 @@ export default class Geometry {
 
   /** Number of triangles in the index attribute. */
   get triangleCount() {
-    return this.indices.array.length / 3;
+    return attributeLength(this.indices.array) / 3;
   }
 
 

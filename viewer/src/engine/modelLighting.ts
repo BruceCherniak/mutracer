@@ -139,6 +139,7 @@ export async function loadModelLighting(
   let environment: EquirectData | null = null;
   const pbrt = metadata.pbrt as { light_sources?: Record<string, unknown>[] } | undefined;
   const entries = pbrt?.light_sources;
+  available ||= !!pbrt && emissive;
   if (!Array.isArray(entries)) return { available, useByDefault: punctual || !!pbrt, environment, warnings };
   for (const [index, entry] of entries.entries()) {
     if (!entry || typeof entry !== 'object') continue;

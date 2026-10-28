@@ -2,8 +2,23 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
+    tags: ['native-v*']
   pull_request:
+  workflow_dispatch:
+    inputs:
+      native_platform:
+        description: Native target (all platforms by default; releases require release)
+        type: choice
+        default: release
+        options: [release, macos-arm64, linux-x64, windows-x64]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.native_platform || 'release' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   checks:
@@ -28,3 +43,170 @@ jobs:
       - run: npm run test:viewer
       - run: npm run build
       - run: npm run check:lib-esm
+
+  native:
+    name: native (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: >-
+          ${{ fromJSON(
+            inputs.native_platform == 'macos-arm64' && '[{"os":"macos-15","platform":"macos-arm64"}]' ||
+            inputs.native_platform == 'windows-x64' && '[{"os":"windows-2025","platform":"windows-x64"}]' ||
+            inputs.native_platform == 'linux-x64' && '[{"os":"ubuntu-24.04","platform":"linux-x64"}]' ||
+            '[{"os":"macos-15","platform":"macos-arm64"},{"os":"ubuntu-24.04","platform":"linux-x64"},{"os":"windows-2025","platform":"windows-x64"}]'
+          ) }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            native/toolchain/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
+      - uses: actions/cache/restore@v4
+        id: native_cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/mutracer-native/host-target
+            ${{ runner.temp }}/mutracer-native/viewer-target
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/host/Cargo.lock', 'native/viewer/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/host/Cargo.lock', 'native/viewer/Cargo.lock') }}-
+            native-${{ runner.os }}-${{ runner.arch }}-
+      - name: Set up MSVC and Windows SDK
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Install Windows AOT archiver
+        if: runner.os == 'Windows'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Install Linux windowing and packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev libvulkan1
+      - run: npm ci
+      - name: Install pinned native compiler for this platform
+        run: |
+          npm ci --prefix native/toolchain --include=optional
+          echo "MUTRACER_SCRIPTC=$(node native/toolchain/compiler.mjs)" >> "$GITHUB_ENV"
+          echo "MUTRACER_NATIVE_OUTPUT=$RUNNER_TEMP/mutracer-native" >> "$GITHUB_ENV"
+      - name: Install pinned DX12 shader compiler
+        if: runner.os == 'Windows'
+        run: node native/scripts/fetch-dxc.mjs >> "$GITHUB_PATH"
+      - name: Build and validate CPU modules and static WGSL contracts
+        run: npm run native:ci
+      - name: Package SDK with public exports and separate symbols
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/mutracer-native/host-target
+          MUTRACER_NATIVE_DIST: ${{ runner.temp }}/native-dist
+        run: npm run native:sdk:package
+      - name: Build standalone native app
+        env:
+          MUTRACER_NATIVE_OUTPUT: ${{ runner.temp }}/mutracer-native/viewer
+          CARGO_TARGET_DIR: ${{ runner.temp }}/mutracer-native/viewer-target
+        run: |
+          set -o pipefail
+          mkdir -p "$MUTRACER_NATIVE_OUTPUT"
+          npm run native:viewer:build 2>&1 | tee "$MUTRACER_NATIVE_OUTPUT/build.log"
+      - name: Package and verify relocated app and assets
+        env:
+          MUTRACER_NATIVE_OUTPUT: ${{ runner.temp }}/mutracer-native/viewer
+          MUTRACER_NATIVE_DIST: ${{ runner.temp }}/native-dist
+        run: npm run native:viewer:package
+      - name: Upload native app
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}
+          path: ${{ runner.temp }}/native-dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload native diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}-diagnostics
+          path: |
+            ${{ runner.temp }}/mutracer-native/**/*.log
+            ${{ runner.temp }}/mutracer-native/**/checks.json
+            ${{ runner.temp }}/mutracer-native/**/summary.json
+            ${{ runner.temp }}/mutracer-native/viewer/coverage.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload native SDK debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}-symbols
+          path: ${{ runner.temp }}/mutracer-native/sdk-symbols/*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/cache/save@v4
+        if: ${{ always() && steps.native_cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/mutracer-native/host-target
+            ${{ runner.temp }}/mutracer-native/viewer-target
+          key: ${{ steps.native_cache.outputs.cache-primary-key }}
+
+  native-release:
+    if: ${{ startsWith(github.ref, 'refs/tags/native-v') && (!inputs.native_platform || inputs.native_platform == 'release') }}
+    needs: [checks, native]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos-arm64
+          path: native-dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-linux-x64
+          path: native-dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos-arm64-symbols
+          path: native-dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-linux-x64-symbols
+          path: native-dist
+      - name: Verify release assets
+        working-directory: native-dist
+        run: sha256sum --check *.sha256
+      - name: Publish native release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          flags=()
+          if [[ "${RELEASE_TAG#native-v}" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            gh release upload "$RELEASE_TAG" native-dist/* --clobber
+            if [[ "$draft" == true ]]; then
+              gh release edit "$RELEASE_TAG" --draft=false --latest=false "${flags[@]}"
+            fi
+          else
+            gh release create "$RELEASE_TAG" native-dist/* \
+              --verify-tag --title "MuTracer $RELEASE_TAG" --generate-notes \
+              --latest=false "${flags[@]}"
+          fi

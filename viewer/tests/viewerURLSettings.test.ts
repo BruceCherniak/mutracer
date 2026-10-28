@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readURLSettings } from '../src/urlSettings';
 
+// Settings use only these real defaults. Avoid loading both renderer graphs on
+// every resetModules(), which can outlive a test and initialize the next store.
+vi.mock('@meimu/mutracer', async () => import('../../src/renderer/jnlm'));
+
 describe('viewer URL settings', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -32,6 +36,23 @@ describe('viewer URL settings', () => {
     vi.stubGlobal('location', new URL(`https://viewer.example.com/viewer/#hdrOutputEnabled=${value}`));
     const { useViewer } = await import('../src/store');
     expect(useViewer.getState().settings.hdrOutputEnabled).toBe(false);
+  });
+
+  it('preserves AOV output and mappings while ignoring the retired opt-in flag', () => {
+    expect(readURLSettings('?aovsEnabled=true&output=depth&aovDepthFar=20&aovIdComponent=primitive', ''))
+      .toEqual({output: 'depth', aovDepthFar: 20, aovIdComponent: 'primitive'});
+    expect(readURLSettings('?aovPositionScale=0&aovMotionScale=Infinity&aovIdComponent=bad', '')).toEqual({});
+  });
+
+  it('maps the retired Shadow output to Final in links and restored settings', async () => {
+    expect(readURLSettings('?output=shadow', '#output=id')).toEqual({output: 'final'});
+    expect(readURLSettings('', '#output=shadow')).toEqual({output: 'final'});
+    expect(readURLSettings('?output=id', '#output=shadow')).toEqual({output: 'id'});
+    localStorage.setItem('mutracer-viewer:render:v6', JSON.stringify({output: 'shadow'}));
+    const {useViewer, setSettings} = await import('../src/store');
+    expect(useViewer.getState().settings.output).toBe('final');
+    setSettings({output: 'shadow'}, {record: false});
+    expect(useViewer.getState().settings.output).toBe('final');
   });
 
   it('gives valid query values priority over the hash', () => {

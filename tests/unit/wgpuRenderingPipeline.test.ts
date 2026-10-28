@@ -1,6 +1,9 @@
+import Engine from '../../src/Engine';
+import {expectDataOnlyDiagnostics} from '../helpers/diagnostics';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Camera from '../../src/scene/Camera';
 import {makeWGPURenderTargets} from '../../src/renderer/WGPURenderingPipeline';
+import WGPUBloomPass from '../../src/renderer/WGPUBloomPass';
 import type { OIDNWeb } from '../../src/renderer/denoiser';
 
 // Keep the real pipeline and tile scheduler; replace GPU execution at the pass boundary.
@@ -24,6 +27,7 @@ const mocks = vi.hoisted(() => {
       this.texture = { ...this.texture, width, height };
       this.outputs.clear();
     }
+    reserveCapacity() {}
     retainOutput() {}
     releaseOutput() {}
     setUniform = vi.fn();
@@ -39,6 +43,8 @@ const mocks = vi.hoisted(() => {
   class TracePass extends Pass {
     static latest: TracePass;
     constructor() { super(); TracePass.latest = this; }
+    prepareAovs() { return true; }
+    renderAovs() { return true; }
     setSampleSequenceOffset = vi.fn();
     setSampleCount = vi.fn();
     setCamera() {}
@@ -107,10 +113,10 @@ function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) 
   } as unknown as HTMLCanvasElement;
   const manager = makeWGPURenderTargets(canvas, device);
   const pipeline = manager.createTarget('test');
-  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 2048, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, allowMultipleSamplesPerFrame: false});
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 2048, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false});
   pipeline.activate();
   pipeline.setSize(80, 64);
-  return Object.assign(pipeline, {manager});
+  return Object.assign(pipeline, {manager, device});
 }
 
 beforeEach(() => {
@@ -125,7 +131,113 @@ beforeEach(() => {
     set onload(callback: () => void) { callback(); }
   });
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+function enableRealtime(pipeline: ReturnType<typeof createPipeline>, timeBudgetMs = 21) {
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 2048, transmissiveOutputAlphaMin: 1, timeBudgetMs, maxTiles: Infinity, batchSamples: true});
+}
+
+async function warmRealtime(pipeline: ReturnType<typeof createPipeline>, camera: Camera) {
+  pipeline.trace(camera, 128); await pipeline.flushDiagnostics();
+  pipeline.trace(camera, 128); await pipeline.flushDiagnostics();
+  enableRealtime(pipeline);
+}
+
+describe('WebGPU realtime sampling', () => {
+  it('tops up only completed samples, preserves sequence indices and stops at the sample cap', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const pipeline = createPipeline(true, 2_000_000n), camera = new Camera({projection: 'perspective'});
+    await warmRealtime(pipeline, camera);
+    const completed: (() => void)[] = [];
+    vi.spyOn(pipeline.device.queue, 'onSubmittedWorkDone').mockImplementation(() => new Promise(resolve => completed.push(() => resolve(undefined))));
+    pipeline.trace(camera, 16); expect(pipeline.getTotalSamplesRendered()).toBe(11);
+    pipeline.trace(camera, 16); expect(pipeline.getTotalSamplesRendered()).toBe(11);
+    // Two samples retire while the other eight remain queued. Only two fit.
+    completed.splice(0, 2).forEach(resolve => resolve()); await new Promise(resolve => setTimeout(resolve, 0));
+    pipeline.trace(camera, 16); expect(pipeline.getTotalSamplesRendered()).toBe(13);
+    completed.splice(0).forEach(resolve => resolve()); await new Promise(resolve => setTimeout(resolve, 0));
+    pipeline.trace(camera, 16); expect(pipeline.getTotalSamplesRendered()).toBe(16);
+    // Discard the hidden timing probe's sample 0.
+    expect(mocks.TracePass.latest.setSampleCount.mock.calls.slice(1).map(([sample]) => sample)).toEqual(Array.from({length: 16}, (_, i) => i));
+    completed.splice(0).forEach(resolve => resolve()); await new Promise(resolve => setTimeout(resolve, 0));
+    pipeline.manager.dispose();
+  });
+
+  it('shares backpressure across resident targets and keeps previews unblocked', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const a = createPipeline(true, 2_000_000n), camera = new Camera({projection: 'perspective'});
+    await warmRealtime(a, camera);
+    const b = a.manager.createTarget('other');
+    const settings = {bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3 as const, alphaBlendStrategy: 'stochastic' as const, samplingPattern: 'sobol' as const, maxSamples: 128, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false};
+    b.configure(settings);
+    b.setSize(80, 64); b.activate(); b.trace(camera, 128); await b.flushDiagnostics();
+    b.trace(camera, 128); await b.flushDiagnostics();
+    b.configure({...settings, batchSamples: true});
+    const completed: (() => void)[] = [];
+    vi.spyOn(a.device.queue, 'onSubmittedWorkDone').mockImplementation(() => new Promise(resolve => completed.push(() => resolve(undefined))));
+    a.activate(); a.trace(camera, 128); expect(a.getTotalSamplesRendered()).toBe(11);
+    b.activate(); b.trace(camera, 128); expect(b.getTotalSamplesRendered()).toBe(1);
+    // A moving preview must enqueue its one sample even while final is full.
+    b.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 128, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false});
+    b.restartSamples(); b.trace(camera, 128); expect(b.getTotalSamplesRendered()).toBe(1);
+    completed.splice(0).forEach(resolve => resolve()); await new Promise(resolve => setTimeout(resolve, 0));
+    a.manager.dispose();
+  });
+
+  it('yields the main thread after four milliseconds of encoding', async () => {
+    let now = 0; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const pipeline = createPipeline(), camera = new Camera({projection: 'perspective'});
+    await warmRealtime(pipeline, camera);
+    const pass = mocks.TracePass.latest;
+    pass.createPass.mockImplementation(() => {now += 2;});
+    pipeline.trace(camera, 128);
+    expect(pipeline.getTotalSamplesRendered()).toBe(3);
+    await pipeline.flushDiagnostics(); pipeline.manager.dispose();
+  });
+
+  it('resolves samples traced between frames once, at the next presentation or read', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const pipeline = createPipeline(true, 2_000_000n), camera = new Camera({projection: 'perspective'});
+    await warmRealtime(pipeline, camera);
+    const resolved = vi.spyOn(mocks.OutputPass.prototype, 'setSampleCount');
+    pipeline.setRealtimeDeferPostProcess!(true); pipeline.trace(camera, 128);
+    const first = pipeline.getTotalSamplesRendered(); expect(resolved).not.toHaveBeenCalled();
+    pipeline.getOutputTexture!('hdr'); pipeline.getOutputTexture!('hdr');
+    expect(resolved.mock.calls).toEqual([[first]]);
+    await pipeline.flushDiagnostics(); pipeline.trace(camera, 128);
+    const second = pipeline.getTotalSamplesRendered(); expect(second).toBeGreaterThan(first);
+    pipeline.setRealtimeDeferPostProcess!(false); pipeline.drawPostProcess(); pipeline.drawPostProcess();
+    expect(resolved.mock.calls).toEqual([[first], [second]]);
+    await pipeline.flushDiagnostics(); pipeline.manager.dispose();
+  });
+
+  it('refreshes bloom after every ten new samples, also when several resolve together', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const bloom = vi.spyOn(WGPUBloomPass.prototype, 'createPass').mockImplementation((_encoder, color) => color);
+    vi.spyOn(WGPUBloomPass.prototype, 'reserveCapacity').mockImplementation(() => {});
+    const pipeline = createPipeline(true, 2_000_000n), camera = new Camera({projection: 'perspective'});
+    await warmRealtime(pipeline, camera);
+    pipeline.setBloomParams({intensity: 1, threshold: 1, radius: .6});
+    pipeline.setRealtimeDeferPostProcess!(true);
+    const refreshes: number[] = [];
+    for (let frame = 0; frame < 4; frame++) {
+      pipeline.trace(camera, 128); await pipeline.flushDiagnostics();
+      const before = bloom.mock.calls.length; pipeline.drawPostProcess();
+      if (bloom.mock.calls.length > before) refreshes.push(pipeline.getTotalSamplesRendered());
+    }
+    // No resolved count is a multiple of ten.
+    expect(refreshes).toEqual([11, 21, 31, 41]);
+    pipeline.manager.dispose();
+  });
+
+  it.each([false, true])('keeps single-sample stepping without a fast GPU measurement (timestamps=%s)', async timestamps => {
+    const pipeline = createPipeline(timestamps, 30_000_000n), camera = new Camera({projection: 'perspective'});
+    await warmRealtime(pipeline, camera);
+    const before = pipeline.getTotalSamplesRendered(); pipeline.trace(camera, 128);
+    expect(pipeline.getTotalSamplesRendered()).toBe(before + 1);
+    await pipeline.flushDiagnostics(); pipeline.manager.dispose();
+  });
+});
 
 describe('WebGPU offline sampling', () => {
   it.each([true, false])('submits only samples 0..7 after offline settings change (timestamps=%s)', async (timestamps) => {
@@ -170,7 +282,7 @@ it('restarts accumulation after changing the sampling pattern', () => {
   expect(pipeline.getTotalSamplesRendered()).toBe(4);
   const trace=mocks.TracePass.latest;
   trace.setSampleCount.mockClear();
-  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'zsobol', maxSamples: 4, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, allowMultipleSamplesPerFrame: false}); pipeline.activate(); pipeline.restartSamples();
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'zsobol', maxSamples: 4, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false}); pipeline.activate(); pipeline.restartSamples();
   pipeline.activate(); pipeline.trace(camera,4); pipeline.present();
   expect(trace.setSampleCount.mock.calls.map(([value])=>value)).toEqual([0,1,2,3]);
 });
@@ -369,6 +481,16 @@ describe('WebGPU denoised presentation transitions', () => {
 });
 
 
+it('retires an AOV presentation selection before tracing with AOVs disabled', () => {
+  const pipeline = createPipeline(false);
+  pipeline.setOutput('depth');
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 2048, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false, aovs: []});
+  expect(() => pipeline.trace(new Camera({projection: 'perspective'}), 1)).not.toThrow();
+  pipeline.present();
+  expect(displayedTexture()).toBe(mocks.Pass.instances.get('compose')!.getOutput('color'));
+  pipeline.manager.dispose();
+});
+
 it('falls back to AgX for unknown tone mapping values', () => {
   const pipeline = createPipeline(false);
   pipeline.setToneMappingParams({ toneMapping: 'aces' });
@@ -485,4 +607,38 @@ it('keeps flat background and catcher composition on the ordinary display path f
   expect(compose.setUniform).toHaveBeenCalledWith('shadowCatcherEnabled', 1);
   expect(compose.setUniform).toHaveBeenCalledWith('shadowCatcherAlpha', .4);
   pipeline.manager.dispose();
+});
+
+
+it.each(['normal', 'albedo', 'shadowCatcher', 'depth'] as const)('keeps %s diagnostic output free of color inference', async output => {
+  const pipeline = createPipeline(false);
+  if (output === 'depth') pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 2048, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false, aovs: ['depth']});
+  pipeline.trace(new Camera({projection: 'perspective'}), 1);
+  pipeline.setOutput(output);
+  const denoiser = completedDenoiser(), execute = vi.spyOn(denoiser, 'tileExecute');
+  await pipeline.performDenoise!({kind:'oidn',denoiser},undefined).catch(()=>false);
+  expect(execute).not.toHaveBeenCalled();
+  pipeline.dispose();
+});
+
+it.each([false,true])('records actual composition after bloom (%s)', async bloom => {
+  const pipeline=createPipeline(false);
+  pipeline.setOfflineRenderOptions({samplesPerBatch:32,deferPostProcess:false,sampleSequenceOffset:19});
+  pipeline.setBloomParams({intensity:bloom?.2:0,threshold:1,radius:.6});
+  const events:string[]=[];
+  vi.spyOn(WGPUBloomPass.prototype,'createPass').mockImplementation(()=>{events.push('Bloom:SceneLinear');return {} as GPUTexture;});
+  const compose=mocks.Pass.instances.get('compose')!;
+  compose.createPass.mockImplementation(()=>{events.push('Compose:DisplayEncoded');});
+  pipeline.trace(new Camera({projection:'perspective'}),32);
+  const table=JSON.parse((await import('node:fs')).readFileSync(new URL('../fixtures/display-order.json',import.meta.url),'utf8'));
+  expect(events).toEqual(table.cases.find((row:{name:string})=>row.name===(bloom?'sdr-bloom':'sdr-raw')).trace);
+  pipeline.dispose();
+});
+
+it('keeps internal WebGPU fixture methods out of Engine diagnostics', () => {
+  const target = createPipeline();
+  const engine = new Engine({canvas: {width: 80, height: 64} as HTMLCanvasElement});
+  Object.assign(engine, {_pipeline: target.manager, _info: {backend: 'webgpu'}, _gpuDevice: target.device});
+  expectDataOnlyDiagnostics(engine.getDiagnostics());
+  engine.dispose();
 });

@@ -1,5 +1,7 @@
 import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
+import reflectanceWGSL from './aovReflectance.wgsl.js';
+import aovTraceWGSL from './aovTrace.wgsl.js';
 import depthQueryWGSL from './depthQuery.wgsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -7,6 +9,7 @@ import depthQueryWGSL from './depthQuery.wgsl.js';
 
 import commonWgsl from './chunks/common.wgsl.js';
 import { WGPU_SCENE_FEATURE_BITS } from '../WGPUSceneFeatures.js';
+import {ALL_MATERIAL_SHADER_CAPABILITIES, MATERIAL_SHADER_CAPABILITIES} from '../shaderCapabilities.js';
 import rayTraceCoreWgsl from './chunks/rayTraceCore.wgsl.js';
 import { createMaterialBufferWgsl } from './chunks/materialBuffer.wgsl.js';
 import createIntersectionWgsl from './chunks/intersect.wgsl.js';
@@ -21,6 +24,16 @@ import envMapWgsl from './chunks/envMap.wgsl.js';
 import uvProjectionWgsl from './chunks/uvProjection.wgsl.js';
 export const WORKGROUP_SIZE = 8;
 
+/** Native input instrumentation; omitted hooks preserve the production source. */
+export interface RayTraceInputHooks {
+  declarations: string;
+  begin: string;
+  primarySurface: string;
+  unclampedColor: string;
+  end: string;
+  uniformJitter: boolean;
+}
+
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
   /** Include direction frames only when used, preserving the legacy shader arithmetic otherwise. */
@@ -33,6 +46,13 @@ export interface RayTraceShaderOptions {
   hasSceneAlpha?: boolean;
   /** Bit mask of the BLAS layouts present in the scene (bvh2, bvh4, bvh-gpu, cwbvh). */
   blasLayoutMask?: number;
+  /** Defined only when pipeline constants are baked into the source. */
+  spectral?: boolean;
+  sceneCapabilities?: number;
+  /** Retained environment support must still respect the current illumination state. */
+  dynamicEnvironment?: boolean;
+  materialCapabilities?: number;
+  lightCapabilities?: number;
 }
 
 /** Generates the WebGPU megakernel path tracing compute shader. */
@@ -42,28 +62,88 @@ export default function rayTraceCompute({
   hasCoatNormals = false,
   hasAlpha = true,
   hasSceneAlpha = true,
-  blasLayoutMask = 1
-}: RayTraceShaderOptions) {
+  blasLayoutMask = 1,
+  spectral,
+  sceneCapabilities,
+  dynamicEnvironment = false,
+  materialCapabilities = ALL_MATERIAL_SHADER_CAPABILITIES,
+  lightCapabilities
+}: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
   hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
+  const hasShadowCatcher = sceneCapabilities === undefined || (sceneCapabilities & WGPU_SCENE_FEATURE_BITS.HAS_SHADOW_CATCHER) !== 0;
+  const primaryVariables = /* wgsl */ `
+  var si: SurfaceInteraction;
+  var ma: OpenPbrResolvedMaterial;
+  si.albedoSampled = false;
+  si.mediumType = 0;
+  si.mediumExtinction = vec3f(0.0);
+  si.mediumScattering = vec3f(0.0);
+  si.mediumAnisotropy = 0.0;
+  si.barycentrics = vec2f(0.0);
+
+`;
+  const primaryGuides = /* wgsl */ `${inputHooks?.primarySurface ?? ''}  if (${hasShadowCatcher ? /* wgsl */ `si.hit && ma.materialType == SHADOW_CATCHER` : /* wgsl */ `false`}) {
+    (*outAux).isShadowCatcher = true;
+    // The composed denoising input includes this receiver's shadow. Supply
+    // neutral reflectance and its shading normal, independent of visibility.
+    (*outAux).albedo = vec3f(1.0);
+    (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, ray.d) > 0.0);
+    var path: Path;
+    path.ray = ray;
+    path.fromEye = true;
+    (*outAux).shadowCounts = sampleShadowCatcher(si, 0, &path);
+    // RGB stores primary catcher coverage. The shadow travels in the
+    // auxiliary counts, out of reach of color clamping.
+    return vec4f(1.0);
+  }
+  else {
+    if (HAS_BEVEL && rtUniform.bevel != 0) {
+      if (ma.bevel > 0.0) {
+        si.normal = getBevelNormal(si, ma.bevel);
+      }
+    }
+
+    // Store a clean first-hit fallback. Glass retains this stable guide;
+    // other delta paths may replace it at their first non-delta hit.
+    if (si.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT)) {
+      (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
+      (*outAux).normal = select(
+        si.normal,
+        -si.normal,
+        dot(si.normal, si.position - cameraUniform.viewInv[3].xyz) > 0.0
+      );
+
+      // Do not replace a glass guide with a randomly selected downstream
+      // refraction/reflection hit; OIDN auxiliary features must stay clean.
+      si.albedoSampled = ma.transmissionWeight > 0.5;
+    }
+
+    (*outAux).isShadowCatcher = false;
+
+
+  }
+`;
   const source = /* wgsl */ `
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals })}
+${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals, lightCapabilities })}
 
 ${uvProjectionWgsl}
 
-${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals })}
+${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals,
+  hasTransmission: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.transmission) !== 0,
+  hasMetalness: (materialCapabilities & MATERIAL_SHADER_CAPABILITIES.metal) !== 0 })}
 
-${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals })}
+${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}
 
 ${samplingWgsl}
 ${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals)}
-${sampleLightWgsl}
+${sampleLightWgsl}${inputHooks?.declarations ?? ''}
 
 // Index of the path vertex currently being shaded.
 var<private> bounceIndex: u32 = 0u;
@@ -151,6 +231,8 @@ struct RayTraceAuxiliary {
   isShadowCatcher: bool,
   normal: vec3f,
   isBlank: bool,
+  // Shadow-catcher hits: occluded and total light sample counts.
+  shadowCounts: vec2f,
 }
 
 fn groundedSurfaceDistance(point: vec3f, height: f32, radius: f32) -> f32 {
@@ -239,7 +321,9 @@ fn sampleSceneBackground(ray: Ray) -> vec4f {
     let d = groundedBackgroundDirection(ray.o, ray.d);
     let t = rtUniform.backgroundMapTransform;
     let backgroundDirection = vec3f(t.x * d.x - t.y * d.z, d.y, t.y * d.x + t.x * d.z);
-    let backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(backgroundDirection));
+    let rotation = rtUniform.backgroundMapRotation;
+    let mapDirection = transpose(mat3x3f(rotation[0].xyz, rotation[1].xyz, rotation[2].xyz)) * backgroundDirection;
+    let backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(mapDirection));
     bg = vec4f(backgroundSample.rgb * t.z, backgroundSample.a);
   }
   else if (USE_BACKGROUND) {
@@ -259,10 +343,13 @@ fn sampleSpectralSceneBackground(ray: Ray, wavelength: f32) -> vec4f {
   return bg;
 }
 
-fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<function, SurfaceInteraction>, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>) {
+// Split shading from hit completion so primary and secondary rays can share
+// one traversal/material-load call site in the common RGB integrator.
+fn shadeVertex(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<function, SurfaceInteraction>, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>, sampleIgnoredOut: ptr<function, bool>) {
+  *sampleIgnoredOut = false;
   samplingBounce = u32(max(*depth, 0));
   let matType = (*ma).materialType;
-  let isShadowCatcher = matType == SHADOW_CATCHER;
+  let isShadowCatcher = ${hasShadowCatcher ? /* wgsl */ `matType == SHADOW_CATCHER` : /* wgsl */ `false`};
   if (isShadowCatcher) {
     if ((*path).fromEye) {
       (*si).hit = false;
@@ -347,7 +434,7 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
     return;
   }
 
-  var sampleIgnored = false;
+
   if ((matType == STANDARD || matType == UNLIT)) {
     let alpha = clamp((*ma).alpha, 0.0, 1.0);
     
@@ -355,16 +442,16 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
       // Alpha is stochastic coverage. Keep accepted surface radiance at full
       // weight instead of multiplying it by alpha a second time.
       if (alpha <= 0.0 || hashedSample(3u) > alpha) {
-        sampleIgnored = true;
+        (*sampleIgnoredOut) = true;
       }
     }
-    if (!sampleIgnored && rtUniform.transmissiveOutputAlphaMin < 1.0) {
+    if (!(*sampleIgnoredOut) && rtUniform.transmissiveOutputAlphaMin < 1.0) {
       // A selected stochastic coverage sample is fully covered. Ignored
       // samples leave output alpha untouched and continue to the back layer.
       let outputAlpha = max(1.0 - (*ma).transmissionWeight, 1.0 - pow(1.0 - rtUniform.transmissiveOutputAlphaMin, f32(*depth)));
       (*path).alpha = max(outputAlpha, (*path).alpha);
     }
-    if (!sampleIgnored) {
+    if (!(*sampleIgnoredOut)) {
       bounceIndex = u32(max(*depth, 0));
       SampleMaterial(si, ma, path);
     }
@@ -375,7 +462,7 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
     }
   }
 
-  if (!(*si).albedoSampled && !sampleIgnored) {
+  if (!(*si).albedoSampled && !(*sampleIgnoredOut)) {
     // Select denoising guides.
     if ((matType == STANDARD || matType == UNLIT)) {
       if (!((*ma).transmissionWeight > 0.5 ||
@@ -400,7 +487,7 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
 
   // Russian roulette with throughput compensation.
   if (USE_RR) {
-    if (*depth >= RR_MAX && !sampleIgnored) {
+    if (*depth >= RR_MAX && !(*sampleIgnoredOut)) {
       let rouletteBeta = (*path).beta;
       // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
       let maxComponent = max(max(rouletteBeta.x, rouletteBeta.y), rouletteBeta.z);
@@ -420,9 +507,10 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
     return;
   }
 
-  intersectScene((*path).ray, si, *depth, true, (*path).isNextRefraction);
-  getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex, (*si).vertexColor);
 
+}
+
+fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<function, SurfaceInteraction>, ma: ptr<function, OpenPbrResolvedMaterial>, sampleIgnored: bool) {
   if (SPECTRAL) {
     // Is glass
     if ((*ma).transmissionWeight > 0.001) {
@@ -610,7 +698,7 @@ fn getBevelNormal(source: SurfaceInteraction, radius: f32) -> vec3f {
   return source.normal;
 }
 
-fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>, initialQuery: bool) -> vec4f {
   var path: Path;
   path.ray = ray;
   path.li = vec3f(0.0);
@@ -622,18 +710,35 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
   path.isNextRefraction = false;
   path.abort = false;
 
-  let isNotTransparent = (*ma).transmissionWeight < 0.001 && (*ma).subsurfaceWeight < 0.001 && (*ma).alpha > 0.99;
   let bounceLimit = max(rtUniform.bounces, 0);
+  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
   var depth = 0;
-  // Transparent paths may take up to three times the configured bounces.
-  for (var idx: i32 = 0; idx < min(bounceLimit * 3, ${MAX_PATH_EVENTS}); idx = idx + 1) {
-    if (isNotTransparent && idx > bounceLimit) {
-      path.abort = true;
+  var sampleIgnored = false;
+  var isNotTransparent = false;
+  // Back branches and subsequent bounces share one query/material call site.
+  // Keep wavelength/branch loops separate so GPU lanes reconverge between
+  // paths. Include the final query, which the legacy bounce completed before
+  // testing its event budget. Even a zero-bounce back branch resolves guides.
+  for (var event = 0; event <= eventLimit; event++) {
+    if ((event != 0) | initialQuery) {
+      intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction);
+      getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex, (*si).vertexColor);
     }
-    if (path.abort) {
-      break;
+    if (event == 0) {
+      if (initialQuery & (*si).hit & ((*ma).materialType == STANDARD)) {
+        (*outAux).albedo = select((*ma).baseColor, vec3f(1.0), (*ma).transmissionWeight > 0.5);
+        (*outAux).normal = select((*si).normal, -(*si).normal,
+          dot((*si).normal, (*si).position - cameraUniform.viewInv[3].xyz) > 0.0);
+        (*si).albedoSampled = (*ma).transmissionWeight > 0.5;
+      }
+      isNotTransparent = ((*ma).transmissionWeight < 0.001) & ((*ma).subsurfaceWeight < 0.001) & ((*ma).alpha > 0.99);
+    } else {
+      completeVertex(&path, &depth, si, ma, sampleIgnored);
     }
-    bounce(uv, &path, &depth, si, ma, outAux);
+    if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
+    if (path.abort | (event >= eventLimit)) { break; }
+    shadeVertex(uv, &path, &depth, si, ma, outAux, &sampleIgnored);
+    if (path.abort) { break; }
   }
 
   return vec4f(path.li, path.alpha);
@@ -641,120 +746,245 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
 
 fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
   ${deterministicPrimaryAlpha ? /* wgsl */ `let coverage = clamp((*ma).alpha, 0.0, 1.0);
-  if (!(*si).hit || ((*ma).materialType != STANDARD && (*ma).materialType != UNLIT) || coverage >= 1.0) {
-    return integrateOnePathSample(uv, si, ray, ma, outAux);
-  }
-
   // glTF BLEND is source-over opacity, not a physical glass boundary. Split
   // the primary ray so reflected radiance is attenuated by alpha every sample
   // while the complementary branch continues straight to the scene behind it.
   // Secondary alpha hits remain stochastic to avoid exponential path growth.
-  var backRay = ray;
-  backRay.o = (*si).position + ray.d * (EPS * 0.02);
-  var backSi = *si;
-  backSi.albedoSampled = false;
-  intersectScene(backRay, &backSi, 0, false, false);
-  var backMa: OpenPbrResolvedMaterial;
-  getMaterial(&backMa, backSi.materialIndex, backSi.uv, backSi.uv1, backSi.instanceIndex, backSi.vertexColor);
-  var backAux = *outAux;
-  if (backSi.hit && backMa.materialType == STANDARD) {
-    backAux.albedo = select(
-      backMa.baseColor,
-      vec3f(1.0),
-      backMa.transmissionWeight > 0.5
-    );
-    backAux.normal = select(
-      backSi.normal,
-      -backSi.normal,
-      dot(
-        backSi.normal,
-        backSi.position - cameraUniform.viewInv[3].xyz
-      ) > 0.0
-    );
-    backSi.albedoSampled = backMa.transmissionWeight > 0.5;
+  let split = (*si).hit & (((*ma).materialType == STANDARD) | ((*ma).materialType == UNLIT)) & (coverage < 1.0);
+  var branchRay = ray;
+  var branchSi = *si;
+  var branchMa = *ma;
+  var branchAux = *outAux;
+  if (split) {
+    branchRay.o = (*si).position + ray.d * (EPS * 0.02);
+    branchSi.albedoSampled = false;
   }
-  let back = integrateOnePathSample(
-    uv, &backSi, backRay, &backMa, &backAux
-  );
-  if (coverage <= 0.0) {
-    *outAux = backAux;
-    return back;
+  var back: vec4f;
+  var backAux: RayTraceAuxiliary;
+  // One path graph for opaque, back and front branches. The guard is fixed at
+  // four; a dynamic bound keeps DXC from cloning that graph for each branch.
+  let branchCount = select(1u, rtUniform.loopUnrollGuard >> 1u, split & (coverage > 0.0));
+  for (var branch = 0u; branch < branchCount; branch++) {
+    let result = integrateOnePathSample(uv, &branchSi, branchRay, &branchMa, &branchAux, split & (branch == 0u));
+    if (!split | (coverage <= 0.0)) { *outAux = branchAux; return result; }
+    if (branch == 0u) {
+      back = result; backAux = branchAux;
+      branchSi = *si; branchMa = *ma; branchMa.alpha = 1.0;
+      branchRay = ray; branchAux = *outAux;
+    } else {
+      (*outAux).albedo = mix(backAux.albedo, branchAux.albedo, coverage);
+      let blendedNormal = mix(backAux.normal, branchAux.normal, coverage);
+      (*outAux).normal = select(vec3f(0.0), normalize(blendedNormal), dot(blendedNormal, blendedNormal) > 1e-12);
+      (*outAux).isBlank = backAux.isBlank & branchAux.isBlank;
+      (*outAux).isShadowCatcher = backAux.isShadowCatcher & branchAux.isShadowCatcher;
+      (*outAux).shadowCounts = mix(backAux.shadowCounts, branchAux.shadowCounts, coverage);
+      return mix(back, result, coverage);
+    }
   }
-
-  var frontSi = *si;
-  var frontMa = *ma;
-  frontMa.alpha = 1.0;
-  var frontAux = *outAux;
-  let front = integrateOnePathSample(
-    uv, &frontSi, ray, &frontMa, &frontAux
-  );
-  (*outAux).albedo = mix(backAux.albedo, frontAux.albedo, coverage);
-  let blendedNormal = mix(backAux.normal, frontAux.normal, coverage);
-  (*outAux).normal = select(
-    vec3f(0.0),
-    normalize(blendedNormal),
-    dot(blendedNormal, blendedNormal) > 1e-12
-  );
-  (*outAux).isBlank = backAux.isBlank && frontAux.isBlank;
-  (*outAux).isShadowCatcher = backAux.isShadowCatcher && frontAux.isShadowCatcher;
-  return mix(back, front, coverage);` : /* wgsl */ `return integrateOnePathSample(uv, si, ray, ma, outAux);`}
+  return vec4f(0.0);` : /* wgsl */ `return integrateOnePathSample(uv, si, ray, ma, outAux, false);`}
 }
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
-  var si: SurfaceInteraction;
-  var ma: OpenPbrResolvedMaterial;
-  si.albedoSampled = false;
-  si.mediumType = 0;
-  si.mediumExtinction = vec3f(0.0);
-  si.mediumScattering = vec3f(0.0);
-  si.mediumAnisotropy = 0.0;
-  si.barycentrics = vec2f(0.0);
-
-  // TODO not put tMax in ray. So we don't need to use pointer of ray here.
-  intersectScene(ray, &si, 0, false, false);
-  getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
-
-  if (si.hit && ma.materialType == SHADOW_CATCHER) {
-    (*outAux).isShadowCatcher = true;
-    // The composed denoising input includes this receiver's shadow. Supply
-    // neutral reflectance and its shading normal, independent of visibility.
-    (*outAux).albedo = vec3f(1.0);
-    (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, ray.d) > 0.0);
-    var path: Path;
-    path.ray = ray;
-    path.fromEye = true;
-    sampleShadowCatcher(si, 0, &path);
-    // RGB stores primary catcher coverage independently from the stochastic
-    // visibility in alpha. Composition uses this raw coverage to clip any
-    // shadow-mask denoising bleed at model silhouettes.
-    return vec4f(vec3f(1.0), path.alpha);
-  }
-  else {
-    if (HAS_BEVEL && rtUniform.bevel != 0) {
-      if (ma.bevel > 0.0) {
-        si.normal = getBevelNormal(si, ma.bevel);
+${spectral === false && deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${primaryVariables}
+  var primarySi: SurfaceInteraction;
+  var primaryMa: OpenPbrResolvedMaterial;
+  var primaryAux: RayTraceAuxiliary;
+  var primaryReady = false;
+  var query = true;
+  var split = false;
+  var coverage = 1.0;
+  var front = false;
+  var back: vec4f;
+  var backAux: RayTraceAuxiliary;
+  var path: Path; path.ray = ray;
+  path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
+  path.beta = vec3f(1.0); path.fromEye = true;
+  let bounceLimit = max(rtUniform.bounces, 0);
+  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
+  var event = 0; var depth = 0; var sampleIgnored = false;
+  var isNotTransparent = false;
+  // Share one query/material graph across the primary, back and front paths.
+  // Complete the back path before the front path to preserve random streams.
+  for (var step = 0; step < (${MAX_PATH_EVENTS} + 1) * 2 + 2; step++) {
+    if (query) {
+      intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
+      getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+    }
+    query = true;
+    if (!primaryReady) {
+${primaryGuides}
+      primarySi = si; primaryMa = ma; primaryAux = *outAux;
+      primaryReady = true;
+      coverage = clamp(ma.alpha, 0.0, 1.0);
+      split = si.hit & ((ma.materialType == STANDARD) | (ma.materialType == UNLIT)) & (coverage < 1.0);
+      if (split) {
+        path.ray.o = si.position + ray.d * (EPS * 0.02);
+        si.albedoSampled = false;
+        continue;
+      }
+    } else if ((event == 0) & !front & split) {
+      if (si.hit & (ma.materialType == STANDARD)) {
+        (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
+        (*outAux).normal = select(si.normal, -si.normal,
+          dot(si.normal, si.position - cameraUniform.viewInv[3].xyz) > 0.0);
+        si.albedoSampled = ma.transmissionWeight > 0.5;
       }
     }
-
-    // Store a clean first-hit fallback. Glass retains this stable guide;
-    // other delta paths may replace it at their first non-delta hit.
-    if (si.hit && (ma.materialType == STANDARD || ma.materialType == UNLIT)) {
-      (*outAux).albedo = select(ma.baseColor, vec3f(1.0), ma.transmissionWeight > 0.5);
-      (*outAux).normal = select(
-        si.normal,
-        -si.normal,
-        dot(si.normal, si.position - cameraUniform.viewInv[3].xyz) > 0.0
-      );
-
-      // Do not replace a glass guide with a randomly selected downstream
-      // refraction/reflection hit; OIDN auxiliary features must stay clean.
-      si.albedoSampled = ma.transmissionWeight > 0.5;
+    if (event == 0) {
+      isNotTransparent = (ma.transmissionWeight < 0.001) & (ma.subsurfaceWeight < 0.001) & (ma.alpha > 0.99);
+    } else {
+      completeVertex(&path, &depth, &si, &ma, sampleIgnored);
     }
-
-    (*outAux).isShadowCatcher = false;
-
+    if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
+    if (!path.abort & (event < eventLimit)) {
+      shadeVertex(uv, &path, &depth, &si, &ma, outAux, &sampleIgnored);
+    }
+    if (path.abort | (event >= eventLimit)) {
+      let result = vec4f(path.li, path.alpha);
+      if (!split | (coverage <= 0.0)) { return result; }
+      if (front) {
+        (*outAux).albedo = mix(backAux.albedo, (*outAux).albedo, coverage);
+        let blendedNormal = mix(backAux.normal, (*outAux).normal, coverage);
+        (*outAux).normal = select(vec3f(0.0), normalize(blendedNormal), dot(blendedNormal, blendedNormal) > 1e-12);
+        (*outAux).isBlank = backAux.isBlank & (*outAux).isBlank;
+        (*outAux).isShadowCatcher = backAux.isShadowCatcher & (*outAux).isShadowCatcher;
+        (*outAux).shadowCounts = mix(backAux.shadowCounts, (*outAux).shadowCounts, coverage);
+        return mix(back, result, coverage);
+      }
+      back = result; backAux = *outAux;
+      front = true; query = false; event = 0; depth = 0; sampleIgnored = false;
+      si = primarySi; ma = primaryMa; ma.alpha = 1.0; *outAux = primaryAux;
+      path = Path(); path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
+      path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
+    } else { event++; }
+  }
+  return vec4f(0.0);
+}
+` : spectral === false && !deterministicPrimaryAlpha ? /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${primaryVariables}
+  var path: Path;
+  path.ray = ray;
+  path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
+  path.beta = vec3f(1.0);
+  path.fromEye = true;
+  let bounceLimit = max(rtUniform.bounces, 0);
+  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
+  var isNotTransparent = false;
+  var depth = 0;
+  var sampleIgnored = false;
+  // The extra iteration completes the last ray query, as the legacy bounce
+  // did before testing the event budget. Queries consume the preceding bounce's
+  // random stream; shading advances samplingBounce only after hit completion.
+  for (var event = 0; event <= eventLimit; event++) {
+    intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
+    getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+    if (event == 0) {
+${primaryGuides}
+      isNotTransparent = ma.transmissionWeight < 0.001 && ma.subsurfaceWeight < 0.001 && ma.alpha > 0.99;
+    } else {
+      completeVertex(&path, &depth, &si, &ma, sampleIgnored);
+    }
+    if (isNotTransparent && event > bounceLimit) { path.abort = true; }
+    if (path.abort || event >= eventLimit) { break; }
+    shadeVertex(uv, &path, &depth, &si, &ma, outAux, &sampleIgnored);
+    if (path.abort) { break; }
+  }
+  return vec4f(path.li, path.alpha);
+}
+` : spectral === true && !deterministicPrimaryAlpha ? /* wgsl */ `
+fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${primaryVariables}
+  var primarySi: SurfaceInteraction;
+  var primaryMa: OpenPbrResolvedMaterial;
+  var primaryReady = false;
+  var path: Path; path.ray = ray;
+  let bounceLimit = max(rtUniform.bounces, 0);
+  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
+  var depth = 0; var event = 0; var sampleIgnored = false;
+  var isNotTransparent = false;
+  var wavelengthIndex = 0;
+  let singleWavelength = rtUniform.dispersionWavelengths == 1;
+  var dispersivePrimary = false;
+  var heroWavelengthIndex = 0;
+  var wavelengthRngState: vec4u;
+  var wavelengthHashedCounter = 0u;
+  var wavelengthAux: RayTraceAuxiliary;
+  let wavelengths = array<f32, 3>(650.0, 510.0, 475.0);
+  var color = vec3f(0.0); var alpha = 0.0;
+  var accumulatedGuideAlbedo = vec3f(0.0);
+  var accumulatedGuideNormal = vec3f(0.0);
+  var allBlank = true;
+  // Flatten the wavelength/path loops to share primary and secondary queries.
+  // Each of the three paths uses at most MAX_PATH_EVENTS + 1 iterations,
+  // including completion of its final query. The primary hit is reused.
+  let stepLimit = min((${MAX_PATH_EVENTS} + 1) * 3, i32(rtUniform.loopUnrollGuard * ${Math.ceil((MAX_PATH_EVENTS + 1) * 3 / 4)}u));
+  for (var step = 0; step < stepLimit; step++) {
+    if (!primaryReady | ((event != 0) & !path.abort)) {
+      intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);
+      getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+    }
+    if (event == 0) {
+      if (!primaryReady) {
+${primaryGuides}
+        primarySi = si; primaryMa = ma; primaryReady = true;
+        wavelengthRngState = s0; wavelengthHashedCounter = hashedCounter;
+        dispersivePrimary = si.hit & (ma.transmissionWeight > 0.001) & (ma.transmissionDispersionScale > 0.001);
+        if (singleWavelength & dispersivePrimary) {
+          heroWavelengthIndex = min(i32(floor(sample1D(CAMERA_WAVELENGTH) * 3.0)), 2);
+        }
+      }
+      si = primarySi; ma = primaryMa; wavelengthAux = *outAux;
+      if (!singleWavelength) {
+        s0 = wavelengthRngState; hashedCounter = wavelengthHashedCounter; samplingBounce = 0u;
+        wavelengthAux.isBlank = false; wavelengthAux.isShadowCatcher = false;
+      }
+      si.wavelength = 0.0;
+      if (!singleWavelength | dispersivePrimary) {
+        si.wavelength = wavelengths[select(wavelengthIndex, heroWavelengthIndex, singleWavelength)];
+        ma.specularIor = sampling_cauchy_ior(si.wavelength, ma.specularIor,
+          ma.transmissionDispersionScale, ma.dispersionAbbeNumber);
+      }
+      path = Path(); path.ray = ray; path.beta = vec3f(1.0); path.fromEye = true;
+      path.alpha = select(1.0, 0.0, rtUniform.transmissiveOutputAlphaMin < 1.0);
+      depth = 0; sampleIgnored = false;
+      isNotTransparent = (ma.transmissionWeight < 0.001) & (ma.subsurfaceWeight < 0.001) & (ma.alpha > 0.99);
+    } else if (!path.abort) {
+      completeVertex(&path, &depth, &si, &ma, sampleIgnored);
+    }
+    if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
+    if (!path.abort & (event < eventLimit)) {
+      shadeVertex(uv, &path, &depth, &si, &ma, &wavelengthAux, &sampleIgnored);
+    }
+    if (path.abort | (event >= eventLimit)) {
+      let result = vec4f(path.li, path.alpha);
+      if (singleWavelength) {
+        *outAux = wavelengthAux;
+        let scale = select(1.0, 3.0, dispersivePrimary);
+        return vec4f(result.rgb * scale, result.a);
+      }
+      color += result.rgb; alpha = max(alpha, result.a);
+      accumulatedGuideAlbedo += wavelengthAux.albedo;
+      accumulatedGuideNormal += wavelengthAux.normal;
+      allBlank = allBlank & wavelengthAux.isBlank;
+      wavelengthIndex++;
+      if (wavelengthIndex >= 3) {
+        (*outAux).albedo = accumulatedGuideAlbedo / 3.0;
+        (*outAux).normal = accumulatedGuideNormal / 3.0;
+        (*outAux).isBlank = allBlank;
+        return vec4f(color, alpha);
+      }
+      event = 0;
+    } else { event++; }
+  }
+  return vec4f(0.0);
+}
+` : /* wgsl */ `fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+${primaryVariables}
+  intersectScene(ray, &si, 0, false, false);
+  getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
+${primaryGuides}
     if (SPECTRAL) {
       // Keep one source-level integrateOnePath call for both interactive
       // preview and offline RGB splitting. A runtime loop bound prevents the
@@ -831,8 +1061,8 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
     else {
       return integrateOnePath(uv, &si, ray, &ma, outAux);
     }
-  }
 }
+`}
 
 fn sampleCircle(ip: vec2f) -> vec2f {
   let p = 2.0 * ip - 1.0;
@@ -849,7 +1079,9 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   let scaleOffset = rtUniform.scaleOffset;
   var jitter = rtUniform.jitter;
   // TODO if outputSize is not multiple of 8?
-  let coord = globalId.xy * vec2u(scaleOffset.xy) + vec2u(scaleOffset.zw);
+${pathDiagnostic ? `  if (globalId.y >= mtPathParameters.y) { return; }
+  let pathId = vec2u(globalId.x, globalId.y + mtPathParameters.x);
+` : ''}  let coord = ${pathDiagnostic ? 'pathId' : 'globalId.xy'} * vec2u(scaleOffset.xy) + vec2u(scaleOffset.zw);
   if (coord.x >= u32(outputSize.x) || coord.y >= u32(outputSize.y)) {
     return;
   }
@@ -874,7 +1106,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   samplingPixel = coord;
   pixelSampleIndex = u32(outNormal[idx].a) + rtUniform.sampleSequenceOffset;
   samplingBounce = 0u; hashedCounter = 0u;
-  if (SAMPLING_PATTERN == 0 || SAMPLING_PATTERN == 1) {
+  if (${inputHooks?.uniformJitter ? 'false' : 'SAMPLING_PATTERN == 0 || SAMPLING_PATTERN == 1'}) {
     jitter = (sample2D(CAMERA_PIXEL) - 0.5) / outputSize;
   }
   rng_initialize(coord, i32(pixelSampleIndex ^ sampleHash(rtUniform.sequenceSeed)));
@@ -896,8 +1128,8 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   outAux.normal = vec3f(0.0);
   outAux.isBlank = false;
   outAux.isShadowCatcher = false;
-  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
-
+${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}${inputHooks?.begin ?? ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
+${inputHooks?.unclampedColor ?? ''}
   // Clamp at Integration Level to reduce fireflies.
   // TODO Path level configuration?
   if (rtUniform.clamping > 0.0) {
@@ -915,15 +1147,18 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     let backgroundHit = select(0.0, 1.0, backgroundSample.a >= 0.01);
     let backgroundPremultiplied = vec4f(backgroundSample.rgb * backgroundSample.a, backgroundSample.a);
     // Keep the background contribution separate from geometry at silhouettes.
-    // mask: catcher coverage, background alpha, background hits, shadow opacity.
-    outShadowCatcher[idx].mask += vec4f(1.0, backgroundSample.a, backgroundHit, liAndAlpha.a);
+    // mask: catcher coverage, background alpha, background hits. The resolve
+    // pass derives shadow opacity from the occluded/total sample counts in moments.zw.
+    outShadowCatcher[idx].mask += vec4f(1.0, backgroundSample.a, backgroundHit, 0.0);
+    outShadowCatcher[idx].moments += vec4f(0.0, 0.0, outAux.shadowCounts);
     outShadowCatcher[idx].background += backgroundPremultiplied;
     outColor[idx] += backgroundPremultiplied;
     outAlbedo[idx] += vec4f(outAux.albedo, backgroundHit);
     accumulateNormalOrVariance(idx, backgroundSample.rgb, outAux.normal);
     // The composed catcher is the background darkened by the shadow. Over a
     // transparent background the shadow is only its opacity.
-    let visibility = 1.0 - liAndAlpha.a;
+    let counts = outAux.shadowCounts;
+    let visibility = 1.0 - select(0.0, counts.x / counts.y, counts.y > 0.0);
     accumulateDenoiseMoments(idx, visibility * select(
       1.0, dot(backgroundSample.rgb, luminance), backgroundSample.a >= 0.01
     ));
@@ -943,13 +1178,13 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     accumulateNormalOrVariance(idx, liAndAlpha.rgb, outAux.normal);
     accumulateDenoiseMoments(idx, dot(liAndAlpha.rgb, luminance));
   }
-}
+${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHooks?.end ?? ''}}
 `;
   // The query entry point shares the exact BVH and material implementation.
   // It has no effect on the beauty entry point or its bindings.
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
-  let specializedSource = source + depthQueryWGSL;
+  let specializedSource = source + depthQueryWGSL + reflectanceWGSL + aovTraceWGSL;
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,
     USE_BACKGROUND_MAP: 2,
@@ -961,7 +1196,12 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   );
   specializedSource = specializedSource.replace(
     new RegExp(`\\b(?:${Object.keys(WGPU_SCENE_FEATURE_BITS).join('|')})\\b`, 'g'),
-    name => `((rtUniform.sceneFeatureFlags & ${WGPU_SCENE_FEATURE_BITS[name]}u) != 0u)`
+    // Material weights and absent texture indices already disable retained
+    // material capabilities. Environment presence also changes background/MIS
+    // behavior, so its active flag must remain dynamic when support is retained.
+    name => sceneCapabilities === undefined || dynamicEnvironment && name === 'USE_ENVMAP' && (sceneCapabilities & WGPU_SCENE_FEATURE_BITS[name]) !== 0
+      ? /* wgsl */ `((rtUniform.sceneFeatureFlags & ${WGPU_SCENE_FEATURE_BITS[name]}u) != 0u)`
+      : (sceneCapabilities & WGPU_SCENE_FEATURE_BITS[name]) !== 0 ? /* wgsl */ `true` : /* wgsl */ `false`
   );
   return specializedSource;
 }

@@ -5,6 +5,7 @@ import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/drop
 import { FOCUS_AREA_SIZE } from '../engine/areaFocus';
 import { hashModelPreset, setUi, useViewer } from '../store';
 import { MODEL_PRESETS } from '../engine/presets';
+import { DebugOverlay } from './DebugOverlay';
 import { StatusBar } from './StatusBar';
 import { CameraControls } from './ViewControls';
 import { Select } from './ui/controls';
@@ -60,6 +61,7 @@ export function Viewport() {
         <>
           <SelectionBox />
           <FocusFrame />
+          <DebugOverlay />
           <div className="viewport-bottom">
             <Credit />
             <AnimationBar />

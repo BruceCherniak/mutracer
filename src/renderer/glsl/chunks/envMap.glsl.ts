@@ -14,6 +14,7 @@ export default createShaderMixin({
     envMapDistribution: Shader.uniform('sampler2D'),
     backgroundMap: Shader.uniform('sampler2D'),
     backgroundMapTransform: Shader.uniform('vec4', [1,0,1,0]),
+    backgroundMapRotation: Shader.uniform('mat3', [1,0,0, 0,1,0, 0,0,1]),
     groundedBackgroundParams: Shader.uniform('vec4'),
     groundedBackgroundCenter: Shader.uniform('vec2')
   },
@@ -80,6 +81,13 @@ float getEnvmapU(float u, int vOffset, out float pdf) {
   return (float(uOffset) + (u - s0.x) / (s1.x - s0.x)) / float(size.x);
 }
 
+// Match the WGSL pole convention and keep the Jacobian positive in f32.
+float envMapSolidAnglePdf(vec2 partialPdf, float v) {
+  if (!(v > 0.0 && v < 1.0)) { return 0.0; }
+  float sinTheta = sin(min(v, 1.0 - v) * PI);
+  return partialPdf.x * partialPdf.y * INVPI2 / (2.0 * sinTheta);
+}
+
 // Perform two binary searches to find light direction.
 vec3 sampleEnvmap(vec2 random, out vec2 uv, out float pdf) {
   vec2 partialPdf;
@@ -97,7 +105,7 @@ vec3 sampleEnvmap(vec2 random, out vec2 uv, out float pdf) {
 
   vec3 dir = vec3(-sinTheta * cosPhi, cosTheta, -sinTheta * sinPhi);
 
-  pdf = partialPdf.x * partialPdf.y * INVPI2 / (2.0 * sinTheta);
+  pdf = envMapSolidAnglePdf(partialPdf, uv.y);
 
   return environmentRotation * dir;
 }
@@ -105,14 +113,12 @@ vec3 sampleEnvmap(vec2 random, out vec2 uv, out float pdf) {
 float envMapPdf(vec2 uv) {
   vec2 size = vec2(textureSize(envMap, 0));
 
-  float sinTheta = sin(uv.y * PI);
+  ivec2 pixel = clamp(ivec2(uv * size), ivec2(0), ivec2(size) - ivec2(1));
 
-  uv *= size;
+  float partialX = texelFetch(envMapDistribution, ivec2(1 + pixel.x, pixel.y), 0).y;
+  float partialY = texelFetch(envMapDistribution, ivec2(0, pixel.y), 0).y;
 
-  float partialX = texelFetch(envMapDistribution, ivec2(1.0 + uv.x, uv.y), 0).y;
-  float partialY = texelFetch(envMapDistribution, ivec2(0, uv.y), 0).y;
-
-  return partialX * partialY * INVPI2 / (2.0 * sinTheta);
+  return envMapSolidAnglePdf(vec2(partialX, partialY), uv.y);
 }
 
 float groundedSurfaceDistance(vec3 point, float height, float radius) {
@@ -197,7 +203,7 @@ vec4 sampleBackgroundFromRay(vec3 origin, vec3 d) {
 #ifdef USE_BACKGROUND
   vec4 t = backgroundMapTransform;
   d = vec3(t.x * d.x - t.y * d.z, d.y, t.y * d.x + t.x * d.z);
-  vec4 backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(d));
+  vec4 backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(transpose(backgroundMapRotation) * d));
   return vec4(backgroundSample.rgb * t.z, backgroundSample.a);
 #else
   return textureLinear(backgroundMap, environmentUv(d));

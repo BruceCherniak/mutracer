@@ -1,0 +1,275 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "sdr-transfer",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "tone": 4,
+      "exposure": 0.01,
+      "trace": ["Compose:DisplayEncoded"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded"],
+      "webgpuTraceExceptions": ["BrowserComposition"]
+    },
+    {
+      "name": "sdr-raw",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "trace": ["Compose:DisplayEncoded"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded"],
+      "webgpuTraceExceptions": ["BrowserComposition"]
+    },
+    {
+      "name": "sdr-bloom",
+      "hdr": false,
+      "bloom": true,
+      "filter": "none",
+      "output": 0,
+      "trace": ["Bloom:SceneLinear", "Compose:DisplayEncoded"],
+      "webgpuTrace": ["Bloom:SceneLinear", "Compose:DisplayLinear+DisplayEncoded"],
+      "webgpuTraceExceptions": ["BrowserComposition"]
+    },
+    {
+      "name": "sdr-jnlm",
+      "hdr": false,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 0,
+      "trace": ["Compose:DisplayLinear", "Denoise:DisplayLinear", "Encode:DisplayEncoded"],
+      "webgpuTrace": [
+        "Compose:DisplayLinear+DisplayEncoded", "Denoise:DisplayLinear",
+        "Compose:DisplayLinear+DisplayEncoded", "Encode:DisplayEncoded"
+      ],
+      "webgpuTraceExceptions": ["BrowserComposition"],
+      "webglTrace": [
+        "Compose:DisplayEncoded", "Compose:DisplayEncoded", "Decode:DisplayLinear",
+        "Denoise:DisplayLinear", "Encode:DisplayEncoded"
+      ],
+      "webglTraceExceptions": ["BrowserComposition", "WebGLJNLM"]
+    },
+    {
+      "name": "sdr-bloom-jnlm",
+      "hdr": false,
+      "bloom": true,
+      "filter": "jnlm",
+      "output": 0,
+      "trace": [
+        "Bloom:SceneLinear", "Compose:DisplayLinear", "Denoise:DisplayLinear",
+        "Encode:DisplayEncoded"
+      ],
+      "webgpuTrace": [
+        "Bloom:SceneLinear", "Compose:DisplayLinear+DisplayEncoded", "Denoise:DisplayLinear",
+        "Compose:DisplayLinear+DisplayEncoded", "Encode:DisplayEncoded"
+      ],
+      "webgpuTraceExceptions": ["BrowserComposition"],
+      "webglTrace": [
+        "Bloom:SceneLinear", "Compose:DisplayEncoded", "Compose:DisplayEncoded",
+        "Decode:DisplayLinear", "Denoise:DisplayLinear", "Encode:DisplayEncoded"
+      ],
+      "webglTraceExceptions": ["BrowserComposition", "WebGLJNLM"]
+    },
+    {
+      "name": "hdr-raw",
+      "hdr": true,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "trace": ["Compose:DisplayLinear"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded"],
+      "webgpuTraceExceptions": ["BrowserComposition", "LinearHDRSurface"],
+      "toleranceException": "HalfFloatOutput",
+      "tolerance": 0.0025
+    },
+    {
+      "name": "hdr-bloom",
+      "hdr": true,
+      "bloom": true,
+      "filter": "none",
+      "output": 0,
+      "trace": ["Bloom:SceneLinear", "Compose:DisplayLinear"],
+      "webgpuTrace": ["Bloom:SceneLinear", "Compose:DisplayLinear+DisplayEncoded"],
+      "webgpuTraceExceptions": ["BrowserComposition", "LinearHDRSurface"],
+      "toleranceException": "HalfFloatOutput",
+      "tolerance": 0.0025
+    },
+    {
+      "name": "hdr-jnlm",
+      "hdr": true,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 0,
+      "trace": ["Compose:DisplayLinear", "Denoise:DisplayLinear"],
+      "webgpuTrace": [
+        "Compose:DisplayLinear+DisplayEncoded", "Denoise:DisplayLinear",
+        "Compose:DisplayLinear+DisplayEncoded", "Encode:DisplayEncoded"
+      ],
+      "webgpuTraceExceptions": ["BrowserComposition", "LinearHDRSurface"],
+      "toleranceException": "HalfFloatOutput",
+      "tolerance": 0.0025
+    },
+    {
+      "name": "hdr-bloom-jnlm",
+      "hdr": true,
+      "bloom": true,
+      "filter": "jnlm",
+      "output": 0,
+      "trace": ["Bloom:SceneLinear", "Compose:DisplayLinear", "Denoise:DisplayLinear"],
+      "webgpuTrace": [
+        "Bloom:SceneLinear", "Compose:DisplayLinear+DisplayEncoded", "Denoise:DisplayLinear",
+        "Compose:DisplayLinear+DisplayEncoded", "Encode:DisplayEncoded"
+      ],
+      "webgpuTraceExceptions": ["BrowserComposition", "LinearHDRSurface"],
+      "toleranceException": "HalfFloatOutput",
+      "tolerance": 0.0025
+    },
+    {
+      "name": "normal",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 1,
+      "trace": ["AOV:Raw"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded", "AOV:Raw"],
+      "webgpuTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition"],
+      "webglTrace": ["Compose:DisplayEncoded", "AOV:Raw"],
+      "webglTraceExceptions": ["BrowserDiagnosticComposition"]
+    },
+    {
+      "name": "albedo",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 2,
+      "trace": ["AOV:Raw"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded", "AOV:Raw"],
+      "webgpuTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition"],
+      "webglTrace": ["Compose:DisplayEncoded", "AOV:Raw"],
+      "webglTraceExceptions": ["BrowserDiagnosticComposition"]
+    },
+    {
+      "name": "normal-jnlm",
+      "hdr": false,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 1,
+      "trace": ["AOV:Raw"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded", "AOV:Raw"],
+      "webgpuTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition"],
+      "webglTrace": ["Compose:DisplayEncoded", "AOV:Raw"],
+      "webglTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition", "WebGLJNLM"]
+    },
+    {
+      "name": "albedo-jnlm",
+      "hdr": false,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 2,
+      "trace": ["AOV:Raw"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded", "AOV:Raw"],
+      "webgpuTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition"],
+      "webglTrace": ["Compose:DisplayEncoded", "AOV:Raw"],
+      "webglTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition", "WebGLJNLM"]
+    },
+    {
+      "name": "catcher-mask",
+      "hdr": false,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 4,
+      "trace": ["AOV:Raw"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded", "AOV:Raw"],
+      "webgpuTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition"],
+      "webglTrace": ["Compose:DisplayEncoded", "AOV:Raw"],
+      "webglTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition", "WebGLJNLM"]
+    },
+    {
+      "name": "hdr-normal",
+      "hdr": true,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 1,
+      "trace": ["AOV:Raw"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded", "AOV:Raw"],
+      "webgpuTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition", "LinearHDRSurface"],
+      "toleranceException": "BrowserByteGuides",
+      "tolerance": 0.0023
+    },
+    {
+      "name": "hdr-albedo",
+      "hdr": true,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 2,
+      "trace": ["AOV:Raw"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded", "AOV:Raw"],
+      "webgpuTraceExceptions": ["BrowserComposition", "BrowserDiagnosticComposition", "LinearHDRSurface"],
+      "toleranceException": "BrowserByteGuides",
+      "tolerance": 0.0023
+    },
+    {
+      "name": "sdr-catcher",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "catcher": true,
+      "trace": ["Compose:DisplayEncoded"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded"],
+      "webgpuTraceExceptions": ["BrowserComposition"]
+    },
+    {
+      "name": "sdr-catcher-scene-filtered",
+      "hdr": false,
+      "bloom": false,
+      "filter": "scene",
+      "output": 0,
+      "catcher": true,
+      "trace": ["CorrectLayers:SceneLinear", "Compose:DisplayEncoded"],
+      "webgl": false,
+      "webgpuTrace": ["Denoise:SceneLinear", "CorrectLayers:SceneLinear", "Compose:DisplayLinear+DisplayEncoded"],
+      "webgpuTraceExceptions": ["BrowserComposition", "BrowserCustomSceneFilter"]
+    },
+    {
+      "name": "hdr-catcher",
+      "hdr": true,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "catcher": true,
+      "trace": ["Compose:DisplayLinear"],
+      "webgpuTrace": ["Compose:DisplayLinear+DisplayEncoded"],
+      "webgpuTraceExceptions": ["BrowserComposition", "LinearHDRSurface"],
+      "toleranceException": "HalfFloatOutput",
+      "tolerance": 0.0025
+    },
+    {
+      "name": "hdr-catcher-scene-filtered",
+      "hdr": true,
+      "bloom": false,
+      "filter": "scene",
+      "output": 0,
+      "catcher": true,
+      "trace": ["CorrectLayers:SceneLinear", "Compose:DisplayLinear"],
+      "webgl": false,
+      "webgpuTrace": ["Denoise:SceneLinear", "CorrectLayers:SceneLinear", "Compose:DisplayLinear+DisplayEncoded"],
+      "webgpuTraceExceptions": ["BrowserComposition", "BrowserCustomSceneFilter", "LinearHDRSurface"],
+      "toleranceException": "HalfFloatOutput",
+      "tolerance": 0.0025
+    }
+  ],
+  "exceptions": {
+    "LinearHDRSurface": "Browser HDR is sRGB encoded; native HDR surfaces are linear scRGB. Decode browser RGB before comparing.",
+    "WebGLSDROnly": "WebGL 2 exposes SDR presentation only; HDR rows are tested on WebGPU and native.",
+    "WebGLJNLM": "WebGL JNLM composes in 8-bit display encoding, decodes for filtering and re-encodes; allow 2 codes for this smooth fixture.",
+    "HalfFloatOutput": "Production browser resolve and HDR presentation use float16 (linear resolve, then sRGB surface); native surfaces are linear float16. Allow 2.5e-3 relative error across both roundings.",
+    "WebGLSceneFilter": "WebGL has no custom scene-linear/OIDN filter; scene-filtered catcher rows require WebGPU/native.",
+    "BrowserComposition": "WebGPU writes display-linear and encoded attachments together. Completing a filter recomposes before encoding; WebGL also recomposes when the separate filter request arrives.",
+    "BrowserDiagnosticComposition": "Browser post-processing executes composition before selecting the raw diagnostic image; native selects diagnostics before composition.",
+    "BrowserCustomSceneFilter": "Browser scene fixtures execute a custom scene-linear filter; native fixtures upload the same prefiltered image before composition.",
+    "BrowserByteGuides": "Production browser normal/albedo resolve uses RGBA8; native HDR diagnostics retain float16. Allow 2.3e-3 absolute error (half an 8-bit code plus float16 rounding)."
+  }
+}

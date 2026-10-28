@@ -1,0 +1,2 @@
+# Generated contracts and shader strings must use the same bytes on every OS.
+* text=auto eol=lf

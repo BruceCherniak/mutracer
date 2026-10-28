@@ -214,9 +214,9 @@ describe('TLAS build', () => {
     ];
     const instances: TLASInstance[] = Array.from({ length: 50 }, (_, i) => {
       const bounds = new Box3();
-      bounds.min = [i * 3, 0, 0];
-      bounds.max = [i * 3 + 1, 1, 1];
-      const transform = mat4.create();
+      bounds.min.set([i * 3, 0, 0]);
+      bounds.max.set([i * 3 + 1, 1, 1]);
+      const transform = mat4.identity(new Float64Array(16));
       transform[12] = i;
       return { blasIndex: i % 2, bounds, transform, materialsIndices: [i] };
     });
@@ -247,9 +247,9 @@ describe('TLAS build', () => {
 
   it('pads instance bounds by the scaled displacement', () => {
     const bounds = new Box3();
-    bounds.min = [0, 0, 0];
-    bounds.max = [1, 1, 1];
-    const transform = mat4.fromScaling(mat4.create(), [2, 1, 1]);
+    bounds.min.set([0, 0, 0]);
+    bounds.max.set([1, 1, 1]);
+    const transform = mat4.fromScaling(mat4.identity(new Float64Array(16)), [2, 1, 1]);
     const tlas = buildTLAS(
       [{ blasIndex: 0, bounds, transform, materialsIndices: [0], displacementScale: 0.25 }],
       [{ bvh: { buffer: new ArrayBuffer(48), maxDepth: 1 }, trainglesCount: 1, verticesCount: 3 }]

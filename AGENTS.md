@@ -23,11 +23,22 @@ people and coding agents changing the library. For using it, read
   devDependencies and never ship in the npm package.
 - `site/`: home page of the deployed site (`npm run site`). `npm run build:site`
   builds it with the viewer and the examples into `dist-site/` for Cloudflare.
+- `native/`: experimental Rust/C SDK (shared TypeScript AOT core, Rust/wgpu host)
+  and standalone egui-wgpu viewer; usage starts at `native/llms.txt`, checks are
+  in `native/CONTRIBUTING.md`.
 - `LICENSES/`, `THIRD_PARTY_NOTICES.md`: third-party attributions.
 
 ## Checks
 
-Run before committing:
+While iterating, run the affected test files and the typecheck for the area being
+changed. `npm run test:related -- src/path.ts` selects library tests through static
+imports; `npm run test:viewer:related -- viewer/src/path.ts` does the same for the
+viewer. See [test selection and its limits](tests/README.md). Use explicit test
+files for generators, file-based fixtures and other dependencies outside that graph.
+
+Run the full checks below once the change is ready to commit. After a passing
+check, rerun it only if its code, tests, dependencies or configuration change;
+documentation-only edits do not require repeating code checks.
 
 ```bash
 npm run typecheck
@@ -41,6 +52,9 @@ npm test
 `npm run test:viewer` (the independent suite in `viewer/tests/`, using source aliases
 without requiring a prior library build).
 
+For native iteration, use the [focused native checks](native/CONTRIBUTING.md#iteration)
+before the final native validation.
+
 `npm run build` checks the bundled distribution; `npm run build:lib` builds
 `lib/` (the npm entry points) and copies the WebAssembly module.
 
@@ -48,6 +62,27 @@ Unit tests do not cover GPU output. For changes to shaders, sampling or
 post-processing, render the examples (or a fixed-seed scene with a fixed
 sample count) on a real GPU before and after, and compare
 `render.readPixels('hdr')` pixels. Test both WebGPU and WebGL 2 (`?webgl`).
+
+Run browser GPU tests, captures and benchmarks in headless Chrome
+(`--headless=new`) with a temporary profile, so results do not depend on a
+visible window, focus or an unlocked screen. Use a visible window only for checks
+that need real presentation, such as native window and HDR surface tests.
+
+Scale verification to the change. While iterating on display, denoising or
+scheduling, run `npm run test:parity` and the affected tests only; run the complete
+native gate once, before merging. Record performance measurements, but do not let
+them block a change: sub-millisecond CPU frame timings are noisy, so treat a
+regression as real only when it reproduces and the diff explains it. Classify
+measurement noise and known flaky tests yourself and report the evidence instead
+of stopping for confirmation.
+
+## Site deployment
+
+- `main`: `npm run deploy` publishes `mutracer` at `mutracer.meimu-studio.com`.
+- `dev`: `npm run deploy:dev` publishes `mutracer-dev` at `mutracer-dev.meimu-studio.com`.
+- The `mutracer-dev` Workers Builds connection watches only `dev` and runs
+  `npm run deploy:dev`; leave its separate build command empty because Wrangler
+  already runs the type checks and site build.
 
 ## Rules
 
@@ -61,6 +96,9 @@ sample count) on a real GPU before and after, and compare
   structs; update both and run the contract tests.
 - Write tests for behavior and public contracts (packing, parsing, lifecycle,
   generated shader validity). Do not add tests that only restate source text.
+- Prefer existing APIs from the standard library, the platform, wgpu or crates
+  and packages already in the dependency tree over hand-written helpers. Do not
+  add a new dependency only to replace a few lines.
 - Use Three.js `GLTFLoader` with `THREESync` in examples and comparisons.
 - Keep examples small: procedural or CC0 assets only, no large models.
 - Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.
@@ -81,6 +119,13 @@ sample count) on a real GPU before and after, and compare
   decision. Keep the implementation and the A/B evidence, report regressions,
   and leave the decision to the maintainer.
 
+- Display composition, denoising order and scheduling changes must update
+  `tests/fixtures/display-order.json` or `display-schedule.json`, both independent
+  implementations and their execution/event tests. Run the real-GPU cross-backend
+  image comparison with `npm run test:parity`. Set
+  `MUTRACER_OIDN_DISPLAY_INPUT` to include the frozen highlight comparison; the
+  command explicitly reports that check as skipped when unset. Do not introduce a shared runtime frame plan or decision layer.
+
 ## Documentation
 
 - `README.md` is the overview, `docs/` holds the guides and `llms.txt` is the
@@ -90,6 +135,13 @@ sample count) on a real GPU before and after, and compare
   rules in `docs/updates.md`, BVH preparation in `docs/bvh.md`, options and
   defaults in TSDoc and `docs/api.md`.
 - Order each guide as usage, options, then caveats.
+- Native API reference lives on the declarations: the C headers in
+  `native/include/` and the Rust `///` comments in `native/host/src/` give each
+  call's and field's options, defaults, ranges, errors, ownership and thread
+  rules. `native/docs/` covers only workflows, behavior that spans several calls,
+  and costs and limits; it names the symbols instead of restating their details.
+  `native/docs/scene-format.md` stays the descriptor layout and validation
+  reference.
 - User-facing documentation (READMEs, `docs/`, `llms.txt` and public API comments)
   covers only behavior, usage, costs and limits that affect user decisions. Put
   internal implementation, maintenance and release details in code comments,

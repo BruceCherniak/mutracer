@@ -3,7 +3,7 @@ import {createCanvas} from '../util/canvas.js';
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { WritableArrayLike } from '../types.js';
+import type { WritableArrayLike } from '../types.js';
 
 export function clamp(x: number, min: number, max: number) {
   return Math.min(Math.max(x, min), max);

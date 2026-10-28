@@ -58,14 +58,16 @@ export function resolveOIDNModelUrl(
     if (model === 'standard') return String(standardWeightsUrl);
     if (model === 'small') return String(smallWeightsUrl);
   }
-  const baseUrl = String(weightsBaseUrl ?? DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL);
+  const base = weightsBaseUrl ?? DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL;
+  // Narrow before coercion so native compilers see one representation at a time.
+  const baseUrl = typeof base === 'string' ? base : String(base);
   return `${baseUrl}${baseUrl.endsWith('/') ? '' : '/'}${OIDN_MODEL_FILENAMES[model]}`;
 }
 
 export function resolveOIDNAuxiliaryModelUrls(
   weightsBaseUrl: string | URL = DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL
 ): OIDNAuxiliaryModelUrls {
-  const baseUrl = String(weightsBaseUrl);
+  const baseUrl = typeof weightsBaseUrl === 'string' ? weightsBaseUrl : String(weightsBaseUrl);
   const prefix = `${baseUrl}${baseUrl.endsWith('/') ? '' : '/'}`;
   return {
     albedo: `${prefix}${OIDN_AUXILIARY_MODEL_FILENAMES.albedo}`,

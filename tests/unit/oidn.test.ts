@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type Engine from '../../src/Engine';
 
 const initUNetFromBuffer = vi.hoisted(() => vi.fn());
-vi.mock('oidn-web', () => ({ initUNetFromBuffer }));
+vi.mock('oidn-webgpu', () => ({ initUNetFromBuffer }));
 
 import {
   resolveOIDNAuxiliaryModelUrls,
@@ -172,6 +172,22 @@ describe('OIDN option loading', () => {
     expect(resolveOIDNAuxiliaryModelUrls('/assets/oidn')).toEqual({
       albedo: '/assets/oidn/rt_alb_large.tza',
       normal: '/assets/oidn/rt_nrm_large.tza'
+    });
+  });
+
+  it('preserves URL-object coercion and empty string directories', () => {
+    const base = new URL('https://example.test/weights/');
+    expect(resolveOIDNModelUrl('small', base)).toBe(
+      'https://example.test/weights/rt_hdr_alb_nrm_small.tza'
+    );
+    expect(resolveOIDNAuxiliaryModelUrls(base)).toEqual({
+      albedo: 'https://example.test/weights/rt_alb_large.tza',
+      normal: 'https://example.test/weights/rt_nrm_large.tza'
+    });
+    expect(resolveOIDNModelUrl('small', '')).toBe('/rt_hdr_alb_nrm_small.tza');
+    expect(resolveOIDNAuxiliaryModelUrls('')).toEqual({
+      albedo: '/rt_alb_large.tza',
+      normal: '/rt_nrm_large.tza'
     });
   });
 

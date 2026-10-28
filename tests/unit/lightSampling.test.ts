@@ -4,8 +4,9 @@ import {
   buildLightAliasTable,
   collectEmissiveTriangles,
   estimateAnalyticLightPower,
-  
   LIGHT_CHOICE_ANALYTIC,
+  LIGHT_CHOICE_EMISSIVE_TRIANGLE,
+  LIGHT_CHOICE_ENVIRONMENT,
   packEmissiveTriangles
 } from '../../src/renderer/lightSampling';
 import RectLight from '../../src/scene/RectLight';
@@ -15,6 +16,7 @@ import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { Attribute } from '../../src/scene/Geometry';
 import { createPlaneGeometry } from '../../src/util/commonGeometry';
+import { prepareSceneLightSampling } from '../../src/renderer/sceneAssembly';
 import createRayTraceGlsl from '../../src/renderer/glsl/rayTrace.frag';
 import sampleLight from '../../src/renderer/wgsl/chunks/sampleLight.wgsl';
 
@@ -107,5 +109,45 @@ describe('power-weighted light sampling', () => {
       [{ mesh, geometry: mesh.geometry, materialIndices: [0] }],
       [material]
     )).toHaveLength(0);
+  });
+});
+
+describe('shadow-catcher light table', () => {
+  const sphere = new SphereLight();
+  function emissivePlane() {
+    const material = new OpenPBRMaterial();
+    material.emissionColor = [1, 1, 1];
+    material.emissionLuminance = 1000;
+    const mesh = new Mesh(createPlaneGeometry(), material);
+    return collectEmissiveTriangles([{ mesh, geometry: mesh.geometry, materialIndices: [0] }], [material]);
+  }
+  function choiceAt(lighting: ReturnType<typeof prepareSceneLightSampling>, index: number) {
+    const words = new Int32Array(lighting.lightData.buffer);
+    const at = (lighting.emissiveTexels + index) * 4;
+    return { probability: lighting.lightData[at], type: words[at + 2], source: words[at + 3] };
+  }
+
+  it('samples only the environment and analytic lights when the scene has emissive meshes', () => {
+    const lighting = prepareSceneLightSampling([sphere], emissivePlane(), 1, 4096);
+    expect(lighting.choiceCount).toBe(4);
+    expect(lighting.shadowCatcherChoiceOffset).toBe(4);
+    expect(lighting.shadowCatcherChoiceCount).toBe(2);
+    const catcher = [0, 1].map(i => choiceAt(lighting, lighting.shadowCatcherChoiceOffset + i));
+    expect(catcher.map(choice => [choice.type, choice.source])).toEqual([
+      [LIGHT_CHOICE_ENVIRONMENT, 0], [LIGHT_CHOICE_ANALYTIC, 0]
+    ]);
+  });
+
+  it('shares the main table without emissive meshes', () => {
+    const lighting = prepareSceneLightSampling([sphere], [], 1, 4096);
+    expect(lighting.shadowCatcherChoiceOffset).toBe(0);
+    expect(lighting.shadowCatcherChoiceCount).toBe(lighting.choiceCount);
+  });
+
+  it('is empty when only emissive meshes light the scene', () => {
+    const lighting = prepareSceneLightSampling([], emissivePlane(), 0, 4096);
+    expect(lighting.choiceCount).toBe(2);
+    expect(lighting.shadowCatcherChoiceCount).toBe(0);
+    expect(choiceAt(lighting, 0).type).toBe(LIGHT_CHOICE_EMISSIVE_TRIANGLE);
   });
 });

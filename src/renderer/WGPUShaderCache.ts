@@ -2,6 +2,7 @@
  * resources/bind groups are deliberately never retained here. */
 export class WGPUShaderCache {
   private modules = new Map<string, GPUShaderModule>();
+  private moduleIds = new Map<string, number>();
   private bindGroupLayouts = new Map<string, GPUBindGroupLayout>();
   private layouts = new Map<string, GPUPipelineLayout>();
   private pipelines = new Map<string, Promise<GPUComputePipeline>>();
@@ -30,8 +31,14 @@ export class WGPUShaderCache {
 
   createShaderModule(descriptor: Pick<GPUShaderModuleDescriptor, 'code' | 'label'>) {
     const key = descriptor.code;
-    return this.remember(this.modules, key,
+    const module = this.remember(this.modules, key,
       this.modules.get(key) ?? this.device.createShaderModule(descriptor), 8);
+    // Pipeline retention is longer than module retention. Give exact source the
+    // same identity after module eviction, so a feature toggle can still find
+    // its compiled pipeline. Other GPU objects keep their object identities.
+    const id = this.remember(this.moduleIds, key, this.moduleIds.get(key) ?? this.id(module), 128);
+    this.ids.set(module, id);
+    return module;
   }
 
   createBindGroupLayout(descriptor: GPUBindGroupLayoutDescriptor) {
@@ -91,6 +98,7 @@ export class WGPUShaderCache {
 
   clear() {
     this.modules.clear();
+    this.moduleIds.clear();
     this.bindGroupLayouts.clear();
     this.layouts.clear();
     this.pipelines.clear();
@@ -99,10 +107,7 @@ export class WGPUShaderCache {
   }
 }
 
-/** Grow in coarse buckets; scene edits must not shrink a compiled stack. */
-export function retainedShaderCapacity(required: number, previous = 0, minimum = 8) {
-  return Math.max(previous, minimum, 2 ** Math.ceil(Math.log2(Math.max(1, required))));
-}
+export {retainedShaderCapacity} from './shaderCapacity.js';
 
 /** Shared by target-local post-process passes; never contains GPU image resources. */
 const targetShaderCaches = new WeakMap<GPUDevice, WGPUShaderCache>();

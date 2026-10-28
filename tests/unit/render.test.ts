@@ -120,8 +120,56 @@ describe('independent Render', () => {
   });
   it('changes execution budgets without restarting accumulated input', () => {
     const {engine} = renderFixture(); const render = new Render(engine); render.refine();
-    render.timeBudgetMs = 50; render.maxTiles = 1; render.allowMultipleSamplesPerFrame = true; render.refine();
+    render.timeBudgetMs = 50; render.maxTiles = 1; render.batchSamples = true; render.refine();
     expect(render.samples).toBe(2); engine.dispose();
+  });
+  it('applies refine overrides for one call without mutating settings or restarting samples', () => {
+    const {engine, targets} = renderFixture(); const render = new Render(engine); render.refine();
+    const budget = vi.fn(); Object.assign(targets[0], {setRealtimeBatchBudget: budget});
+    render.refine(undefined, {batchSamples: true, targetBatchTimeMs: 4});
+    expect(targets[0].configure).toHaveBeenLastCalledWith(expect.objectContaining({batchSamples: true}));
+    expect(budget).toHaveBeenLastCalledWith(4); expect(render.batchSamples).toBe(false);
+    render.refine(); expect(render.samples).toBe(3);
+    expect(targets[0].configure).toHaveBeenLastCalledWith(expect.objectContaining({batchSamples: false}));
+    expect(budget).toHaveBeenLastCalledWith(Infinity); expect(targets[0].restartSamples).toHaveBeenCalledOnce();
+    engine.dispose();
+  });
+  it('keeps allowMultipleSamplesPerFrame as a deprecated alias of batchSamples', () => {
+    const {engine} = renderFixture(); const render = new Render(engine, {allowMultipleSamplesPerFrame: true});
+    expect(render.batchSamples).toBe(true);
+    render.allowMultipleSamplesPerFrame = false; expect(render.batchSamples).toBe(false);
+    Object.assign(render, {allowMultipleSamplesPerFrame: true}); expect(render.batchSamples).toBe(true);
+    expect(new Render(engine, {batchSamples: false, allowMultipleSamplesPerFrame: true}).batchSamples).toBe(false);
+    engine.dispose();
+  });
+  it('defers resolving only for the refine call that requests it', () => {
+    const {engine, targets} = renderFixture(); const render = new Render(engine); render.refine();
+    const defer = vi.fn(); Object.assign(targets[0], {setRealtimeDeferPostProcess: defer});
+    render.refine(undefined, {deferResolve: true}); expect(defer).toHaveBeenLastCalledWith(true); expect(render.samples).toBe(2);
+    render.refine(); expect(defer).toHaveBeenLastCalledWith(false); engine.dispose();
+  });
+  it('exposes GPU sample timing only for a current, live render', () => {
+    const {engine, camera, targets} = renderFixture(); const render = new Render(engine);
+    expect(render.gpuSampleTimeMs).toBeUndefined(); render.refine();
+    Object.assign(targets[0], {getRealtimeSampleTime: () => 2}); expect(render.gpuSampleTimeMs).toBe(2);
+    camera.position = [1, 0, 0]; engine.update(); expect(render.gpuSampleTimeMs).toBeUndefined();
+    render.refine(); expect(render.gpuSampleTimeMs).toBe(2);
+    render.dispose(); expect(render.gpuSampleTimeMs).toBeUndefined(); engine.dispose();
+  });
+  it('can await sampling capacity without submitting work and rejects waiting after disposal', async () => {
+    const {engine, targets} = renderFixture(); const render = new Render(engine);
+    await render.whenReadyToRefine(); expect(targets).toHaveLength(0);
+    render.refine(); let complete!: () => void; const pending = new Promise<void>(resolve => {complete = resolve;});
+    Object.assign(targets[0], {whenTraceAvailable: () => pending});
+    expect(render.whenReadyToRefine()).toBe(pending); expect(targets[0].trace).toHaveBeenCalledOnce();
+    complete(); await pending; render.dispose(); expect(() => render.whenReadyToRefine()).toThrow('disposed'); engine.dispose();
+  });
+  it.each([0, -1, NaN, Infinity])('rejects an invalid realtime queue budget (%s) and restores subsequent calls', targetBatchTimeMs => {
+    const {engine} = renderFixture(); const render = new Render(engine);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(render.refine(undefined, {targetBatchTimeMs})).toBe('error');
+    expect(engine.lastError?.message).toContain('targetBatchTimeMs');
+    expect(render.refine()).toBe('converging'); expect(engine.lastError).toBeUndefined(); engine.dispose();
   });
   it('uses independent restarts and terminal sample counts', () => {
     const {engine} = renderFixture(); const a = new Render(engine, {maxSamples: 2}), b = new Render(engine);

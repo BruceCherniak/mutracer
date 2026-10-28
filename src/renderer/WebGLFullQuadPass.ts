@@ -1,11 +1,11 @@
 import {scratchGLSLFunctions} from './scratchSampling.js';
 import {setTextureRegion, textureRegion} from './textureRegion.js';
-import { FragmentShader, ShaderDefineValue } from './shader.js';
+import { FragmentShader, type ShaderDefineValue } from './shader.js';
 import {
   FrameBuffer,
   WebGLDevice,
   Texture2D,
-  TextureOptions,
+  type TextureOptions,
   WebGLProgramBindings
 } from './webgl.js';
 
@@ -84,7 +84,7 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     const textures = Object.keys(shader.uniforms).filter(name => shader.uniforms[name].type === 'sampler2D');
     uniforms = {...uniforms};
     if (scratch) for (const name of textures) uniforms[`${name}RegionSize`] = {type: 'ivec2', value: [1, 1]};
-    const sampled = new FragmentShader({name: shader.name, outputs: shader.outputs, defines, uniforms,
+    const sampled = new FragmentShader({name: shader.name, outputs: shader.outputs, outputTypes: shader.outputTypes, defines, uniforms,
       includes: [{defines: {}, uniforms: {}, main: '', functions: [() => scratchGLSLFunctions(textures, scratch), ...shader.functions]}],
       main: shader.main});
     sampled.parallelCompile = shader.parallelCompile;
@@ -155,6 +155,14 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     if (!Object.values(this._outputTextures).includes(texture)) texture.dispose(this._renderer.gl);
   }
 
+  // Internal fixed-accumulation loader; transfer ownership to the selected target.
+  loadDiagnosticOutputs(outputs: Partial<Record<O, Texture2D>>) {
+    for (const name of Object.keys(outputs) as O[]) {
+      this._outputTextures[name]?.dispose(this._renderer.gl);
+      this._outputTextures[name] = outputs[name]!;
+    }
+  }
+
   getOutput(name: O) {
     return this._outputTextures[name];
   }
@@ -180,6 +188,11 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
       this._outputTextures[name] = texture;
       setTextureRegion(texture, this._width, this._height);
     }
+  }
+
+  isProgramReady(inputs?: Record<I, Texture2D>) {
+    if (inputs) this._bindings.setUniforms(inputs);
+    return this._renderer.isProgramCompiled(this._bindings.getProgram(this._renderer));
   }
 
   createPass(
@@ -238,7 +251,10 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
       this.setUniform(`${name}RegionSize`, [region.width, region.height]);
     }
     this._bindings.setUniforms(inputs);
-    this._bindings.bind(renderer);
+    if (!this._bindings.bind(renderer)) {
+      gl.disable(gl.SCISSOR_TEST);
+      return false;
+    }
     gl.disable(gl.DEPTH_TEST);
     if (options.blend) {
       gl.enable(gl.BLEND);
@@ -249,6 +265,7 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.disable(gl.SCISSOR_TEST);
+    return true;
   }
 
   releaseTarget(target: object) {

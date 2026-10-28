@@ -5,38 +5,49 @@
 // Convert image data from the RGBE format to a 32-bit floating point format
 // See https://www.cg.tuwien.ac.at/research/theses/matkovic/node84.html for a description of the RGBE format
 
-import { ColorRGBA, WritableArrayLike } from '../types.js';
+import type { ColorRGBA, Mat4, WritableArrayLike } from '../types.js';
 import Texture, {
   isTextureDataSource,
-  TextureDataSource
+  type TextureDataSource
 } from '../scene/Texture.js';
 import AmbientLight from '../scene/AmbientLight.js';
 import EnvironmentLight from '../scene/EnvironmentLight.js';
-import { SceneBackground, SceneLight } from '../scene/Scene.js';
-import type { EnvironmentMapSource } from './envMapDistribution.js';
+import type { SceneBackground, SceneLight } from '../scene/Scene.js';
+import { isProceduralSkyImage } from '../scene/skyParameters.js';
+import type { EnvironmentSource, EnvironmentMapSource, ProceduralEnvironmentSource } from './envMapDistribution.js';
 
 /** Rotation only: translation does not affect a light at infinity. */
-export function environmentRotation(lights: readonly SceneLight[]): Float32Array {
+function mapRotation(transform?: Mat4): Float32Array {
   const matrix = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
-  const light = lights.find(light => light.type === 'EnvironmentLight');
-  if (light?.type === 'EnvironmentLight') {
+  if (transform) {
     for (let column = 0; column < 3; column++) {
       const offset = column * 4;
-      const length = Math.hypot(light.transform[offset], light.transform[offset+1], light.transform[offset+2]);
-      if (length > 0) for (let row = 0; row < 3; row++) matrix[offset+row] = light.transform[offset+row] / length;
+      const length = Math.hypot(transform[offset], transform[offset+1], transform[offset+2]);
+      if (length > 0) for (let row = 0; row < 3; row++) matrix[offset+row] = transform[offset+row] / length;
     }
   }
   return matrix;
 }
 
-/** Cosine/sine of inverse-lookup yaw and radiance scale; independent of lighting. */
-export function backgroundMapTransform(background?: SceneBackground): Float32Array {
-  const grounded = background && !Array.isArray(background) && 'type' in background && background.type === 'GroundedSkybox' ? background : undefined;
-  const angle = grounded?.rotation ?? 0;
-  return new Float32Array([Math.cos(angle), Math.sin(angle), Math.max(0, grounded?.intensity ?? 1), 0]);
+export function environmentRotation(lights: readonly SceneLight[]): Float32Array {
+  const light = lights.find(light => light.type === 'EnvironmentLight');
+  return mapRotation(light?.type === 'EnvironmentLight' ? light.transform : undefined);
 }
 
-const backgroundImages = new WeakMap<Texture, {image: Texture['image']; version: number; result: EnvironmentMapSource}>();
+/** Map-to-world orientation for explicit equirect backgrounds; grounded yaw is packed separately. */
+export function backgroundMapRotation(background?: SceneBackground): Float32Array {
+  return mapRotation(background && !Array.isArray(background) && 'type' in background && background.type === 'Equirect'
+    ? background.transform : undefined);
+}
+
+/** Cosine/sine of inverse-lookup yaw and radiance scale; independent of lighting. */
+export function backgroundMapTransform(background?: SceneBackground): Float32Array {
+  const described = background && !Array.isArray(background) && 'type' in background ? background : undefined;
+  const angle = described?.type === 'GroundedSkybox' ? described.rotation ?? 0 : 0;
+  return new Float32Array([Math.cos(angle), Math.sin(angle), Math.max(0, described?.intensity ?? 1), 0]);
+}
+
+const backgroundImages = new WeakMap<Texture, {image: Texture['image']; version: number; result: EnvironmentSource}>();
 
 const DEFAULT_MAP_RESOLUTION = {
   width: 8,
@@ -56,11 +67,11 @@ export function generateBackgroundMapFromSceneBackground(
   } else {
     const texture: Texture =
       'map' in background ? background.map : (background as Texture);
-    if (!isTextureDataSource(texture.image)) return;
-    // Is rgbe data
     const cached = backgroundImages.get(texture);
     if (cached?.image === texture.image && cached.version === texture.version) return cached.result;
-    backgroundImage = {width: texture.image.width, height: texture.image.height, data: texture.image.data};
+    if (isProceduralSkyImage(texture.image)) backgroundImage = skySource(texture.image, 1);
+    else if (isTextureDataSource(texture.image)) backgroundImage = {width: texture.image.width, height: texture.image.height, data: texture.image.data};
+    else return;
     backgroundImages.set(texture, {image:texture.image, version:texture.version, result:backgroundImage});
   }
   return backgroundImage;
@@ -71,6 +82,10 @@ export function generateEnvMapFromSceneComponents(
   environmentLights: EnvironmentLight[]
 ) {
   let envImage = initializeEnvMap(environmentLights);
+  if ('sky' in envImage) {
+    for (const light of ambientLights) for (let c = 0; c < 3; c++) envImage.ambient[c] += light.color[c] * light.intensity;
+    return envImage;
+  }
   if (ambientLights.length > 0 && environmentLights.length > 0) {
     envImage = {
       width: envImage.width,
@@ -90,13 +105,17 @@ const scaledEnvironments = new WeakMap<EnvironmentLight, {
   intensity: number; image: EnvironmentMapSource;
 }>();
 
-export function initializeEnvMap(environmentLights: EnvironmentLight[]) {
+export function initializeEnvMap(environmentLights: EnvironmentLight[]): EnvironmentSource {
   let envImage: EnvironmentMapSource;
 
   // Initialize map from environment light if present
   if (environmentLights.length > 0) {
     // TODO: support multiple environment lights (what if they have different resolutions?)
     const environmentLight = environmentLights[0];
+    if (isProceduralSkyImage(environmentLight.map.image)) {
+      const intensity = Number.isFinite(environmentLight.intensity) ? Math.max(0, environmentLight.intensity) : 1;
+      return skySource(environmentLight.map.image, intensity);
+    }
     envImage = {
       width: environmentLight.map.image.width,
       height: environmentLight.map.image.height,
@@ -179,4 +198,8 @@ function addAmbientLightToEnvMap(
     buffer[i++] += color[2] * intensity;
     i++;
   }
+}
+
+function skySource(sky: import('../scene/skyParameters.js').ProceduralSkyImage, intensity: number): ProceduralEnvironmentSource {
+  return { sky, width: sky.width, height: sky.height, intensity, ambient: [0, 0, 0] };
 }

@@ -50,6 +50,11 @@ export const composeFragment = new FragmentShader({
     sRGBOutput: Shader.uniform('bool', 1)
   },
   main: glsl`
+vec3 displayEncode(vec3 color) {
+  color = max(color, 0.0);
+  return mix(1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055,
+    color * 12.92, lessThanEqual(color, vec3(0.0031308)));
+}
 vec3 linearToneMapping(vec3 color) {
   return clamp(color, 0.0, 1.0);
 }
@@ -148,7 +153,7 @@ void main() {
     float edge = smoothstep(0.2, 0.72, distance(uv, vec2(0.5)));
     color.rgb *= 1.0 - vignette * edge;
     color.rgb = applyToneMapping(color.rgb);
-    color.rgb = pow(max(color.rgb, 0.0), vec3(1.0 / 2.2));
+    color.rgb = displayEncode(color.rgb);
   }
   color.a = max(color.a, min(dot(bloom.rgb, vec3(0.2125, 0.7154, 0.0721)), 1.0));
 
@@ -169,8 +174,8 @@ void main() {
         float edge = smoothstep(0.2, 0.72, distance(uv, vec2(0.5)));
         foregroundColor *= 1.0 - vignette * edge;
         backgroundColor *= 1.0 - vignette * edge;
-        foregroundColor = pow(max(applyToneMapping(foregroundColor), 0.0), vec3(1.0 / 2.2));
-        backgroundColor = pow(max(applyToneMapping(backgroundColor), 0.0), vec3(1.0 / 2.2));
+        foregroundColor = displayEncode(applyToneMapping(foregroundColor));
+        backgroundColor = displayEncode(applyToneMapping(backgroundColor));
       }
       // The primary samples belong to disjoint layers. Never shadow the model.
       float opacity = shadowAlpha;

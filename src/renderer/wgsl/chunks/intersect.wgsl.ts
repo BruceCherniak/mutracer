@@ -2,7 +2,7 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { uvProjectionConstants } from '../../MaterialTable.js';
+import { uvProjectionConstants } from '../../materialConstants.js';
 import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import pdm_displacementWgsl from './pdm_displacement.wgsl.js';
 import { createIntersectionAlphaWgsl } from './intersectionAlpha.wgsl.js';
@@ -150,47 +150,47 @@ fn intersectCwbvhInterior(
   let padding = depthSlabPadding(invD, o);
   let originTerm = (n0.xyz - o) * invD;
   let adjustedInvD = quantizationScale * invD;
-  let minX0 = unpackCwbvhBytes(bitcast<u32>(n2.x));
-  let minX1 = unpackCwbvhBytes(bitcast<u32>(n2.y));
-  let minY0 = unpackCwbvhBytes(bitcast<u32>(n2.z));
-  let minY1 = unpackCwbvhBytes(bitcast<u32>(n2.w));
-  let minZ0 = unpackCwbvhBytes(bitcast<u32>(n3.x));
-  let minZ1 = unpackCwbvhBytes(bitcast<u32>(n3.y));
-  let maxX0 = unpackCwbvhBytes(bitcast<u32>(n3.z));
-  let maxX1 = unpackCwbvhBytes(bitcast<u32>(n3.w));
-  let maxY0 = unpackCwbvhBytes(bitcast<u32>(n4.x));
-  let maxY1 = unpackCwbvhBytes(bitcast<u32>(n4.y));
-  let maxZ0 = unpackCwbvhBytes(bitcast<u32>(n4.z));
-  let maxZ1 = unpackCwbvhBytes(bitcast<u32>(n4.w));
+  // Pick each axis' entry and exit planes from the ray direction once, as in
+  // the CWBVH paper, instead of ordering every child's slab pair. This halves
+  // the slab arithmetic and the decoded values kept live at once.
+  let words2 = bitcast<vec4u>(n2);
+  let words3 = bitcast<vec4u>(n3);
+  let words4 = bitcast<vec4u>(n4);
+  let negative = invD < vec3f(0.0);
+  let nearX = select(words2.xy, words3.zw, negative.x);
+  let farX = select(words3.zw, words2.xy, negative.x);
+  let nearY = select(words2.zw, words4.xy, negative.y);
+  let farY = select(words4.xy, words2.zw, negative.y);
+  let nearZ = select(words3.xy, words4.zw, negative.z);
+  let farZ = select(words4.zw, words3.xy, negative.z);
 
-  let minTx0 = minX0 * adjustedInvD.x + originTerm.x;
-  let minTy0 = minY0 * adjustedInvD.y + originTerm.y;
-  let minTz0 = minZ0 * adjustedInvD.z + originTerm.z;
-  let maxTx0 = maxX0 * adjustedInvD.x + originTerm.x;
-  let maxTy0 = maxY0 * adjustedInvD.y + originTerm.y;
-  let maxTz0 = maxZ0 * adjustedInvD.z + originTerm.z;
   let near0 = max(
-    max((min(minTx0, maxTx0) - vec4f(padding.x)), (min(minTy0, maxTy0) - vec4f(padding.y))),
-    (min(minTz0, maxTz0) - vec4f(padding.z))
+    max(
+      unpackCwbvhBytes(nearX.x) * adjustedInvD.x + originTerm.x - vec4f(padding.x),
+      unpackCwbvhBytes(nearY.x) * adjustedInvD.y + originTerm.y - vec4f(padding.y)
+    ),
+    unpackCwbvhBytes(nearZ.x) * adjustedInvD.z + originTerm.z - vec4f(padding.z)
   );
   let far0 = min(
-    min((max(minTx0, maxTx0) + vec4f(padding.x)), (max(minTy0, maxTy0) + vec4f(padding.y))),
-    (max(minTz0, maxTz0) + vec4f(padding.z))
+    min(
+      unpackCwbvhBytes(farX.x) * adjustedInvD.x + originTerm.x + vec4f(padding.x),
+      unpackCwbvhBytes(farY.x) * adjustedInvD.y + originTerm.y + vec4f(padding.y)
+    ),
+    unpackCwbvhBytes(farZ.x) * adjustedInvD.z + originTerm.z + vec4f(padding.z)
   );
-
-  let minTx1 = minX1 * adjustedInvD.x + originTerm.x;
-  let minTy1 = minY1 * adjustedInvD.y + originTerm.y;
-  let minTz1 = minZ1 * adjustedInvD.z + originTerm.z;
-  let maxTx1 = maxX1 * adjustedInvD.x + originTerm.x;
-  let maxTy1 = maxY1 * adjustedInvD.y + originTerm.y;
-  let maxTz1 = maxZ1 * adjustedInvD.z + originTerm.z;
   let near1 = max(
-    max((min(minTx1, maxTx1) - vec4f(padding.x)), (min(minTy1, maxTy1) - vec4f(padding.y))),
-    (min(minTz1, maxTz1) - vec4f(padding.z))
+    max(
+      unpackCwbvhBytes(nearX.y) * adjustedInvD.x + originTerm.x - vec4f(padding.x),
+      unpackCwbvhBytes(nearY.y) * adjustedInvD.y + originTerm.y - vec4f(padding.y)
+    ),
+    unpackCwbvhBytes(nearZ.y) * adjustedInvD.z + originTerm.z - vec4f(padding.z)
   );
   let far1 = min(
-    min((max(minTx1, maxTx1) + vec4f(padding.x)), (max(minTy1, maxTy1) + vec4f(padding.y))),
-    (max(minTz1, maxTz1) + vec4f(padding.z))
+    min(
+      unpackCwbvhBytes(farX.y) * adjustedInvD.x + originTerm.x + vec4f(padding.x),
+      unpackCwbvhBytes(farY.y) * adjustedInvD.y + originTerm.y + vec4f(padding.y)
+    ),
+    unpackCwbvhBytes(farZ.y) * adjustedInvD.z + originTerm.z + vec4f(padding.z)
   );
 
   let hits0 = (near0 <= min(far0, vec4f(tMax))) & (far0 > vec4f(0.0));
@@ -245,7 +245,6 @@ function getBVHTraverseCode(
   return /* wgsl */ `
 var d = ray.d;
 var o = ray.o;
-var tlasStack: array<i32, TLAS_STACK_SIZE>;
 var tlasTop = -1;
 var invD = traversalInverse(d);
 var isHitMicroTriangle = false;
@@ -331,7 +330,6 @@ while (tlasTop >= 0) {
         // stack. The upper 8 bits identify intersected interior slots and the
         // lower 8 bits preserve the node's interior-slot mask for popcount
         // addressing. Triangle leaves are merged into a separate 24-bit mask.
-        var cwbvhStack: array<vec2u, BLAS_STACK_SIZE>;
         var cwbvhTop = -1;
         var cwbvhVisits = 0u;
         var nodeGroupBase = 0u;
@@ -421,7 +419,6 @@ while (tlasTop >= 0) {
       }
       ` : ''}
 
-      var blasStack: array<i32, BLAS_STACK_SIZE>;
       var blasTop = -1;
       if (blasLayout != 3u) {
         blasTop = 0;
@@ -496,26 +493,29 @@ while (tlasTop >= 0) {
               bitcast<u32>(wide1.z), bitcast<u32>(wide1.w),
               bitcast<u32>(wide2.x), bitcast<u32>(wide2.y)
             );
-            let childMinX = unpack4x8unorm(bitcast<u32>(wide2.z));
-            let childMinY = unpack4x8unorm(bitcast<u32>(wide2.w));
-            let childMinZ = unpack4x8unorm(bitcast<u32>(wide3.x));
-            let childMaxX = unpack4x8unorm(bitcast<u32>(wide3.y));
-            let childMaxY = unpack4x8unorm(bitcast<u32>(wide3.z));
-            let childMaxZ = unpack4x8unorm(bitcast<u32>(wide3.w));
-            let tx0 = (nodeMin.x + childMinX * nodeExtent.x - o.x) * invD.x;
-            let tx1 = (nodeMin.x + childMaxX * nodeExtent.x - o.x) * invD.x;
-            let ty0 = (nodeMin.y + childMinY * nodeExtent.y - o.y) * invD.y;
-            let ty1 = (nodeMin.y + childMaxY * nodeExtent.y - o.y) * invD.y;
-            let tz0 = (nodeMin.z + childMinZ * nodeExtent.z - o.z) * invD.z;
-            let tz1 = (nodeMin.z + childMaxZ * nodeExtent.z - o.z) * invD.z;
+            // Pick each axis' entry and exit planes from the ray direction
+            // instead of ordering every child's slab pair.
+            let negative = invD < vec3f(0.0);
+            let nearX = unpack4x8unorm(bitcast<u32>(select(wide2.z, wide3.y, negative.x)));
+            let farX = unpack4x8unorm(bitcast<u32>(select(wide3.y, wide2.z, negative.x)));
+            let nearY = unpack4x8unorm(bitcast<u32>(select(wide2.w, wide3.z, negative.y)));
+            let farY = unpack4x8unorm(bitcast<u32>(select(wide3.z, wide2.w, negative.y)));
+            let nearZ = unpack4x8unorm(bitcast<u32>(select(wide3.x, wide3.w, negative.z)));
+            let farZ = unpack4x8unorm(bitcast<u32>(select(wide3.w, wide3.x, negative.z)));
             let padding = depthSlabPadding(invD, o);
             let tNear = max(
-              max((min(tx0, tx1) - vec4f(padding.x)), (min(ty0, ty1) - vec4f(padding.y))),
-              (min(tz0, tz1) - vec4f(padding.z))
+              max(
+                (nodeMin.x + nearX * nodeExtent.x - o.x) * invD.x - vec4f(padding.x),
+                (nodeMin.y + nearY * nodeExtent.y - o.y) * invD.y - vec4f(padding.y)
+              ),
+              (nodeMin.z + nearZ * nodeExtent.z - o.z) * invD.z - vec4f(padding.z)
             );
             let tFar = min(
-              min((max(tx0, tx1) + vec4f(padding.x)), (max(ty0, ty1) + vec4f(padding.y))),
-              (max(tz0, tz1) + vec4f(padding.z))
+              min(
+                (nodeMin.x + farX * nodeExtent.x - o.x) * invD.x + vec4f(padding.x),
+                (nodeMin.y + farY * nodeExtent.y - o.y) * invD.y + vec4f(padding.y)
+              ),
+              (nodeMin.z + farZ * nodeExtent.z - o.z) * invD.z + vec4f(padding.z)
             );
             var distance = select(tFar, tNear, tNear > vec4f(0.0));
             distance = select(
@@ -618,18 +618,248 @@ while (tlasTop >= 0) {
 
 `;
 }
+// Raw first-hit contract for native diagnostics. Reuse the same traversal and
+// triangle tests without surface completion or any integrator/alpha sampling.
+export function createSceneHitQueryWgsl(hasAnisotropyDirections = false) {
+  return /* wgsl */ `
+struct SceneQueryHit {
+  hit: bool, instance: i32, record: i32, t: f32, barycentric: vec3f,
+}
+fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
+  var result: SceneQueryHit;
+  result.instance = -1; result.record = -1; result.t = RAY_MAX_DISTANCE;
+  if (rtUniform.isEmpty > 0) { return result; }
+  let bounces = 0;
+  let doubleSided = false;
+  let isRefractionRay = false;
+  let currentTriangleIndex = -1;
+  var tMax = RAY_MAX_DISTANCE;
+  var maxDim: i32;
+  var shear: vec3f;
+  ${getBVHTraverseCode(`
+    result.hit = true; result.instance = insIdx; result.record = triangleIndex;
+    result.t = tMax; result.barycentric = hitBarycentric;
+  `, false, false, 1, hasAnisotropyDirections)}
+  return result;
+}
+`;
+}
+
+export function createSceneIntersectionsWgsl({
+  hasDisplacement, hasAnisotropyDirections = true, hasCoatNormals = false, blasLayoutMask = 1,
+  closestName = 'intersectScene', shadowName = 'intersectSceneShadow', bevelName = 'intersectSceneBevel', closestHitHook = ''
+}: {
+  hasDisplacement: boolean; hasAnisotropyDirections?: boolean; hasCoatNormals?: boolean;
+  blasLayoutMask?: number; closestName?: string; shadowName?: string; bevelName?: string; closestHitHook?: string;
+}) {
+  return /* wgsl */ `// Traverse BVH, find closest triangle intersection, and return surface information
+fn ${closestName}(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
+
+  (*si).hit = false;
+
+  if (rtUniform.isEmpty > 0) {
+    return;
+  }
+
+  var tMax = RAY_MAX_DISTANCE;
+  var maxDim: i32;
+  var shear: vec3f;
+
+  var hitIndex: vec3i;
+  var hitTri: Triangle;
+  var hitInsIdx: i32;
+  var currentTriangleIndex: i32 = (*si).triangleIndex;
+
+  ${getBVHTraverseCode(
+    `
+(*si).triangleIndex = triangleIndex;
+hitTri = tri;
+hitIndex = index;
+hitInsIdx = insIdx;
+  `,
+    hasDisplacement,
+    false,
+    blasLayoutMask,
+    hasAnisotropyDirections
+  )}
+
+${closestHitHook}  if (isHit) {
+    completeSurfaceInteraction(
+      si,
+      hitTri,
+      hitBarycentric,
+      hitIndex,
+      isHitMicroTriangle,
+      hitInsIdx,
+      hitNormal,
+      hitPosition,
+      -1
+    );
+  }
+}
+
+// Local intersection helper for shader bevel.
+fn ${bevelName}(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) {
+  (*si).hit = false;
+
+  if (rtUniform.isEmpty > 0) {
+    return;
+  }
+
+  let bounces = 0;
+  let doubleSided = true;
+  let isRefractionRay = false;
+  var tMax = maxDistance;
+  var maxDim: i32;
+  var shear: vec3f;
+  var hitIndex: vec3i;
+  var hitTri: Triangle;
+  var hitInsIdx: i32;
+  var currentTriangleIndex: i32 = -1;
+
+  ${getBVHTraverseCode(
+    `
+(*si).triangleIndex = triangleIndex;
+hitTri = tri;
+hitIndex = index;
+hitInsIdx = insIdx;
+    `,
+    hasDisplacement,
+    false,
+    blasLayoutMask,
+    hasAnisotropyDirections,
+    `
+        if (insIdx != instanceIndex) {
+          continue;
+        }
+    `
+  )}
+
+  if (isHit) {
+    (*si).instanceIndex = hitInsIdx;
+    (*si).normal = hitNormal;
+    (*si).position = hitPosition;
+    (*si).materialIndex = i32(unpackMaterialIndex(bitcast<i32>(instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE}].z)).x);
+    fetchAttributes(
+      si,
+      hitTri,
+      hitBarycentric,
+      hitIndex,
+      isHitMicroTriangle,
+      -1
+    );
+
+    let l2w = mat4x4<f32>(
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 5],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 6],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 7],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 8]
+    );
+    let w2l = mat4x4<f32>(
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 1],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 2],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 3],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 4]
+    );
+    let normalTransform = transpose(mat3x3<f32>(
+      w2l[0].xyz,
+      w2l[1].xyz,
+      w2l[2].xyz
+    ));
+    (*si).faceNormal = normalize(normalTransform * hitNormal);
+    (*si).vertexNormal = normalize(normalTransform * (*si).vertexNormal);
+    (*si).normal = normalize(normalTransform * (*si).normal);
+${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normalize(normalTransform * (*si).coatNormal);` : ''}
+    if (USE_TANGENT && dot((*si).tangent, (*si).tangent) > 0.0) {
+      (*si).tangent = normalize((l2w * vec4f((*si).tangent, 0.0)).xyz);
+    }
+${hasAnisotropyDirections ? /* wgsl */ `
+    (*si).directionTangent = (l2w * vec4f((*si).directionTangent, 0.0)).xyz;
+    (*si).directionBitangent = (l2w * vec4f((*si).directionBitangent, 0.0)).xyz;
+    (*si).geometryTangent = (l2w * vec4f((*si).geometryTangent, 0.0)).xyz;
+    (*si).geometryBitangent = (l2w * vec4f((*si).geometryBitangent, 0.0)).xyz;
+` : /* wgsl */ ``}
+  (*si).shadowOffset = (l2w * vec4f((*si).shadowOffset, 0.0)).xyz;
+    (*si).position = (l2w * vec4((*si).position, 1.0)).xyz;
+  }
+}
+
+fn ${shadowName}(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
+  if (rtUniform.isEmpty > 0) {
+    return false;
+  }
+
+  let doubleSided = true;
+  let shadowRayTMax = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
+  var tMax = shadowRayTMax;
+  var maxDim: i32;
+  var shear: vec3f;
+
+  let bounces = 1;
+  var isRefractionRay = false;
+  var currentTriangleIndex: i32 = currTriangleIndex;
+
+  ${getBVHTraverseCode(
+    /*wgsl */ `
+// Traversal is already clipped to the sampled light. Affine instance
+// transforms preserve the ray parameter because local directions are not
+// renormalized, so no local-to-world hit transform or distance() is needed.
+var isOccluded = true;
+
+if (isOccluded) {
+  if (HAS_ALPHA) {
+    let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
+    if (!intersectionAlphaPasses(
+      materialIndex,
+      index,
+      hitBarycentric,
+      hitPosition,
+      hitNormal
+    )) {
+      // Continue looking for an opaque hit, but never traverse beyond the light.
+      tMax = shadowRayTMax;
+      isOccluded = false;
+    }
+  }
+}
+if (isOccluded) {
+  return true;
+}
+    `,
+    hasDisplacement,
+    true,
+    blasLayoutMask,
+    hasAnisotropyDirections
+  )}
+
+  return false;
+}
+
+`;
+}
+
 export default function getIntersectCode({
   hasDisplacement,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
-  blasLayoutMask = 1
+  blasLayoutMask = 1,
+  sceneIntersections = ''
 }: {
   hasDisplacement: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
   blasLayoutMask?: number;
+  sceneIntersections?: string;
 }) {
   return /*wgsl*/ `
+
+// Scene queries run sequentially within each invocation. Share their private
+// traversal scratch instead of allocating arrays at every inlined query site.
+// Each traversal resets its stack tops and writes entries before reading them.
+// Never start another scene query while a traversal is still using these stacks.
+var<private> tlasStack: array<i32, TLAS_STACK_SIZE>;
+var<private> blasStack: array<i32, BLAS_STACK_SIZE>;
+${(blasLayoutMask & 8) !== 0 ? /* wgsl */ `var<private> cwbvhStack: array<vec2u, BLAS_STACK_SIZE>;` : ''}
 
 ${hasDisplacement ? displacementWgsl : ''}
 ${(blasLayoutMask & 8) !== 0 ? cwbvhTraversalWgsl : ''}
@@ -704,7 +934,7 @@ fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRe
   var v = light.v;
   var lightType = i32(light.litType);
 
-  if (lightType == RECT_LIGHT) {
+  if (HAS_SCENE_RECT_LIGHT && lightType == RECT_LIGHT) {
     // Adjust the position from center to start corner
     var pos = light.position - u * 0.5 - v * 0.5;
     var normal = normalize(cross(u, v));
@@ -733,7 +963,7 @@ fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRe
     }
   }
 
-  else if (lightType == SPHERE_LIGHT) {
+  else if (HAS_SCENE_SPHERE_LIGHT && lightType == SPHERE_LIGHT) {
     if (light.radiusOrSpread <= 0.0) {
       let toPoint = light.position - r.o;
       let projection = dot(toPoint, r.d);
@@ -778,7 +1008,7 @@ fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRe
     }
   }
 
-  else if (lightType == SPOT_LIGHT) {
+  else if (HAS_SCENE_SPOT_LIGHT && lightType == SPOT_LIGHT) {
     if (light.radiusOrSpread <= 0.0) {
       let toPoint = light.position - r.o;
       let projection = dot(toPoint, r.d);
@@ -1298,188 +1528,5 @@ ${createIntersectionAlphaWgsl(hasAnisotropyDirections)}
 
 
 
-// Traverse BVH, find closest triangle intersection, and return surface information
-fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
-
-  (*si).hit = false;
-
-  if (rtUniform.isEmpty > 0) {
-    return;
-  }
-
-  var tMax = RAY_MAX_DISTANCE;
-  var maxDim: i32;
-  var shear: vec3f;
-
-  var hitIndex: vec3i;
-  var hitTri: Triangle;
-  var hitInsIdx: i32;
-  var currentTriangleIndex: i32 = (*si).triangleIndex;
-
-  ${getBVHTraverseCode(
-    `
-(*si).triangleIndex = triangleIndex;
-hitTri = tri;
-hitIndex = index;
-hitInsIdx = insIdx;
-  `,
-    hasDisplacement,
-    false,
-    blasLayoutMask,
-    hasAnisotropyDirections
-  )}
-
-  if (isHit) {
-    completeSurfaceInteraction(
-      si,
-      hitTri,
-      hitBarycentric,
-      hitIndex,
-      isHitMicroTriangle,
-      hitInsIdx,
-      hitNormal,
-      hitPosition,
-      -1
-    );
-  }
-}
-
-// Local intersection helper for shader bevel.
-fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) {
-  (*si).hit = false;
-
-  if (rtUniform.isEmpty > 0) {
-    return;
-  }
-
-  let bounces = 0;
-  let doubleSided = true;
-  let isRefractionRay = false;
-  var tMax = maxDistance;
-  var maxDim: i32;
-  var shear: vec3f;
-  var hitIndex: vec3i;
-  var hitTri: Triangle;
-  var hitInsIdx: i32;
-  var currentTriangleIndex: i32 = -1;
-
-  ${getBVHTraverseCode(
-    `
-(*si).triangleIndex = triangleIndex;
-hitTri = tri;
-hitIndex = index;
-hitInsIdx = insIdx;
-    `,
-    hasDisplacement,
-    false,
-    blasLayoutMask,
-    hasAnisotropyDirections,
-    `
-        if (insIdx != instanceIndex) {
-          continue;
-        }
-    `
-  )}
-
-  if (isHit) {
-    (*si).instanceIndex = hitInsIdx;
-    (*si).normal = hitNormal;
-    (*si).position = hitPosition;
-    (*si).materialIndex = i32(unpackMaterialIndex(bitcast<i32>(instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE}].z)).x);
-    fetchAttributes(
-      si,
-      hitTri,
-      hitBarycentric,
-      hitIndex,
-      isHitMicroTriangle,
-      -1
-    );
-
-    let l2w = mat4x4<f32>(
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 5],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 6],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 7],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 8]
-    );
-    let w2l = mat4x4<f32>(
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 1],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 2],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 3],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 4]
-    );
-    let normalTransform = transpose(mat3x3<f32>(
-      w2l[0].xyz,
-      w2l[1].xyz,
-      w2l[2].xyz
-    ));
-    (*si).faceNormal = normalize(normalTransform * hitNormal);
-    (*si).vertexNormal = normalize(normalTransform * (*si).vertexNormal);
-    (*si).normal = normalize(normalTransform * (*si).normal);
-${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normalize(normalTransform * (*si).coatNormal);` : ''}
-    if (USE_TANGENT && dot((*si).tangent, (*si).tangent) > 0.0) {
-      (*si).tangent = normalize((l2w * vec4f((*si).tangent, 0.0)).xyz);
-    }
-${hasAnisotropyDirections ? /* wgsl */ `
-    (*si).directionTangent = (l2w * vec4f((*si).directionTangent, 0.0)).xyz;
-    (*si).directionBitangent = (l2w * vec4f((*si).directionBitangent, 0.0)).xyz;
-    (*si).geometryTangent = (l2w * vec4f((*si).geometryTangent, 0.0)).xyz;
-    (*si).geometryBitangent = (l2w * vec4f((*si).geometryBitangent, 0.0)).xyz;
-` : /* wgsl */ ``}
-  (*si).shadowOffset = (l2w * vec4f((*si).shadowOffset, 0.0)).xyz;
-    (*si).position = (l2w * vec4((*si).position, 1.0)).xyz;
-  }
-}
-
-fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
-  if (rtUniform.isEmpty > 0) {
-    return false;
-  }
-
-  let doubleSided = true;
-  let shadowRayTMax = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
-  var tMax = shadowRayTMax;
-  var maxDim: i32;
-  var shear: vec3f;
-
-  let bounces = 1;
-  var isRefractionRay = false;
-  var currentTriangleIndex: i32 = currTriangleIndex;
-
-  ${getBVHTraverseCode(
-    /*wgsl */ `
-// Traversal is already clipped to the sampled light. Affine instance
-// transforms preserve the ray parameter because local directions are not
-// renormalized, so no local-to-world hit transform or distance() is needed.
-var isOccluded = true;
-
-if (isOccluded) {
-  if (HAS_ALPHA) {
-    let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
-    if (!intersectionAlphaPasses(
-      materialIndex,
-      index,
-      hitBarycentric,
-      hitPosition,
-      hitNormal
-    )) {
-      // Continue looking for an opaque hit, but never traverse beyond the light.
-      tMax = shadowRayTMax;
-      isOccluded = false;
-    }
-  }
-}
-if (isOccluded) {
-  return true;
-}
-    `,
-    hasDisplacement,
-    true,
-    blasLayoutMask,
-    hasAnisotropyDirections
-  )}
-
-  return false;
-}
-
-`;
+${sceneIntersections || createSceneIntersectionsWgsl({hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
 }

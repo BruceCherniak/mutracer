@@ -1,3 +1,7 @@
+import type {AovKind} from './renderer/aov.js';
+import {aovMask} from './renderer/aov.js';
+import {displayAovKind} from './renderer/aovDisplay.js';
+import type {DisplayChannel} from './renderer/RenderingPipeline.js';
 import { Events } from './util/events.js';
 import type Engine from './Engine.js';
 import type Camera from './scene/Camera.js';
@@ -6,7 +10,8 @@ import type { AlphaBlendStrategy } from './renderer/RenderingPipeline.js';
 import { collectTraceSettings, imageSettingsKey } from './settings/render.js';
 import type { SamplingPattern } from './renderer/sampling.js';
 import type { RenderTarget, TraceSettings } from './renderer/renderPipeline.js';
-import type {DenoiserHandle, OwnedDenoiser} from './renderer/denoiser.js';
+import type {DenoiserHandle} from './renderer/denoiser.js';
+import type {OwnedDenoiser} from './renderer/ownedDenoiser.js';
 import type { OIDNModel, OIDNEngine, OIDNPrecision, OIDNHDRTransfer, OIDNDynamicTileSetting, OIDNAuxiliaryModelUrls } from './oidn.js';
 import { DEFAULT_JNLM_OPTIONS, createJNLMDenoiser, type JNLMOptions } from './renderer/jnlm.js';
 import type { OfflineAdaptiveSamplingOptions, OfflineVarianceHistory } from './renderer/OfflineAdaptiveSampling.js';
@@ -17,6 +22,12 @@ import {scheduleFrame} from './util/frame.js';
 export interface SampleEvent { samples: number; isFirstFrame: boolean; frameTimeMs: number; }
 /** State of one independent accumulation. Default preparing. */
 export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'error';
+/** Execution overrides for one refine call; accumulated samples are retained. */
+export interface RefineOptions {
+  /** Batch several samples in this call. Default this render's batchSamples. */ batchSamples?: boolean;
+  /** Positive finite WebGPU queue budget in milliseconds; capped by timeBudgetMs, ignored on WebGL. Default timeBudgetMs. */ targetBatchTimeMs?: number;
+  /** Leave the displayed image unchanged, for calls between display frames; the next presentation or pixel read updates it once with every new sample. Ignored on WebGL. Default false. */ deferResolve?: boolean;
+}
 /** When a render filters its complete samples. Default converged. */
 export type DenoiseSchedule = 'converged' | 'progressive' | 'every-sample';
 /** Caller-owned WebGPU filter. Render/Engine never dispose it; calls on one engine are serialized. */
@@ -28,6 +39,7 @@ export interface Denoiser {
 }
 /** Borrowed, tightly packed rgba32float buffers, top row first, width*height*16 bytes of image data. */
 export interface DenoiseInput {
+  /** Requested primary-surface buffers, top row first; id is rgba32uint, others rgba32float. Default undefined. Borrowed until denoise settles. */ aovs?: Readonly<Partial<Record<AovKind,GPUBuffer>>>;
   /** Engine WebGPU device; may change after device loss/recovery. */ device: GPUDevice;
   /** Actual internal width, including backend alignment. */ width: number;
   /** Actual internal height, including backend alignment. */ height: number;
@@ -38,6 +50,7 @@ export interface DenoiseInput {
 }
 /** Third-party WebGPU filter; ignored with one warning on WebGL. */
 export interface CustomDenoiserOptions {
+  /** Optional AOV inputs; automatically enables their passes for this render. Default []. */ aovs?: readonly AovKind[];
   /** Required implementation selector. */ type: 'custom';
   /** Required caller-owned instance, keyed by object identity; never serialized or released by Render/Engine. */ denoiser: Denoiser;
   /** When to filter complete samples. Default converged. */ schedule?: DenoiseSchedule;
@@ -55,7 +68,7 @@ interface OIDNSettings {
   /** Execution backend. Default auto (native WGSL unless WebNN is selected). */ engine?: OIDNEngine;
   /** WGSL precision. Default auto (fp16 when shader-f16 is available). */ precision?: OIDNPrecision;
   /** Adaptive tile controller. Default enabled with minTileSize 256, initialTileSize 432, targetTileTimeMs 16, adjustmentStep 16. */ dynamicTile?: OIDNDynamicTileSetting;
-  /** Maximum OIDN tile size. Default chosen by oidn-web. */ maxTileSize?: number;
+  /** Maximum OIDN output tile edge in pixels. Default `512`. */ maxTileSize?: number;
   /** Abort weight downloads. Default undefined; does not distinguish cached networks. */ signal?: AbortSignal;
 }
 /** OIDN configuration on WebGPU: choose a packaged model or an explicit network URL. */
@@ -78,6 +91,8 @@ export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | Custom
 
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
+  /** Optional surface outputs. Default []; disabled outputs allocate no AOV resources. */ aovs?: readonly AovKind[];
+  /** Independent AOV sample cap, positive integer. Default 16. */ aovSamples?: number;
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
@@ -96,7 +111,8 @@ export interface RenderSettings {
   /** Minimum transmissive path alpha, using path depth. Default 1. Changes restart this accumulation. */ transmissiveOutputAlphaMin?: number;
   /** Tile execution budget in milliseconds. Default 21. */ timeBudgetMs?: number;
   /** Maximum tiles per frame. Default Infinity. */ maxTiles?: number;
-  /** Accumulate multiple samples when frame time permits. Default false. */ allowMultipleSamplesPerFrame?: boolean;
+  /** Let one refine submit several samples, up to timeBudgetMs of GPU work; WebGPU requires GPU timestamps. RenderLoop also keeps batching between display frames. Default false. */ batchSamples?: boolean;
+  /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */ allowMultipleSamplesPerFrame?: boolean;
   /** Adapt scale to frame timing; minScale must not exceed resolutionScale. Default false. */ adaptiveResolution?: {targetFrameMs: number; minScale: number} | false;
   /** Single-level fallback on the same engine. Default null. */ fallback?: Render | null;
   /** Denoising configuration. Default null. */ denoiser?: DenoiserOptions | null;
@@ -132,12 +148,13 @@ function validateDenoiserOptions(options: DenoiserOptions) {
   if (!options || typeof options !== 'object' || (options.type !== 'jnlm' && options.type !== 'oidn' && options.type !== 'custom')) throw new Error('Denoiser type must be jnlm, oidn or custom.');
   const allowed = options.type === 'jnlm'
     ? ['type', 'schedule', ...Object.keys(DEFAULT_JNLM_OPTIONS)]
-    : options.type === 'custom' ? ['type', 'schedule', 'denoiser']
+    : options.type === 'custom' ? ['type', 'schedule', 'denoiser', 'aovs']
     : ['type', 'schedule', 'model', 'weightsBaseUrl', 'weightsUrl', 'aux', 'hdr', 'hdrTransfer', 'auxiliaryModelUrls', 'engine', 'precision', 'dynamicTile', 'maxTileSize', 'signal'];
   for (const key of Object.keys(options)) if (!allowed.includes(key)) throw new Error(`Denoiser field ${key} does not belong to ${options.type}.`);
   if (options.schedule !== undefined && !['converged', 'progressive', 'every-sample'].includes(options.schedule)) throw new Error('Unknown denoise schedule.');
   if (options.type === 'jnlm') createJNLMDenoiser(options);
   else if (options.type === 'custom') {
+    aovMask(options.aovs ?? []);
     if (!options.denoiser || typeof options.denoiser !== 'object' || typeof options.denoiser.denoise !== 'function' || (options.denoiser.prepare !== undefined && typeof options.denoiser.prepare !== 'function')) throw new Error('Custom denoiser must implement denoise and optional prepare.');
   } else {
     if (options.weightsUrl !== undefined) {
@@ -167,6 +184,7 @@ function isURL(value: unknown): value is string | URL { return (typeof value ===
 
 // Snapshot nested values too, so application edits cannot silently change a cache key.
 function snapshotDenoiserOptions(options: DenoiserOptions): Readonly<DenoiserOptions> {
+  if (options.type === 'custom') return Object.freeze({...options,aovs:Object.freeze([...(options.aovs ?? [])])});
   if (options.type !== 'oidn') return Object.freeze({...options});
   const next: OIDNDenoiserOptions = {...options};
   if (options.weightsBaseUrl !== undefined) next.weightsBaseUrl = String(options.weightsBaseUrl);
@@ -193,6 +211,8 @@ function denoiserKey(options: Readonly<DenoiserOptions>): string | Denoiser {
 
 /** One independently configured image and its accumulation, owned by an engine. */
 export default class Render {
+  /** Enabled surface outputs. Default []; readPixels rejects outputs not enabled here. */ aovs: readonly AovKind[] = [];
+  /** Independent AOV sample cap. Default 16. */ aovSamples = 16;
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
@@ -211,7 +231,10 @@ export default class Render {
   /** Minimum transmissive path alpha. Default 1. Changing it restarts this render. */ transmissiveOutputAlphaMin = 1;
   /** Execution budget in milliseconds. Default 21. */ timeBudgetMs = 21;
   /** Maximum tiles per frame. Default Infinity. */ maxTiles = Infinity;
-  /** Allow several samples per frame when possible. Default false. */ allowMultipleSamplesPerFrame = false;
+  /** Let one refine submit several samples within timeBudgetMs; WebGPU requires GPU timestamps. Default false. */ batchSamples = false;
+  /** @deprecated Use batchSamples; this alias will be removed in a later release. Default false. */
+  get allowMultipleSamplesPerFrame(): boolean { return this.batchSamples; }
+  set allowMultipleSamplesPerFrame(value: boolean) { this.batchSamples = value; }
   /** Adaptive resolution controller, or false. Default false. */ adaptiveResolution: {targetFrameMs: number; minScale: number} | false = false;
   private _resolutionScale = 1;
   /** Canvas-relative scale. Default 1; cannot be assigned on a fixed-size render. */
@@ -247,6 +270,7 @@ export default class Render {
     const current = this._denoiserOptions;
     if (current === null && next === null) return this._denoiserReady;
     if (next && current && denoiserKey(next) === denoiserKey(current)
+      && (next.type !== 'custom' || current.type === 'custom' && aovMask(next.aovs ?? [])===aovMask(current.aovs ?? []))
       && next.schedule === current.schedule && (next.type !== 'oidn' ||
         (current.type === 'oidn' && next.signal === current.signal))) return this._denoiserReady;
     this._denoiserOptions = next;
@@ -258,6 +282,7 @@ export default class Render {
   private _status: RenderStatus = 'preparing';
   private _disposed = false;
   private _busy = false;
+  private _refineOptions?: RefineOptions;
   private _offlineCamera = false;
   private _input = {scene: -1, camera: -1, settings: ''};
   private _adaptiveScale = 1;
@@ -294,8 +319,9 @@ export default class Render {
       if ('resolutionScale' in options || !Number.isInteger(options.width) || !Number.isInteger(options.height) || options.width! < 1 || options.height! < 1) throw new Error('Provide positive integer width and height, or resolutionScale, exclusively.');
       this._fixed = {width: options.width!, height: options.height!};
     }
-    const {width: _width, height: _height, resolutionScale, fallback, denoiser, ...settings} = options;
+    const {width: _width, height: _height, resolutionScale, fallback, denoiser, allowMultipleSamplesPerFrame, ...settings} = options;
     Object.assign(this, settings);
+    if (settings.batchSamples === undefined && allowMultipleSamplesPerFrame !== undefined) this.batchSamples = allowMultipleSamplesPerFrame;
     if (resolutionScale !== undefined) this.resolutionScale = resolutionScale;
     this._adaptiveScale = this._resolutionScale; this._lastScale = this._resolutionScale;
     this._validate(); this.fallback = fallback ?? null;
@@ -304,9 +330,9 @@ export default class Render {
   }
   /** Actual target width; before allocation uses the requested dimensions. */ get width() { return this._target?.getMemory().width || this._size().width; }
   /** Actual target height; before allocation uses the requested dimensions. */ get height() { return this._target?.getMemory().height || this._size().height; }
-  /** Complete samples since the last restart; stale engine inputs report 0. Default 0. */
+  /** Complete beauty samples since the last restart; stale engine inputs report 0. Default 0. */
   get samples() { return this._current ? this._target?.getTotalSamplesRendered() ?? 0 : 0; }
-  /** Whether complete samples reached maxSamples. Default false. */ get converged() { return this.samples >= this.maxSamples; }
+  /** Whether complete beauty samples reached maxSamples. Default false. */ get converged() { return this.samples >= this.maxSamples; }
   /** Current execution state. Default preparing. */ get status(): RenderStatus {
     if (!this._current && this._status !== 'error') return this._engine._ready ? 'converging' : 'preparing';
     return this._status;
@@ -315,7 +341,53 @@ export default class Render {
   /** @internal */ get _complete() { return this._current && !!this._target?.presentationComplete && !this._target.isFirstFrame() && this.samples > 0; }
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
+  /** Latest WebGPU full beauty sample estimate in milliseconds. Default undefined; also undefined for stale inputs, during converge or without GPU timestamps. */
+  get gpuSampleTimeMs(): number | undefined { return !this._busy && this._current ? this._target?.getRealtimeSampleTime?.() : undefined; }
+  /** Waits for the next release of WebGPU sampling queue capacity. Resolves immediately if no sampling is queued or on WebGL; does not submit work. Throws after disposal. */
+  whenReadyToRefine(): Promise<void> {
+    if (this._disposed) throw new Error('Render is disposed.');
+    return this._target?.whenTraceAvailable?.() ?? Promise.resolve();
+  }
+  /** Complete surface-output samples since restart; stale inputs report 0. Independent of beauty samples. Default 0. */
+  get aovSamplesRendered(): number { return this._current ? this._target?.getAovSamples?.() ?? 0 : 0; }
+  /** @internal */
+  _completeFor(channel: DisplayChannel): boolean {
+    const kind = displayAovKind(channel);
+    return kind && this.aovs.includes(kind) && this._target?.aovReady
+      ? this._current && this._target.aovReady(kind) : this._complete;
+  }
+  /** @internal */
+  _restartAovs(): void {
+    this._target?.activate(); this._target?.restartAovs?.();
+    this._status = 'converging';
+  }
+  private _refineAov(kind: AovKind): RenderStatus {
+    if (this._engine._initializationError) throw this._engine._initializationError;
+    if (!this.aovs.includes(kind)) throw new Error(`AOV ${kind} is not enabled`);
+    if (!this._engine._ready) {
+      const generation = this._engine._deviceGeneration;
+      void this._engine.init().catch(error => {
+        if (this._disposed || generation !== this._engine._deviceGeneration) return;
+        this._status = 'error'; this._engine._notifyError(error);
+      });
+      return this._status = 'preparing';
+    }
+    const started = performance.now();
+    const target = this._synchronize();
+    if (!target) return this._status = 'preparing';
+    const before = target.getAovSamples?.() ?? 0;
+    const limit = kind === 'id' || kind === 'motion' ? 1 : Math.min(this.maxSamples, this.aovSamples);
+    if (!target.refineAovs?.(this._engine._inputs.value!, Math.min(limit, (target.getAovSamples?.() ?? 0) + 1))) return this._status = 'compiling';
+    if ((target.getAovSamples?.() ?? 0) > before) {
+      this._frameTime = Math.max(.001, performance.now() - started);
+      this._frameStart = started; this._frameScale = this._adaptiveScale;
+      this._adaptResolution(true);
+    }
+    return this._status = (target.getAovSamples?.() ?? 0) >= limit ? 'finished' : 'converging';
+  }
   private _validate() {
+    aovMask(this.aovs);
+    if (!Number.isInteger(this.aovSamples) || this.aovSamples < 1) throw new Error('aovSamples must be a positive integer.');
     if (!Number.isFinite(this.maxSamples) || this.maxSamples < 1) throw new Error('maxSamples must be positive.');
     if (this.dispersionWavelengths !== 1 && this.dispersionWavelengths !== 3) throw new Error('dispersionWavelengths must be 1 or 3.');
     const adaptive = this.adaptiveResolution;
@@ -327,7 +399,10 @@ export default class Render {
     return {width: Math.max(1, Math.round(this._engine.display.canvas.width * scale)), height: Math.max(1, Math.round(this._engine.display.canvas.height * scale))};
   }
   private _settings(sampleCap = this.maxSamples): TraceSettings {
-    return collectTraceSettings(this, sampleCap);
+    const settings=collectTraceSettings(this,sampleCap);
+    settings.batchSamples = this._refineOptions?.batchSamples ?? settings.batchSamples;
+    if(this._denoiserOptions?.type==='custom') settings.aovs=[...new Set([...this.aovs,...(this._denoiserOptions.aovs ?? [])])];
+    return settings;
   }
   private _synchronize(sampleCap = this.maxSamples, offline = false) {
     this._validate();
@@ -338,6 +413,8 @@ export default class Render {
     const key = imageSettingsKey(settings, size);
     const inputs = this._engine._inputs;
     target.configure(settings); target.activate();
+    target.setRealtimeBatchBudget?.(this._refineOptions?.targetBatchTimeMs ?? Infinity);
+    target.setRealtimeDeferPostProcess?.(!!this._refineOptions?.deferResolve);
     if ((!offline && this._offlineCamera) || inputs.scene !== this._input.scene || inputs.camera !== this._input.camera || key !== this._input.settings) {
       if (!offline) this._offlineCamera = false;
       this._cancelDenoise(); target.restartSamples();
@@ -361,8 +438,8 @@ export default class Render {
     if (compiling) this._sampleStart = undefined;
     return compiling;
   }
-  private _adaptResolution() {
-    if (!this._busy && this.adaptiveResolution && this._frameTime > 0 && this.samples > 0) {
+  private _adaptResolution(surfaceOnly = false) {
+    if (!this._busy && this.adaptiveResolution && this._frameTime > 0 && (surfaceOnly ? this.aovSamplesRendered > 0 : this.samples > 0)) {
       const {targetFrameMs, minScale} = this.adaptiveResolution;
       const start = this._frameStart, time = this._frameTime, scale = this._frameScale, maxScale = this._resolutionScale;
       const {width, height} = this._engine.display.canvas;
@@ -389,14 +466,18 @@ export default class Render {
     for (const cancel of this._adaptiveFrames) cancel();
     this._adaptiveFrames.clear(); this._adaptiveFastFrames = 0;
   }
-  /** Accumulates within this frame's budget. Rejects calls during converge or after disposal. */
-  refine(): RenderStatus {
+  /** Accumulates within this frame's budget. Default undefined traces beauty and requested AOVs. Pass an enabled AOV kind to refine surface outputs only, without beauty or denoising; progress is aovSamplesRendered. Options default to this render's execution settings. Rejects calls during converge or after disposal. */
+  refine(channel?: AovKind, options?: RefineOptions): RenderStatus {
     if (this._busy) throw new Error('Cannot refine a render while converge is running.');
     if (this._disposed) throw new Error('Render is disposed.');
     this._engine._setRenderError();
-    try { return this._refine(); }
+    const previous = this._refineOptions; this._refineOptions = options;
+    try {
+      if (options?.targetBatchTimeMs !== undefined && (!Number.isFinite(options.targetBatchTimeMs) || options.targetBatchTimeMs <= 0)) throw new RangeError('targetBatchTimeMs must be positive and finite.');
+      return channel === undefined ? this._refine() : this._refineAov(channel);
+    }
     catch (error) { this._engine._setRenderError(this._engine._notifyError(error)); return this._status = 'error'; }
-    finally { this._engine._reportShaderProgress(); }
+    finally { this._refineOptions = previous; this._engine._reportShaderProgress(); }
   }
   private _refine(): RenderStatus {
     if (this._engine._initializationError) throw this._engine._initializationError;
@@ -418,6 +499,8 @@ export default class Render {
     const limit = this._nextSampleTarget();
     if (this.samples < limit) {
       if (this._trace(target, limit)) return this._status = 'compiling';
+    } else if (target.refineAovs && !target.refineAovs(this._engine._inputs.value!)) {
+      return this._status = 'compiling';
     }
     this._maybeDenoise(false, limit);
     if (this._denoisePending) return this._status = this.converged ? 'denoising' : 'converging';
@@ -440,7 +523,11 @@ export default class Render {
     if (this._schedule() === 'every-sample') return Math.min(this.maxSamples, this.samples + 1);
     if (this._schedule() === 'converged') return this.maxSamples;
     if (this._denoisedSamples === 0) return 1;
-    if (performance.now() - this._lastDenoiseTime >= 10000) return Math.min(this.maxSamples, this.samples + 1);
+    const sinceUpdate = performance.now() - this._lastDenoiseTime;
+    if (sinceUpdate >= 10000) return Math.min(this.maxSamples, this.samples + 1);
+    // Batched sampling doubles the count within a few frames. Without a floor,
+    // most filtering would go to images replaced almost at once.
+    if (sinceUpdate < 500) return this.maxSamples;
     return Math.min(this.maxSamples, Math.max(4, this._denoisedSamples * 2));
   }
   /** Reloads a filter dropped by device recovery; failures report through engine errors. */
@@ -462,7 +549,7 @@ export default class Render {
       await this._engine.init();
       if (this._engine.backend !== 'webgpu') { if (revision === this._filterRevision && !this._warnedWebGPUFilter) { this._warnedWebGPUFilter = true; console.warn('This denoiser requires WebGPU; denoising is disabled for this render.'); } return; }
       if (revision !== this._filterRevision || this._disposed) return;
-      if (options.type === 'custom') { this._filter = {kind: 'custom', denoiser: options.denoiser}; return; }
+      if (options.type === 'custom') { this._filter = {kind: 'custom', denoiser: options.denoiser, aovs: options.aovs}; return; }
       const {loadOIDNNetwork} = await loadOIDN();
       const filter = await this._engine._acquireDenoiser(key as string, async () => ({kind: 'oidn', denoiser: await loadOIDNNetwork(this._engine, options)}));
       if (revision !== this._filterRevision || this._disposed) { this._engine._releaseDenoiser(filter); return; }
@@ -532,20 +619,30 @@ export default class Render {
       }
     });
   }
-  /** Reads native RGBA float32, top row first. Default hdr. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
-  async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' = 'hdr') {
+  /** Reads native RGBA, top row first; id uses uint32, other kinds float32. Default hdr. Beauty/guide reads are empty until a beauty sample completes. AOV reads require explicit aovs enablement. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
+  readPixels(kind: 'id'): Promise<{width: number; height: number; data: Uint32Array}>;
+  readPixels(kind?: 'hdr' | 'denoised' | 'albedo' | 'normal' | Exclude<AovKind, 'id'>): Promise<{width: number; height: number; data: Float32Array}>;
+  readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' | AovKind): Promise<{width: number; height: number; data: Float32Array | Uint32Array}>;
+  async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' | AovKind = 'hdr'): Promise<{width: number; height: number; data: Float32Array | Uint32Array}> {
     if (this._disposed) throw new Error('Render is disposed.');
     const target = this._target;
-    if (!target) return {width: 0, height: 0, data: new Float32Array(0)};
+    if (['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'].includes(kind)) {
+      const aov = kind as AovKind;
+      aovMask(this.aovs);
+      if (!this.aovs.includes(aov)) throw new Error(`AOV ${aov} is not enabled`);
+      if (!target?.readAov) throw new Error('AOV output is not ready');
+      target.activate(); return target.readAov(aov);
+    }
+    if (!target || this.samples === 0) return {width: 0, height: 0, data: new Float32Array(0)};
     if (kind === 'denoised' && this._denoisedSamples === 0) {
       if (!this._warnedDenoisedReadback) { this._warnedDenoisedReadback = true; console.warn('Denoised output is not ready; reading HDR samples instead.'); }
       kind = 'hdr';
     }
-    target.activate(); return target.readOutput(kind);
+    target.activate(); return target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal');
   }
   /** Borrows a read-only WebGPU texture; undefined on WebGL or before a complete sample. Kind is required. HDR is native resolved linear ray color before denoising/display composition, with DenoiseInput.color normalization and coverage. Display is the latest compose, including filters and display passes. Valid only until this render's next refine/converge, display present/setSize, restart/dispose or device loss; never retain, write or destroy it. */
   getOutputTexture(kind: 'hdr' | 'display'): GPUTexture | undefined {
-    if (!this._complete || this._engine.backend !== 'webgpu') return;
+    if (this._engine.backend !== 'webgpu' || (kind === 'hdr' ? !this._complete : !this._current || !this._target?.presentationComplete || (!this._complete && !this._target.getAovSamples?.()))) return;
     return this._target?.getOutputTexture?.(kind);
   }
   /** Discards only this render's accumulation and pending denoising. */
@@ -597,7 +694,7 @@ export default class Render {
       this._reloadDenoiser(); await this._engine._awaitDevice(Promise.resolve(this._filterPending)); check();
       const stage = async (cap: number, name: 'pilot' | 'final', offset: number) => {
         check(); this._cancelDenoise(); target!.activate(); target!.restartSamples();
-        target!.configure({...this._settings(cap), allowMultipleSamplesPerFrame: true});
+        target!.configure({...this._settings(cap), batchSamples: true});
         let batch = options.targetBatchTimeMs && this._engine.device ? 1 : Math.min(batchLimit, cap);
         let previous = -1, lastPreview = performance.now(); const started = performance.now();
         for (;;) {

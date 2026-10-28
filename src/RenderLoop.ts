@@ -4,7 +4,7 @@ import type Display from './Display.js';
 import Render, { type RenderOptions, type RenderStatus, type ConvergeOptions, type ConvergeResult, type SampleEvent } from './Render.js';
 import type Sync from './Sync.js';
 import { Events } from './util/events.js';
-import { updateProgressiveState, loopImageState, type ProgressiveState } from './renderer/progressiveScheduler.js';
+import { aovChannel, updateProgressiveState, loopImageState, type ProgressiveState } from './renderer/progressiveScheduler.js';
 
 /** Presentation state; preview images never count as final completion. */
 export type RenderLoopStatus = RenderStatus | 'previewing';
@@ -40,11 +40,14 @@ export default class RenderLoop {
   private _busy = false;
   private _disposed = false;
   private _cancelScheduled?: () => void;
+  private _refillGeneration = 0;
+  private _cancelRefillFrame?: () => void;
   private _warnedTick = false;
   /** Render whose next presentation is waiting for a complete preview frame. */
   private _previewFrameOwner?: Render;
   private _presented?: Render;
   private _finishedImage?: string;
+  private _motion?: {render: Render; phase: 'moving' | 'priming' | 'settling' | 'settled'};
   private _unsubscribe: () => void;
   constructor(readonly engine: Engine, options: RenderLoopOptions = {}) {
     // Validate foreign objects before allocating owned resources.
@@ -77,7 +80,7 @@ export default class RenderLoop {
   private _checkEngine(engine: Engine): void { if (engine !== this.engine) throw new Error('RenderLoop renders and syncs must belong to the same engine.'); }
   private _assertAlive(): void { if (this._disposed) throw new Error('RenderLoop is disposed.'); }
   /** Whether an explicit integration or consecutive edits indicate motion. Default false. */ get changing(): boolean { return this._changing; }
-  /** Complete final samples; preview sampling is excluded. Default 0. */ get samples(): number { return this.status === 'previewing' ? 0 : this.final.samples; }
+  /** Complete final beauty samples; preview and AOV-only sampling are excluded. Default 0. */ get samples(): number { return this.status === 'previewing' ? 0 : this.final.samples; }
   /** Current presented/execution state. Default preparing. */ get status(): RenderLoopStatus { return this._status; }
   /** Subscribes to status transitions or complete final samples; returns unsubscribe. */
   on<K extends keyof LoopEvents>(event: K, listener: (value: LoopEvents[K]) => void): () => void { return this._events.on(event, listener); }
@@ -100,12 +103,20 @@ export default class RenderLoop {
     return this._tick();
   }
   private _tick(): RenderLoopStatus {
+    this._cancelRefill();
+    const refillGeneration = this._refillGeneration;
     if (this._busy || (typeof document !== 'undefined' && document.hidden)) return this.status;
     for (const sync of this._syncs) sync.update();
+    const aov = aovChannel(this.display.channel);
+    const refine = (render: Render) => render.refine(aov, {
+      batchSamples: render.batchSamples && !this.changing && render !== this.preview,
+      targetBatchTimeMs: 4,
+    });
+    const samples = (render: Render) => aov ? render.aovSamplesRendered : render.samples;
     const owner = this._previewFrameOwner;
-    const pendingPreview = !!owner && (owner === this.preview || !owner._complete);
-    const tracingPreview = pendingPreview && this.preview?.status === 'converging' && this.preview.samples === 0;
-    const holding = tracingPreview || (this.coalesceSceneUpdates && pendingPreview && !!this.preview?.denoising);
+    const pendingPreview = !!owner && (owner === this.preview || !owner._completeFor(this.display.channel));
+    const tracingPreview = pendingPreview && this.preview?.status === 'converging' && samples(this.preview) === 0;
+    const holding = tracingPreview || (!aov && this.coalesceSceneUpdates && pendingPreview && !!this.preview?.denoising);
     // Inference belongs to a presentation, not merely to a background render.
     // A fallback result must never replace an already available final image.
     if (pendingPreview && !holding && this.preview) this._present(this.preview);
@@ -119,45 +130,97 @@ export default class RenderLoop {
       // Finish this image against its committed camera while syncs collect the
       // latest input. Restarting its first tile on every edit starves presentation.
       if (tracingPreview) {
-        const status = this.preview.refine();
+        const status = refine(this.preview);
         if (status === 'error') { this._previewFrameOwner = undefined; return this._setStatus('error'); }
         if ((!this.coalesceSceneUpdates || !this.preview.denoising) && this._present(this.preview)) this._previewFrameOwner = undefined;
       }
       return this._setStatus('previewing');
     }
     const current = selected === 'preview' && this.preview ? this.preview : this.final;
+    const idle = !changed && !this.changing;
+    if (aov !== 'motion') this._motion = undefined;
+    else if (this._motion?.render !== current) {
+      // Targets have independent histories. Prime every target switch, even
+      // when a final small camera edit coincides with leaving preview.
+      this._motion = {render: current, phase: this._motion ? 'priming' : 'moving'};
+    } else if ((!idle && this._motion.phase !== 'priming') || (!current._completeFor('motion') && this._motion.phase === 'settled')) {
+      this._motion.phase = 'moving';
+    }
+    const motion = this._motion;
     const imageState = loopImageState(this.final, this.display);
-    if (!changed && !this.changing && current === this.final && this.status === 'finished' && this.final.status === 'finished' && imageState === this._finishedImage) return this.status;
+    if (idle && current === this.final && this.status === 'finished' && this.final.status === 'finished' && imageState === this._finishedImage && (!motion || motion.phase === 'settled')) return this.status;
     // Invalidate a completed filter before refinement when display settings changed.
     if (this.status === 'finished' && imageState !== this._finishedImage && this.final.samples > 0) this._present(this.final);
-    const status = current.refine();
+    // Motion describes successive images. One unchanged image retires the last
+    // displacement; afterwards leave the finished target idle as usual.
+    if (motion?.phase === 'moving' && idle && current._completeFor('motion')) {
+      current._restartAovs(); motion.phase = 'settling';
+    }
+    let status = refine(current);
+    if (motion?.phase === 'priming' && status === 'finished') {
+      current._restartAovs(); motion.phase = 'settling'; status = refine(current);
+    }
+    if (motion?.phase === 'settling' && status === 'finished') motion.phase = 'settled';
     // Keep the canvas on the last completed image while filtering the next
     // preview; presenting its raw sample here would overwrite the denoise above.
-    const waitingForPreview = !!this.preview && ((current === this.preview && status === 'converging' && current.samples === 0) || (this.coalesceSceneUpdates && this.preview.denoising)) &&
-      (current === this.preview || (!current._complete && current.fallback === this.preview));
+    const waitingForPreview = !!this.preview && ((current === this.preview && status === 'converging' && samples(current) === 0) || (!aov && this.coalesceSceneUpdates && this.preview.denoising)) &&
+      (current === this.preview || (!current._completeFor(this.display.channel) && current.fallback === this.preview));
     if (waitingForPreview) this._previewFrameOwner = current;
     else this._present(current);
     // Execution may already be tracing final tiles while the canvas still shows
     // preview. Only a successful presentation transfers ownership of the image.
-    const previewing = waitingForPreview || (current === this.preview && current.denoising) || (!!this.preview && this._presented === this.preview);
+    const previewing = waitingForPreview || (!aov && current === this.preview && current.denoising) || (!!this.preview && this._presented === this.preview);
     const next = status === 'error' ? 'error' : previewing ? 'previewing' : status;
     this._finishedImage = next === 'finished' ? loopImageState(this.final, this.display) : undefined;
+    if (refillGeneration === this._refillGeneration && !aov && idle && current === this.final && !previewing) this._scheduleRefill();
     return this._setStatus(next);
+  }
+  private _cancelRefill(): void {
+    this._refillGeneration++;
+    this._cancelRefillFrame?.(); this._cancelRefillFrame = undefined;
+  }
+  private _scheduleRefill(): void {
+    const device = this.engine.device;
+    if (!device || !this._canRefill()) return;
+    const generation = this._refillGeneration;
+    // A manual tick grants work only until the next display frame. If the host
+    // stops ticking (pause/export), it cannot leave a background render running.
+    this._cancelRefillFrame = scheduleFrame(() => this._cancelRefill());
+    const refill = () => {
+      if (generation !== this._refillGeneration || device !== this.engine.device ||
+        this._disposed || this._busy || (typeof document !== 'undefined' && document.hidden) ||
+        aovChannel(this.display.channel) ||
+        !this._canRefill() || [...this._syncs].some(sync => sync.active) ||
+        this.select({changing: false}) !== 'final') return;
+      const before = this.final.samples;
+      const status = this.final.refine(undefined, {targetBatchTimeMs: 4, deferResolve: true});
+      if (status === 'error') {this._cancelRefill(); this._setStatus('error'); return;}
+      if (this.final.samples > before && status === 'converging') wait();
+    };
+    const wait = () => {void this.final.whenReadyToRefine().then(refill, () => {});};
+    // Keep only a short chunk ahead of input. GPU completion, rather than the
+    // display refresh rate, paces the next chunk; presentation stays on rAF.
+    wait();
+  }
+  private _canRefill(): boolean {
+    const time = this.final.gpuSampleTimeMs;
+    return this.final.batchSamples && !this.final.denoising && this.final.samples > 0 &&
+      this.final.status === 'converging' && time !== undefined && time <= this.final.timeBudgetMs;
   }
   private _schedule(): void {
     if (!this._running || this._busy || this._cancelScheduled !== undefined || (typeof document !== 'undefined' && document.hidden)) return;
     this._cancelScheduled = scheduleFrame(() => { this._cancelScheduled = undefined; try {this._tick();} finally {this._schedule();} });
   }
   private _visibility = (): void => {
-    if (document.hidden) this._cancelFrame(); else this._schedule();
+    if (document.hidden) {this._cancelFrame(); this._cancelRefill();} else this._schedule();
   };
   private _cancelFrame(): void { this._cancelScheduled?.(); this._cancelScheduled = undefined; }
   /** Starts an idempotent loop; uses a 16 ms timer without rAF. Hidden pages pause automatically. */ start(): void { this._assertAlive(); this._running = true; this._schedule(); }
-  /** Stops scheduling without discarding accumulated images. */ stop(): void { this._running = false; this._cancelFrame(); }
+  /** Stops scheduling without discarding accumulated images. */ stop(): void { this._running = false; this._cancelFrame(); this._cancelRefill(); }
   /** Pauses ticks, converges final, presents it, and resumes a previously running loop. */
   async converge(options: ConvergeOptions): Promise<ConvergeResult> {
     this._assertAlive(); if (this._busy) throw new Error('RenderLoop convergence is already running.');
-    this._busy = true; this._previewFrameOwner = undefined; this._cancelFrame();
+    this._busy = true; this._previewFrameOwner = undefined; this._cancelFrame(); this._cancelRefill();
     try {
       for (const sync of this._syncs) sync.update(); this.engine.update();
       this._setStatus('preparing');

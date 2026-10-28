@@ -13,7 +13,8 @@ it('uses identity defaults and packs yaw and intensity independently of pixels',
   const transform=backgroundMapTransform(bg);
   expect(transform[0]).toBeCloseTo(0); expect(transform[1]).toBe(1); expect(transform[2]).toBe(2);
   expect(generateBackgroundMapFromSceneBackground(bg)).toBe(image);
-  expect(Array.from(image!.data)).toEqual([2,1,.5,.75]);
+  if (!image || 'sky' in image) throw new Error('Expected CPU pixels');
+  expect(Array.from(image.data)).toEqual([2,1,.5,.75]);
   bg.map.markUpdated(); expect(generateBackgroundMapFromSceneBackground(bg)).not.toBe(image);
 });
 

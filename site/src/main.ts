@@ -85,6 +85,34 @@ for (const id of ['pick-files', 'pick-folder']) {
 }
 
 const cards = document.getElementById('cards')!;
+const researchCards = document.getElementById('research-cards')!;
+const examples = document.querySelector<HTMLElement>('.examples')!;
+const collectionTabs = Array.from(examples.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+for (const tab of collectionTabs) {
+  tab.addEventListener('click', () => {
+    for (const candidate of collectionTabs) {
+      const selected = candidate === tab;
+      candidate.setAttribute('aria-selected', String(selected));
+      candidate.tabIndex = selected ? 0 : -1;
+      document.getElementById(candidate.getAttribute('aria-controls')!)!.hidden = !selected;
+    }
+  });
+  tab.addEventListener('keydown', (event) => {
+    const index = collectionTabs.indexOf(tab);
+    let next: number;
+    switch (event.key) {
+      case 'ArrowRight': next = (index + 1) % collectionTabs.length; break;
+      case 'ArrowLeft': next = (index - 1 + collectionTabs.length) % collectionTabs.length; break;
+      case 'Home': next = 0; break;
+      case 'End': next = collectionTabs.length - 1; break;
+      default: return;
+    }
+    event.preventDefault();
+    collectionTabs[next].focus();
+    collectionTabs[next].click();
+  });
+}
+
 for (const preset of MODEL_PRESETS) {
   if (preset.id === 'spheres') continue;
   const li = document.createElement('li');
@@ -142,14 +170,14 @@ for (const preset of MODEL_PRESETS) {
     }
     li.append(credits);
   }
-  cards.append(li);
+  (preset.category === 'research' ? researchCards : cards).append(li);
 }
 
 // Tilt the hovered card toward the pointer; CSS applies it only for hover-capable,
 // motion-tolerant users.
 const tiltQuery = matchMedia('(hover: hover) and (prefers-reduced-motion: no-preference)');
 const MAX_TILT_DEG = 8;
-cards.addEventListener('pointermove', (event) => {
+examples.addEventListener('pointermove', (event) => {
   const card = (event.target as Element).closest<HTMLElement>('.card');
   if (!card || !tiltQuery.matches || event.pointerType !== 'mouse') return;
   const rect = card.getBoundingClientRect();
@@ -162,7 +190,7 @@ cards.addEventListener('pointermove', (event) => {
   card.style.setProperty('--px', ((x - 0.5) * 2).toFixed(3));
   card.style.setProperty('--py', ((y - 0.5) * 2).toFixed(3));
 });
-cards.addEventListener('pointerout', (event) => {
+examples.addEventListener('pointerout', (event) => {
   const card = (event.target as Element).closest<HTMLElement>('.card');
   if (!card || card.contains(event.relatedTarget as Node | null)) return;
   card.classList.remove('is-tilting');

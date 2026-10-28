@@ -20,7 +20,7 @@ vi.mock('../src/engine/environment', async (importOriginal) => ({
 }));
 import { ViewerEngine } from '../src/engine/ViewerEngine';
 import { Environment, loadHDR, type EquirectData } from '../src/engine/environment';
-import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../src/store';
+import { DEFAULT_SETTINGS, VIEWER_AOVS, setSettings, useViewer, type Settings } from '../src/store';
 
 // Exercise the real load/setModel/resetView path; replace GPU synchronization
 // and persistence with inert boundaries so these tests run without a device.
@@ -60,6 +60,21 @@ function model(count: number): LoadedModel {
 
 beforeEach(() => {
   useViewer.setState({ settings: { ...DEFAULT_SETTINGS }, toast: null, cameras: [] });
+});
+
+describe('AOV preview settings', () => {
+  it.each(['final', 'normal', 'albedo', 'shadow', 'shadowCatcher', ...VIEWER_AOVS] as const)(
+    'only requests the visible %s channel on both renders', output => {
+      const viewer = engine();
+      const final = { aovs: [] }, preview = { aovs: [] };
+      Object.assign(viewer, { engine: { display: {} }, final, preview });
+      const apply = viewer as unknown as { applySettings(s: Settings, previous: Settings): void };
+      const settings = { ...DEFAULT_SETTINGS, output };
+      apply.applySettings(settings, settings);
+      expect(final.aovs).toEqual(VIEWER_AOVS.filter(kind => kind === output));
+      expect(preview.aovs).toEqual(VIEWER_AOVS.filter(kind => kind === output));
+    }
+  );
 });
 
 describe('imported camera choice', () => {
@@ -137,6 +152,7 @@ describe('imported camera choice', () => {
     const viewer = engine(), data = model(2);
     data.root.children[1].name = data.root.children[2].name = 'Duplicate';
     await viewer.loadModel(data);
+    expect(useViewer.getState().settings.groundShadow).toBe(true);
     viewer.applyModelCamera(data.root.children[2].uuid);
     expect(useViewer.getState().settings.cameraIndex).toBe(1);
     expect(useViewer.getState().toast).toBeNull();
@@ -254,8 +270,11 @@ describe('imported camera choice', () => {
     };
     await viewer.load(data.name, async () => data, saved.meta, cached ? saved : undefined);
     expect(useViewer.getState().settings.cameraIndex).toBe(0);
+    expect(useViewer.getState().settings.groundShadow).toBe(false);
     expect(useViewer.getState().cameras).toEqual(['View 1', 'View 2']);
     expect(useViewer.getState().toast).toBeNull();
+    setSettings({ groundShadow: true });
+    expect(useViewer.getState().settings.groundShadow).toBe(true);
   });
 
   it.each([-1, 1])('preserves a restored research-scene camera choice (%s)', async (cameraIndex) => {
@@ -269,6 +288,7 @@ describe('imported camera choice', () => {
     });
     await viewer.load(data.name, async () => data, saved.meta, saved);
     expect(useViewer.getState().settings.cameraIndex).toBe(cameraIndex);
+    expect(useViewer.getState().settings.groundShadow).toBe(false);
     expect(useViewer.getState().toast).toBeNull();
   });
 
@@ -277,6 +297,7 @@ describe('imported camera choice', () => {
     await viewer.load(data.name, async () => data,
       { name: data.name, presetId: 'research-cornell-box', credit: null, sourceUrl: null });
     expect(useViewer.getState().settings.cameraIndex).toBe(-1);
+    expect(useViewer.getState().settings.groundShadow).toBe(false);
     expect(useViewer.getState().toast).toBeNull();
   });
 });

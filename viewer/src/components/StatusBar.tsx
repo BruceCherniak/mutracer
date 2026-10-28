@@ -1,6 +1,6 @@
 import { Button, Dialog, DialogTrigger, Heading, Popover } from 'react-aria-components';
 import { Check, Pause, Play, SlidersHorizontal, X } from 'lucide-react';
-import { setSettings, useViewer, type RenderPhase } from '../store';
+import { VIEWER_AOVS, setSettings, useViewer, type RenderPhase } from '../store';
 import { Field, Select, Switch } from './ui/controls';
 import { ViewControls } from './ViewControls';
 
@@ -59,9 +59,11 @@ export function StatusBar() {
   const playing = useViewer((s) => s.animation?.playing ?? false);
   const { phase, samples, elapsed, msPerSample, width, height } = stats;
   const { maxSamples, resolutionScale } = settings;
-  const progress = Math.min(1, samples / maxSamples);
+  const sampleTarget = settings.output === 'id' || settings.output === 'motion' ? 1
+    : VIEWER_AOVS.some(kind => kind === settings.output) ? Math.min(maxSamples, 16) : maxSamples;
+  const progress = Math.min(1, samples / sampleTarget);
   const done = phase === 'finished' || phase === 'paused';
-  const remaining = phase === 'converging' && samples > 4 ? ((maxSamples - samples) * msPerSample) / 1000 : 0;
+  const remaining = phase === 'converging' && samples > 4 ? ((sampleTarget - samples) * msPerSample) / 1000 : 0;
   const time = done ? formatTime(elapsed) : remaining > 0.5 ? `~${formatTime(remaining)}` : '';
   const sampleOptions = [...new Set([...SAMPLE_STEPS, maxSamples])].sort((a, b) => a - b);
   const resolutionOptions = [...new Set([...RESOLUTION_STEPS, resolutionScale])].sort((a, b) => a - b);

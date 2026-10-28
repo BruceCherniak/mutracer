@@ -1,5 +1,6 @@
+import {matrixStorage} from '../math/storage.js';
 import { meshInstanceCount, meshInstanceTransform } from './meshInstances.js';
-import { writeMaterialIndices } from './materialIndices.js';
+import { mergeGeometry, computeGeometryNormals } from './scenePreparation.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -18,9 +19,6 @@ export interface InternalMergedMesh {
 }
 
 export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
-  let vertexCount = 0;
-  let indexCount = 0;
-
   const geometryAndMaterialIndex = [];
   const materialIndexMap = new Map<string, number>();
   const materials: OpenPBRMaterial[] = [];
@@ -28,15 +26,11 @@ export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
   resetMaterialTextureId();
 
   for (const mesh of meshes) {
+    const parent = matrixStorage(mesh.transform);
     for (let instance = 0; instance < meshInstanceCount(mesh); instance++) {
       let geometry = mesh.geometry;
 
-      const index = geometry.indices;
-      if (!index) {
-        addFlatGeometryIndices(geometry);
-      }
-
-      geometry = transformGeometry(geometry, meshInstanceTransform(mesh, instance, Array(16).fill(0)));
+      geometry = transformGeometry(geometry, meshInstanceTransform(mesh, instance, new Float64Array(16), parent));
 
       if (!geometry.normal) {
         computeGeometryNormals(geometry);
@@ -50,9 +44,6 @@ export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
           undefined
         );
       }
-
-      vertexCount += Attribute.getCount(geometry.position);
-      indexCount += Attribute.getCount(geometry.indices);
 
       const materialIndices = mesh.materials.map((material) => {
         const key = getMaterialHashKey(material);
@@ -73,9 +64,10 @@ export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
   }
 
   const geometry = mergeGeometry(
-    geometryAndMaterialIndex,
-    vertexCount,
-    indexCount
+    geometryAndMaterialIndex.map(({geometry}) => geometry),
+    geometryAndMaterialIndex.map(({materialIndex}) => materialIndex),
+    new Map(),
+    true
   );
 
   return {
@@ -83,147 +75,6 @@ export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
     // TODO compress materials. Reuse materials with same props.
     materials
   };
-}
-
-function mergeGeometry(
-  geometryAndMaterialIndex: {
-    geometry: Geometry;
-    materialIndex: number[];
-  }[],
-  totalVertexCount: number,
-  totalIndexCount: number
-) {
-  const positionAttrib = new Attribute(
-    new Float32Array(3 * totalVertexCount),
-    3
-  );
-  const normalAttrib = new Attribute(new Float32Array(3 * totalVertexCount), 3);
-  const uvAttrib = new Attribute(new Float32Array(2 * totalVertexCount), 2);
-  const uv1Attrib = new Attribute(new Float32Array(2 * totalVertexCount), 2);
-  const indexAttrib = new Attribute(new Uint32Array(totalIndexCount), 1);
-
-  const materialIndexAttrib = new Attribute(
-    new Int32Array(4 * totalVertexCount),
-    4
-  );
-
-  const mergedGeometry = new Geometry({
-    position: positionAttrib,
-    normal: normalAttrib,
-    uv: uvAttrib,
-    uv1: uv1Attrib,
-    materialIndex: materialIndexAttrib,
-    // color: colorAttrib,
-    indices: indexAttrib
-  });
-
-  let currentVertex = 0;
-  let currentIndex = 0;
-  let currentMesh = 1;
-
-  for (const { geometry } of geometryAndMaterialIndex) {
-    if (geometry.color) {
-      mergedGeometry.color = new Attribute(
-        new Float32Array(3 * totalVertexCount),
-        3
-      );
-      break;
-    }
-    if (geometry.tangent) {
-      mergedGeometry.tangent = new Attribute(
-        new Float32Array(3 * totalVertexCount),
-        3
-      );
-      break;
-    }
-  }
-
-  for (const {
-    geometry,
-    materialIndex: globalMaterialIndex
-  } of geometryAndMaterialIndex) {
-    const vertexCount = Attribute.getCount(geometry.position);
-
-    (['position', 'normal', 'uv'] as const).forEach((attr) => {
-      if (!geometry[attr]) {
-        if (attr == 'normal' || attr === 'position') {
-          console.error(
-            'Geometry must have at least position and normal attributes.'
-          );
-        }
-        return;
-      }
-      mergedGeometry[attr]!.array.set(
-        geometry[attr]!.array,
-        currentVertex * geometry[attr]!.itemSize
-      );
-    });
-
-    uv1Attrib.array.set(
-      (geometry.uv1 ?? geometry.uv)?.array ?? new Float32Array(vertexCount * 2),
-      currentVertex * 2
-    );
-
-    if (mergedGeometry.color) {
-      const itemSize = 3;
-      if (geometry.color) {
-        mergedGeometry.color.array.set(
-          geometry.color.array,
-          currentVertex * itemSize
-        );
-      } else {
-        // Set to white
-        for (let i = 0; i < vertexCount * itemSize; i++) {
-          mergedGeometry.color.array[currentVertex * itemSize + i] = 1;
-        }
-      }
-    }
-    if (mergedGeometry.tangent) {
-      const itemSize = 3;
-      if (geometry.tangent) {
-        mergedGeometry.tangent.array.set(
-          geometry.tangent.array,
-          currentVertex * itemSize
-        );
-      } else {
-        for (let i = 0; i < vertexCount * itemSize; i++) {
-          mergedGeometry.tangent.array[currentVertex * itemSize + i] = 0;
-        }
-      }
-    }
-
-    const meshIndices = geometry.indices.array;
-    for (let i = 0; i < meshIndices.length; i++) {
-      indexAttrib.array[currentIndex + i] = currentVertex + meshIndices[i];
-    }
-
-    writeMaterialIndices(geometry, globalMaterialIndex, materialIndexAttrib.array, currentVertex, true);
-
-    currentVertex += vertexCount;
-    currentIndex += meshIndices.length;
-    currentMesh++;
-  }
-
-  return mergedGeometry;
-}
-
-function addFlatGeometryIndices(geometry: Geometry) {
-  const position = geometry.position;
-
-  if (!position) {
-    console.warn('No position attribute');
-    return;
-  }
-
-  const index = new Uint32Array(Attribute.getCount(position));
-
-  for (let i = 0; i < index.length; i++) {
-    index[i] = i;
-  }
-
-  geometry.indices = new Attribute(index, 1);
-
-  return geometry;
 }
 
 function transformGeometry(geometry: Geometry, matrix: mat4.Mat4Array) {
@@ -235,7 +86,7 @@ function transformGeometry(geometry: Geometry, matrix: mat4.Mat4Array) {
     color: geometry.color && geometry.color.array,
     tangent: geometry.tangent && geometry.tangent.array,
     materialIndex: geometry.materialIndex && geometry.materialIndex.array,
-    indices: geometry.indices.array
+    indices: geometry.indexArray
   };
   const newGeometry = new Geometry({
     position: new Attribute(
@@ -298,73 +149,4 @@ function transformGeometry(geometry: Geometry, matrix: mat4.Mat4Array) {
     // vec3.forEach(newGeometry.tangent.array, 3, 0, undefined, vec3.normalize);
   }
   return newGeometry;
-}
-
-function computeGeometryNormals(geometry: Geometry) {
-  const indices = geometry.indices;
-  const positions = geometry.position.array;
-  geometry.normal = new Attribute(new Float32Array(positions.length), 3);
-  const normals = geometry.normal.array;
-
-  const p1 = vec3.create();
-  const p2 = vec3.create();
-  const p3 = vec3.create();
-
-  const v21 = vec3.create();
-  const v32 = vec3.create();
-
-  const n = vec3.create();
-
-  const len = indices
-    ? indices.array.length
-    : geometry.vertexCount;
-  let i1, i2, i3;
-  for (let f = 0; f < len; ) {
-    if (indices) {
-      i1 = indices.array[f++];
-      i2 = indices.array[f++];
-      i3 = indices.array[f++];
-    } else {
-      i1 = f++;
-      i2 = f++;
-      i3 = f++;
-    }
-
-    vec3.set(
-      p1,
-      positions[i1 * 3],
-      positions[i1 * 3 + 1],
-      positions[i1 * 3 + 2]
-    );
-    vec3.set(
-      p2,
-      positions[i2 * 3],
-      positions[i2 * 3 + 1],
-      positions[i2 * 3 + 2]
-    );
-    vec3.set(
-      p3,
-      positions[i3 * 3],
-      positions[i3 * 3 + 1],
-      positions[i3 * 3 + 2]
-    );
-
-    vec3.sub(v21, p1, p2);
-    vec3.sub(v32, p2, p3);
-    vec3.cross(n, v21, v32);
-    // Already be weighted by the triangle area
-    for (let i = 0; i < 3; i++) {
-      normals[i1 * 3 + i] = normals[i1 * 3 + i] + n[i];
-      normals[i2 * 3 + i] = normals[i2 * 3 + i] + n[i];
-      normals[i3 * 3 + i] = normals[i3 * 3 + i] + n[i];
-    }
-  }
-
-  for (let i = 0; i < normals.length; ) {
-    vec3.set(n, normals[i], normals[i + 1], normals[i + 2]);
-    vec3.normalize(n, n);
-    normals[i++] = n[0];
-    normals[i++] = n[1];
-    normals[i++] = n[2];
-  }
 }

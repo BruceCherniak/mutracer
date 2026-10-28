@@ -1,7 +1,21 @@
+import {AovPrimitiveCache} from './AovPrimitiveCache.js';
+import {WGPUAov} from './WGPUAov.js';
+import {packAovScene} from './aovScene.js';
+import {aovMask, type AovKind} from './aov.js';
+import { proceduralEnvironmentPower } from './proceduralEnvironmentPower.js';
+import { WGPUSkyBaker } from './WGPUSkyBaker.js';
+import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, traceSampling, writeTraceSampling} from './sceneAssembly.js';
+import {rayTraceBindGroupLayouts} from './sceneLayoutSchema.js';
+import {WGPUBindlessMaterialData} from './WGPUBindlessMaterialData.js';
+import {WGPUBindlessTextures} from './WGPUBindlessTextures.js';
+import {bindlessBindGroupLayouts, bindlessShaderSource} from './wgpuBindlessSource.js';
+import {bindlessLimitReason, resourceTableLayout, setResourceTable, type MaterialTextureSelection} from './wgpuBindless.js';
+import { wgpuMaterialConstants } from './wgpuMaterialConstants.js';
+import { wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS } from './wgpuShaderSource.js';
+import { makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES } from './wgpuSceneUniform.js';
 import { constants } from './webgl.js';
-import { MATERIAL_FLOAT_COUNT } from './materialLayout.js';
+import { MATERIAL_FLOAT_COUNT } from './materialLayoutSchema.js';
 import { normalizeBounces } from './pathLimits.js';
-import { MATERIAL_TEXTURE_DEFINES, materialTextureFeatures } from './materialTextureSlots.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
 import { updateTLASInstanceColors } from './bvhAccel.js';
 import { getMaterialHashKey } from '../scene/openPbrSchema.js';
@@ -9,46 +23,42 @@ import { sameInstanceMembership } from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
 import { cameraApertureRadius } from './cameraLens.js';
-import { getRectLightUOrV, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getLightDirection, getRigidLightFrame, validateSceneLights } from './lightsUtil.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
+import { packCameraUniform } from './cameraUniform.js';
 import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
-import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
+import type { SamplingPattern } from './sampling.js';
 import { DEPTH_SAMPLE_COUNT, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
 import { MeshMembershipCache } from './meshMembership.js';
 import { mergeRefitRanges } from './bvhAccel.js';
 import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates.js';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
+import { WGPUEnvMapDistribution } from './WGPUEnvMapDistribution.js';
 import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache.js';
-import { WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
-import { TexturePixelSource as TexturePixelSource, mat4 } from '../math.js';
+import { WGPUShaderCapabilities } from './WGPUShaderCapabilities.js';
+import { wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
+import {lightShaderCapabilities, retainedShaderCapabilities, type ShaderCapabilities} from './shaderCapabilities.js';
+import { mat4 } from '../math.js';
 import Mesh from '../scene/Mesh.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
 import MaterialTable, {
-  DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
-  materialUsesMedium
+  DEFAULT_MAX_TEXTURE_ARRAY_BYTES
 } from './MaterialTable.js';
-import { SceneBackground, SceneLight } from '../scene/Scene.js';
+import type { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { numberArraysEqual } from './util.js';
 import Camera from '../scene/Camera.js';
 import {
-  generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform
+  generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform, backgroundMapRotation
 } from './envMapCreation.js';
-import rayTraceCompute, { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
+import { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
 import Geometry from '../scene/Geometry.js';
-import {
-  CONSTANT_DIRECTIONAL_LIGHT,
-  CONSTANT_RECT_LIGHT,
-  CONSTANT_SPHERE_LIGHT,
-  CONSTANT_SPOT_LIGHT
-} from './lightsUtil.js';
 import {
   envMapDistribution,
   environmentMapSourcesMatch,
-  type EnvironmentMapSource
+  type EnvironmentSource
 } from './envMapDistribution.js';
 import {
   updateMeshInstances,
@@ -57,15 +67,13 @@ import {
 import {
   buildTLAS,
   concatBLASBuffers,
-  FlattendBVH,
+  type FlattendBVH,
   getTraversalStackSizes,
   refitBLAS,
   refitTLAS
 } from './bvhAccel.js';
 import { isTextureDataSource } from '../scene/Texture.js';
-import OpenPBRMaterial, {
-  resolveMaterialAlphaMode
-} from '../scene/OpenPBRMaterial.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import {
   DEFAULT_BEVEL_SAMPLES,
   DEFAULT_DIRECT_LIGHT_CANDIDATES,
@@ -75,20 +83,10 @@ import {
   type ShaderCompilationDiagnostics
 } from './RenderingPipeline.js';
 import {
-  buildLightAliasTable,
   EmissiveTriangleCache,
   LightChoiceBuffer,
-  EmissiveTriangle,
-  estimateAnalyticLightPower,
+  type EmissiveTriangle,
   estimateEnvironmentPower,
-  LIGHT_CHOICE_ANALYTIC,
-  LIGHT_CHOICE_EMISSIVE_TRIANGLE,
-  LIGHT_CHOICE_ENVIRONMENT,
-  LIGHT_DOMAIN_ENVIRONMENT,
-  LIGHT_DOMAIN_INFINITE,
-  LIGHT_DOMAIN_LOCAL_AND_EMISSIVE,
-  packEmissiveTriangles,
-  packIESProfiles
 } from './lightSampling.js';
 import {
   getOpenPbrEnergyLutData,
@@ -169,131 +167,14 @@ export function isWebGPUPipelineSpecializationFailure(...errors: unknown[]) {
 }
 
 /** CPU-side views over the `RayTraceUniform` WGSL struct. */
-export function makeRayTraceUniform() {
-  // Created from https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
-  const RayTraceUniformValues = new ArrayBuffer(256);
-  const RayTraceUniformViews = {
-    outputSize: new Float32Array(RayTraceUniformValues, 0, 2),
-    sampleCount: new Float32Array(RayTraceUniformValues, 8, 1),
-    scaleOffset: new Float32Array(RayTraceUniformValues, 16, 4),
-    lightsCount: new Int32Array(RayTraceUniformValues, 32, 1),
-    transmissiveOutputAlphaMin: new Float32Array(RayTraceUniformValues, 36, 1),
-    jitter: new Float32Array(RayTraceUniformValues, 40, 2),
-    backgroundColor: new Float32Array(RayTraceUniformValues, 48, 4),
-    groundedBackgroundParams: new Float32Array(RayTraceUniformValues, 64, 4),
-    groundedBackgroundCenter: new Float32Array(RayTraceUniformValues, 80, 2),
-    blasOffset: new Int32Array(RayTraceUniformValues, 88, 1),
-    isEmpty: new Int32Array(RayTraceUniformValues, 92, 1),
-    bevel: new Int32Array(RayTraceUniformValues, 96, 1),
-    dispersionWavelengths: new Int32Array(RayTraceUniformValues, 100, 1),
-    envLightPmf: new Float32Array(RayTraceUniformValues, 104, 1),
-    lightChoiceCount: new Int32Array(RayTraceUniformValues, 108, 1),
-    lightWeightTotal: new Float32Array(RayTraceUniformValues, 112, 1),
-    lightSamplingTextureWidth: new Int32Array(RayTraceUniformValues, 116, 1),
-    lightChoiceTexelOffset: new Int32Array(RayTraceUniformValues, 120, 1),
-    bounces: new Int32Array(RayTraceUniformValues, 124, 1),
-    varianceMoments: new Int32Array(RayTraceUniformValues, 128, 1),
-    adaptiveSampling: new Int32Array(RayTraceUniformValues, 132, 1),
-    clamping: new Float32Array(RayTraceUniformValues, 136, 1),
-    directLightCandidates: new Int32Array(RayTraceUniformValues, 140, 1),
-    backgroundFlags: new Int32Array(RayTraceUniformValues, 144, 1),
-    loopUnrollGuard: new Uint32Array(RayTraceUniformValues, 148, 1),
-    sceneFeatureFlags: new Uint32Array(RayTraceUniformValues, 152, 1),
-    sequenceSeed: new Uint32Array(RayTraceUniformValues, 156, 1),
-    zSobolLogSPP: new Uint32Array(RayTraceUniformValues, 160, 1),
-    sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1),
-    environmentRotation: new Float32Array(RayTraceUniformValues, 176, 16),
-    backgroundMapTransform: new Float32Array(RayTraceUniformValues, 240, 4)
-  };
-  // Fixed runtime trip bounds discourage thin-film loop unrolling. Keep 4 for
-  // 2 polarizations/substrates and 3 channels, independent of BSDF budgets.
-  RayTraceUniformViews.loopUnrollGuard[0] = 4;
-  RayTraceUniformViews.environmentRotation.set(environmentRotation([]));
-  RayTraceUniformViews.backgroundMapTransform.set(backgroundMapTransform());
-  RayTraceUniformViews.bevel[0] = 1;
-  RayTraceUniformViews.dispersionWavelengths[0] = 3;
-  return {
-    buffer: RayTraceUniformValues,
-    views: RayTraceUniformViews
-  };
-}
-export function packAnalyticsLightsToBuffer(
-  lights: AnalyticLight[],
-  texturesIndices: number[],
-  selectionPmfs: number[],
-  iesProfileTexelOffsets: ArrayLike<number> = []
-) {
-  validateSceneLights(lights);
-  const numLights = lights.length;
-  if (numLights > FIXED_LIGHT_COUNT) {
-    console.warn(
-      `Too many lights, only the first ${FIXED_LIGHT_COUNT} lights will be used.`
-    );
-  }
-  const data = new Float32Array(numLights * PIXELS_PER_LIGHT * 4);
-
-  function packVec3(idx: number, v: number[] | Float32Array) {
-    for (let i = 0; i < 3; i++) {
-      data[i + idx * 4] = v[i];
-    }
-  }
-
-  const lightTypeConstants = {
-    DirectionalLight: CONSTANT_DIRECTIONAL_LIGHT,
-    SphereLight: CONSTANT_SPHERE_LIGHT,
-    RectLight: CONSTANT_RECT_LIGHT,
-    SpotLight: CONSTANT_SPOT_LIGHT
-  };
-
-  for (let i = 0; i < numLights; i++) {
-    const light = lights[i];
-    const color = light.color;
-    const intensity = light.intensity;
-    const off = i * PIXELS_PER_LIGHT;
-    packVec3(
-      off,
-      light.position
-    );
-    data[off * 4 + 3] = lightTypeConstants[light.type];
-    // emission
-    const emissionScale =
-      light.type === 'SpotLight' ? getSpotLightRadiance(light) : intensity;
-    packVec3(off + 1, [
-      color[0] * emissionScale,
-      color[1] * emissionScale,
-      color[2] * emissionScale
-    ]);
-    if (light.type === 'RectLight') {
-      data[(off + 1) * 4 + 3] = getRectLightArea(light);
-      packVec3(off + 2, getRectLightUOrV(light, 0));
-      data[(off + 2) * 4 + 3] = light.spread;
-      packVec3(off + 3, getRectLightUOrV(light, 1));
-    } else if (light.type === 'SphereLight') {
-      data[(off + 1) * 4 + 3] = getSphereLightArea(light);
-      data[(off + 2) * 4 + 3] = light.radius;
-    } else if (light.type === 'SpotLight') {
-      data[(off + 1) * 4 + 3] = getSpotLightArea(light);
-      packVec3(off + 2, getLightDirection(light));
-      data[(off + 2) * 4 + 3] = light.radius;
-      packVec3(off + 3, [
-        Math.cos((light.outerAngle * Math.PI) / 180),
-        Math.cos((Math.min(light.innerAngle, light.outerAngle) * Math.PI) / 180),
-        0
-      ]);
-    } else if (light.type === 'DirectionalLight') {
-      packVec3(off + 2, getLightDirection(light));
-    }
-    data[(off + 3) * 4 + 3] = light.type === 'SpotLight'
-      ? iesProfileTexelOffsets[i] ?? -1
-      : texturesIndices[i] ?? -1;
-    data[(off + 4) * 4] = selectionPmfs[i] ?? 0;
-    packVec3(off + 5, getRigidLightFrame(light).x);
-  }
-
-  return data;
+export { makeRayTraceUniform } from './wgpuSceneUniform.js';
+export function packAnalyticsLightsToBuffer(lights: AnalyticLight[], texturesIndices: number[], selectionPmfs: number[],
+  iesProfileTexelOffsets: ArrayLike<number> = []) {
+  return packSceneAnalyticLights(lights, texturesIndices, selectionPmfs, i => iesProfileTexelOffsets[i]);
 }
 
 class WGPURayTracePass {
+  private _aovPrimitiveCache = new AovPrimitiveCache();
   private _device!: GPUDevice;
   private _rayTracePipeline?: GPUComputePipeline;
   private _targetAspect = 1;
@@ -307,7 +188,10 @@ class WGPURayTracePass {
   private _iesProfileTexelOffsets = new Int32Array(0);
   private _materialChanges = new MaterialChangeTracker();
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
-  private _materialData: MaterialTable | undefined;
+  private _materialData: MaterialTable | WGPUBindlessMaterialData | undefined;
+  private _bindless?: WGPUBindlessTextures;
+  private _retiredBindless = new Set<WGPUBindlessTextures>();
+  private _disposed = false;
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
   private _pendingGeometryUpdates = new Set<Geometry>();
   private _needsUpdateMeshData = true;
@@ -371,7 +255,7 @@ class WGPURayTracePass {
     const output = this._targetOutputs.get(target);
     [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer] = output?.buffers ?? [];
     if (output?.bindGroup && output.pipeline === this._rayTracePipeline && this._rayTraceBindGroups) {
-      this._rayTraceBindGroups[3] = output.bindGroup;
+      this._rayTraceBindGroups[this._bindless ? 2 : 3] = output.bindGroup;
     } else {
       this._needsUpdateBindGroups = true;
     }
@@ -407,6 +291,7 @@ class WGPURayTracePass {
   private _instancesBuffer?: GPUBuffer;
   private _emissiveCache = new EmissiveTriangleCache();
   private _lightChoices = new LightChoiceBuffer();
+  private _shadowCatcherLightChoices = new LightChoiceBuffer();
   private _lightSamplingData?: Float32Array;
   private _lightSamplingScratch?: Float32Array;
   private _lightSamplingTriangleCount = -1;
@@ -424,10 +309,12 @@ class WGPURayTracePass {
   private _mapsSampler: GPUSampler;
   private _maps?: GPUTexture;
 
-  private _envImageSource: EnvironmentMapSource | undefined;
+  private _envImageSource: EnvironmentSource | undefined;
   private _envTex?: GPUTexture;
   private _envDistributionTex?: GPUTexture;
-  private _backgroundImageSource: TexturePixelSource | undefined;
+  private _envDistribution?: WGPUEnvMapDistribution;
+  private _skyBaker?: WGPUSkyBaker;
+  private _backgroundImageSource: EnvironmentSource | undefined;
   private _backgroundTex?: GPUTexture;
 
   private _rayTracePipelineLayout?: GPUPipelineLayout;
@@ -439,15 +326,13 @@ class WGPURayTracePass {
   private _compiledHasAlpha = true;
   private _compiledSceneHasAlpha = true;
   private _alphaBlendStrategy: AlphaBlendStrategy = 'stochastic';
-  private _constants: Record<string, boolean | number> = {
-    USE_BACKGROUND: false,
-    USE_BACKGROUND_MAP: false,
-    USE_GROUNDED_BACKGROUND: false,
-    SAMPLING_PATTERN: 0,
-    BEVEL_SAMPLES: DEFAULT_BEVEL_SAMPLES
-  };
+  private _constants = initialSceneConstants();
+  private _retainedShaderCapabilities?: ShaderCapabilities;
+  private _retainedShaderStructure?: string;
+  private _shaderCapabilities = new WGPUShaderCapabilities();
   private _prevPipelineConstants: Record<string, boolean | number> = {};
   private _prevDefinesCode = '';
+  private _prevPipelineInputs?: string;
 
   private _hasTransmission = false;
   private _hasShadowCatcher = false;
@@ -468,6 +353,9 @@ class WGPURayTracePass {
   private _needsUpdateBindGroups = true;
 
   private _computeShaderModule?: GPUShaderModule;
+  private _aovPipelines = new WeakMap<GPUComputePipeline, Map<boolean, {
+    accumulation?: GPUComputePipeline; center?: GPUComputePipeline; error?: unknown;
+  }>>();
   private _depthCompute?: GPUProgrammableStage;
   private _depthTracePipeline?: GPUComputePipeline;
   private _depthPipeline?: Promise<GPUComputePipeline>;
@@ -483,9 +371,10 @@ class WGPURayTracePass {
 
 
 
-  constructor(device: GPUDevice) {
+  constructor(device: GPUDevice, private _textureSelection: MaterialTextureSelection = {requested: 'atlas'}) {
     this._device = device;
     this._shaderCache = new WGPUShaderCache(device);
+    if (_textureSelection.support) this._bindless = new WGPUBindlessTextures(device);
 
     this._uniforms = {
       cameraUniform: this._uniformBuffer(36 * 4),
@@ -794,143 +683,18 @@ class WGPURayTracePass {
   }
 
   private _createPipelineLayout() {
-    //Bind group layouts
-    const commonBufferLayoutEntries = Array.from(
-      { length: 4 },
-      (_, i) => ({
-        binding: i,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: {
-          type: 'read-only-storage' as const
-        }
-      }) satisfies GPUBindGroupLayoutEntry
-    );
-    const buffersBindGroupLayout = this._shaderCache.createBindGroupLayout({
-      label: 'Buffers',
-      entries: commonBufferLayoutEntries
-    });
-    const textureLayoutEntries: GPUBindGroupLayoutEntry[] = [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.COMPUTE,
-          sampler: {}
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d-array'
-          }
-        },
-        // Map size
-        {
-          binding: 3,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: {
-            type: 'uniform'
-          }
-        },
-        // Env map
-        {
-          binding: 4,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        // Env map distribution
-        {
-          binding: 5,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        // Background map
-        {
-          binding: 6,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        {
-          binding: 8,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        {
-          binding: 9,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        {
-          binding: 10,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        }
-      ];
-    const texturesBindGroupLayout = this._shaderCache.createBindGroupLayout({
-      label: 'Textures', entries: textureLayoutEntries
-    });
-    const uniformsBindGroupLayout = this._shaderCache.createBindGroupLayout({
-      label: 'Uniforms',
-      entries: [
-        ...Array.from(
-          { length: Object.keys(this._uniforms).length },
-          (_, i) => ({
-            binding: i,
-            visibility: GPUShaderStage.COMPUTE,
-            buffer: {
-              type: 'uniform' as const
-            }
-          }) satisfies GPUBindGroupLayoutEntry
-        ),
-        ...([])
-      ]
-    });
-    const rayTraceOutBuffersBindGroupLayout = this._shaderCache.createBindGroupLayout({
-      label: 'Ray Trace Out Buffers',
-      entries: [
-        ...Array.from(
-          { length: 4 },
-          (_, i) => ({
-            binding: i,
-            visibility: GPUShaderStage.COMPUTE,
-            buffer: { type: 'storage' as const }
-          })
-        ),
-        ...([])
-      ]
-    });
-    this._rayTracePipelineLayout = this._shaderCache.createPipelineLayout({
+    const descriptor = {
       label: 'Ray Trace Pipeline Layout',
-      bindGroupLayouts: [
-        buffersBindGroupLayout,
-        texturesBindGroupLayout,
-        uniformsBindGroupLayout,
-        rayTraceOutBuffersBindGroupLayout
-      ]
-    });
+      bindGroupLayouts: (this._bindless ? bindlessBindGroupLayouts() : rayTraceBindGroupLayouts()).map(layout => this._shaderCache.createBindGroupLayout(layout))
+    };
+    this._rayTracePipelineLayout = this._shaderCache.createPipelineLayout(this._bindless ? resourceTableLayout(descriptor) : descriptor);
   }
 
   private _updateGPUBuffer(
     label: string,
     gpuBuffer: GPUBuffer | undefined,
     data: Float32Array | Uint32Array,
-    minSize = 200
+    minSize = WGPU_SCENE_BUFFER_MIN_BYTES
   ) {
     const device = this._device;
     const size = Math.max(data.byteLength, minSize);
@@ -973,6 +737,8 @@ class WGPURayTracePass {
     let compilationStartedAt: number | undefined;
     let pipelineCompilationStartedAt: number | undefined;
     try {
+      if (this._bindless?.retirement) await this._bindless.retirement;
+      if (this._disposed) return;
       if (this._needsUpdateMeshData) {
         this._updateMeshData();
       } else if (this._needsUpdateMeshMembership) {
@@ -987,15 +753,23 @@ class WGPURayTracePass {
       }
 
       const device = this._device;
-      const constants = this._constants;
-      this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(constants);
+      const pipelineInputs = JSON.stringify([this._constants, this._hasDisplacement,
+        this._alphaBlendStrategy, this._blasLayoutMask, this._bakePipelineConstants]);
+      // Steady rendering must not repeat capability selection and cache-key
+      // preparation. Dirty resources still take the normal bind-group path.
+      if (pipelineInputs === this._prevPipelineInputs && this._rayTracePipeline &&
+        this._rayTraceBindGroups && !this._needsUpdateBindGroups) return;
+      this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(this._constants);
+      const requiredCapabilities = retainedShaderCapabilities(this._constants);
+      const constants: Record<string, boolean | number> = { ...this._constants, ...requiredCapabilities };
       const hasAlpha = Boolean(constants.HAS_ALPHA_BLEND) &&
         this._alphaBlendStrategy === 'deterministic-source-over';
       const hasSceneAlpha = Boolean(constants.HAS_ALPHA);
-      const pipelineSignature = JSON.stringify({
-        constants: Object.keys(constants)
-          .sort()
-          .map((key) => [key, constants[key]]),
+      const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants);
+      const defineCode = WGPU_SHADER_DEFINE_KEYS
+        .map((key) => `const ${key} = ${constants[key]};`)
+        .join('\n');
+      const structure = {
         hasDisplacement: this._hasDisplacement,
         hasAlpha,
         hasSceneAlpha,
@@ -1003,56 +777,30 @@ class WGPURayTracePass {
         hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
         blasLayoutMask: this._blasLayoutMask,
         bakePipelineConstants: this._bakePipelineConstants
+      };
+      const structureKey = JSON.stringify({
+        ...structure, defineCode,
+        constants: pipelineConstantsKeys
+          .filter(key => !(key in requiredCapabilities))
+          .map(key => [key, constants[key]])
+      });
+      // Prefer an existing compatible pipeline, including an earlier lean
+      // variant. Only grow the current variant when it cannot cover an edit;
+      // do not carry unused capabilities across different transport/layouts.
+      const capabilities = this._shaderCapabilities.find(structureKey, requiredCapabilities) ??
+        retainedShaderCapabilities(this._constants,
+          structureKey === this._retainedShaderStructure ? this._retainedShaderCapabilities : undefined);
+      Object.assign(constants, capabilities);
+      const pipelineSignature = JSON.stringify({
+        ...structure,
+        constants: Object.keys(constants).sort().map(key => [key, constants[key]])
       });
       attemptedPipelineSignature = pipelineSignature;
       if (pipelineSignature === this._failedPipelineSignature) {
         return;
       }
       this._pipelineError = undefined;
-      // TODO hardcoded defines that will be replaced in the code.
-      const definesKeys = [
-        'NUM_MAPS',
-        'TLAS_STACK_SIZE',
-        'BLAS_STACK_SIZE',
-        'NUM_UNIFORM_LIGHTS'
-      ];
-      // Scene feature flags and background selection are runtime uniforms so
-      // interactive edits do not recompile the path tracer.
-      const constantsNotUsed = [
-        ...Object.keys(WGPU_SCENE_FEATURE_BITS),
-        'USE_BACKGROUND',
-        'USE_BACKGROUND_MAP',
-        'USE_GROUNDED_BACKGROUND',
-        ...MATERIAL_TEXTURE_DEFINES,
-        'USE_ANISOTROPY_DIRECTIONS',
-        'USE_COAT_NORMAL_FRAMES',
-        'HAS_ALPHA_BLEND',
-        'HAS_ALPHA_MASK'
-      ];
-      const defines = definesKeys.reduce(
-        (obj, key) => {
-          obj[key] = constants[key] as number;
-          return obj;
-        },
-        {} as Record<string, number>
-      );
-      const pipelineConstantsKeys = Object.keys(constants)
-        .sort()
-        .filter(
-          (key) =>
-            !definesKeys.includes(key) && !constantsNotUsed.includes(key)
-        );
-      const defineCode = definesKeys
-        .map((key) => `const ${key} = ${defines[key]};`)
-        .join('\n');
-      const previousPipelineConstantsKeys = Object.keys(
-        this._prevPipelineConstants
-      )
-        .filter(
-          (key) =>
-            !definesKeys.includes(key) && !constantsNotUsed.includes(key)
-        )
-        .sort();
+      const previousPipelineConstantsKeys = wgpuPipelineConstantKeys(this._prevPipelineConstants);
       const needsCreateShaderModule =
         !this._rayTracePipelineLayout ||
         !this._computeShaderModule ||
@@ -1086,23 +834,14 @@ class WGPURayTracePass {
         this._shaderCompilationDiagnostics?.modules[0]?.sourceFingerprint ?? '';
       if (needsCreateShaderModule) {
         const sourceGenerationStartedAt = shaderCompilationNow();
-        const constantsCode = pipelineConstantsKeys
-          .map(
-            (key) =>
-              `${this._bakePipelineConstants ? 'const' : 'override'} ${key} = ${constants[key].toString()};`
-          )
-          .join('\n');
-        const rayTraceShaderCode = /* wgsl */ `
-${defineCode}
-${constantsCode}
-${rayTraceCompute({
-  hasDisplacement: this._hasDisplacement,
-  hasAlpha,
-  hasSceneAlpha,
-  hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
-  hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
-  blasLayoutMask: this._blasLayoutMask
-})}`;
+        let rayTraceShaderCode = wgpuShaderSource(constants, {
+          hasDisplacement: this._hasDisplacement, hasAlpha, hasSceneAlpha,
+          hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
+          hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
+          blasLayoutMask: this._blasLayoutMask,
+          dynamicEnvironment: true
+        }, this._bakePipelineConstants);
+        if (this._bindless) rayTraceShaderCode = bindlessShaderSource(rayTraceShaderCode, this._textureSelection.support!.enable);
 
         sourceBytes = rayTraceShaderCode.length;
         sourceLines = shaderSourceLineCount(rayTraceShaderCode);
@@ -1147,7 +886,7 @@ ${rayTraceCompute({
         // NOTE must before creating pipeline.
         // Because createComputePipelineAsync is async.
         // The constants may be changed after the pipeline is created(in setMesh).
-        this._prevPipelineConstants = { ...this._constants };
+        this._prevPipelineConstants = { ...constants };
         this._prevDefinesCode = defineCode;
         this._needsUpdateBindGroups = true;
 
@@ -1157,7 +896,7 @@ ${rayTraceCompute({
           const pipelineConstants = !this._bakePipelineConstants
             ? pipelineConstantsKeys.reduce(
                 (obj, key) => {
-                  obj[key] = +this._constants[key];
+                  obj[key] = +constants[key];
                   return obj;
                 },
                 {} as Record<string, number>
@@ -1286,14 +1025,22 @@ ${rayTraceCompute({
         }
       }
 
+      // Compilation can complete after Engine disposal/device loss has released
+      // the material table and its textures. Never bind that retired generation.
+      if (this._disposed) return;
       // TODO rebind when lights, materials, bvh changed.
       if (this._needsUpdateBindGroups) {
         this._needsUpdateBindGroups = false;
 
         this._updateBindGroups();
       }
+      this._retainedShaderCapabilities = capabilities;
+      this._retainedShaderStructure = structureKey;
+      this._shaderCapabilities.remember(structureKey, capabilities);
+      this._prevPipelineInputs = pipelineInputs;
       this._failedPipelineSignature = undefined;
     } catch (error) {
+      if (this._disposed) return;
       this._pipelineError = error;
       const failedAt = shaderCompilationNow();
       if (this._shaderCompilationDiagnostics?.status === 'compiling') {
@@ -1323,9 +1070,86 @@ ${rayTraceCompute({
     }
   }
 
+  private _prepareAovPipelines(kinds: readonly AovKind[]) {
+    const trace = this._rayTracePipeline;
+    if (!trace || !this._depthCompute) return;
+    const reflectance = (aovMask(kinds) & 24) !== 0;
+    let variants = this._aovPipelines.get(trace);
+    if (!variants) { variants = new Map(); this._aovPipelines.set(trace, variants); }
+    let pipelines = variants.get(reflectance);
+    if (!pipelines) {
+      pipelines = {};
+      variants.set(reflectance, pipelines);
+      const pending = pipelines;
+      const textures = this._bindless, groupIndex = textures ? 2 : 3;
+      const output = this._device.createBindGroupLayout({entries: [
+        {binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}},
+        {binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}},
+        {binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'read-only-storage'}},
+        {binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'uniform'}},
+        {binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'read-only-storage'}}
+      ]});
+      const descriptor = {bindGroupLayouts: Array.from({length: groupIndex}, (_, i) => trace.getBindGroupLayout(i)).concat(output)};
+      const layout = this._device.createPipelineLayout(textures ? resourceTableLayout(descriptor) : descriptor);
+      const compute = {...this._depthCompute, constants: {...this._depthCompute.constants, DEPTH_QUERY_MODE: 1, AOV_REFLECTANCE: reflectance ? 1 : 0}};
+      // Keep the UI responsive during first use, and reuse both variants across
+      // preview/final target changes rather than recreating synchronous pipelines.
+      void Promise.all([
+        this._shaderCache.createComputePipelineAsync({label: 'AOV accumulation', layout, compute: {...compute, entryPoint: 'aovTrace'}}),
+        this._shaderCache.createComputePipelineAsync({label: 'AOV center', layout, compute: {...compute, entryPoint: 'aovTraceCenter'}})
+      ]).then(([accumulation, center]) => { pending.accumulation = accumulation; pending.center = center; },
+        error => { pending.error = error; });
+    }
+    if (pipelines.error) throw pipelines.error;
+    return pipelines;
+  }
+
+  prepareAovs(kinds: readonly AovKind[]) {
+    const pipelines = this._prepareAovPipelines(kinds);
+    return !!pipelines?.accumulation && !!pipelines.center;
+  }
+
+  renderAovs(state: WGPUAov, camera: Camera, samples: number, cap: number, kinds: readonly AovKind[]) {
+    const groups = this._rayTraceBindGroups;
+    if (!groups || !this._tlas || !this._preparedMeshData || !kinds.length) return false;
+    const pipelines = this._prepareAovPipelines(kinds);
+    if (!pipelines?.accumulation || !pipelines.center) return false;
+    state.resize(this._width, this._height);
+    const textures = this._bindless, groupIndex = textures ? 2 : 3;
+    const target = Math.min(samples, cap);
+    if (state.centerReady && state.samples >= target) return true;
+    if (!state.frame) {
+      const primitiveIds = this._aovPrimitiveCache.get(this._preparedMeshData, this._tlas);
+      const packed = packAovScene(this._preparedMeshData, this._tlas, camera, this._width, this._height, state.history, primitiveIds, false);
+      state.frame = packed.frame; state.setScene(packed.words, primitiveIds);
+    }
+    this._device.queue.writeBuffer(this._uniforms.rtUniform, 0, this._rtUniform.buffer);
+    this._device.queue.writeBuffer(this._uniforms.cameraUniform, 0, packCameraUniform(this._viewProjInv, this._cameraWorld, this._apertureRadius, this._focusDistance));
+    const device = this._device;
+    const run = (pipeline: GPUComputePipeline, sample: number) => {
+      // A fresh uniform for each queued dispatch keeps batch samples independent.
+      const parameters = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM, mappedAtCreation: true});
+      new Uint32Array(parameters.getMappedRange()).set([state.width, state.height, sample, aovMask(kinds)]); parameters.unmap();
+      const output = device.createBindGroup({layout: pipeline.getBindGroupLayout(groupIndex), entries: [
+        {binding: 5, resource: {buffer: state.accumulation!}}, {binding: 6, resource: {buffer: state.center!}},
+        {binding: 7, resource: {buffer: state.scene!}}, {binding: 8, resource: {buffer: parameters}}, {binding: 9, resource: {buffer: state.previousCenter!}}
+      ]});
+      const encoder = device.createCommandEncoder({label: 'AOV'}), pass = encoder.beginComputePass();
+      if (textures?.table) setResourceTable(pass, textures.table);
+      pass.setPipeline(pipeline); for (let i = 0; i < groupIndex; i++) pass.setBindGroup(i, groups[i]);
+      pass.setBindGroup(groupIndex, output); pass.dispatchWorkgroups(Math.ceil(state.width/8), Math.ceil(state.height/8)); pass.end();
+      device.queue.submit([encoder.finish()]); parameters.destroy();
+    };
+    if (!state.centerReady) { run(pipelines.center, 0); state.centerReady = true; state.history.accept(state.frame); }
+    if ((aovMask(kinds) & 31) === 0) state.samples = target;
+    while (state.samples < target) { run(pipelines.accumulation, state.samples); state.samples++; }
+    return true;
+  }
+
   async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {
     const tracePipeline = this._rayTracePipeline;
     const groups = this._rayTraceBindGroups;
+    const textures = this._bindless, textureRevision = textures?.revision;
     if (!tracePipeline || !groups || !this._depthCompute || this._isCompilingShader) return;
     const packed = packDepthSampleArea(area, aspect ?? this._width / this._height);
     if (this._depthTracePipeline !== tracePipeline || !this._depthPipeline) {
@@ -1336,10 +1160,11 @@ ${rayTraceCompute({
           { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } }
         ]
       });
-      const layout = this._shaderCache.createPipelineLayout({
+      const descriptor = {
         label: 'Depth query layout',
-        bindGroupLayouts: [0, 1, 2].map(i => tracePipeline.getBindGroupLayout(i)).concat(outputLayout)
-      });
+        bindGroupLayouts: (textures ? [0, 1] : [0, 1, 2]).map(i => tracePipeline.getBindGroupLayout(i)).concat(outputLayout)
+      };
+      const layout = this._shaderCache.createPipelineLayout(textures ? resourceTableLayout(descriptor) : descriptor);
       this._depthTracePipeline = tracePipeline;
       this._depthPipeline = this._shaderCache.createComputePipelineAsync({
         label: 'Depth query', layout,
@@ -1349,7 +1174,7 @@ ${rayTraceCompute({
     }
     const pipeline = await this._depthPipeline;
     // Scene uploads can replace the buffers while the small query compiles.
-    if (tracePipeline !== this._rayTracePipeline || groups !== this._rayTraceBindGroups) return;
+    if (tracePipeline !== this._rayTracePipeline || groups !== this._rayTraceBindGroups || textures !== this._bindless || textureRevision !== textures?.revision) return;
     const device = this._device;
     const bytes = DEPTH_SAMPLE_COUNT * 16;
     const output = device.createBuffer({ label: 'Depth samples', size: bytes,
@@ -1360,15 +1185,16 @@ ${rayTraceCompute({
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     try {
       device.queue.writeBuffer(params, 0, packed);
-      const outputGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(3), entries: [
+      const outputGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(textures ? 2 : 3), entries: [
         { binding: 0, resource: { buffer: output } },
         { binding: 4, resource: { buffer: params } }
       ] });
       const encoder = device.createCommandEncoder({ label: 'Depth query' });
       const pass = encoder.beginComputePass();
+      if (textures?.table) setResourceTable(pass, textures.table);
       pass.setPipeline(pipeline);
-      for (let i = 0; i < 3; i++) pass.setBindGroup(i, groups[i]);
-      pass.setBindGroup(3, outputGroup);
+      for (let i = 0; i < (textures ? 2 : 3); i++) pass.setBindGroup(i, groups[i]);
+      pass.setBindGroup(textures ? 2 : 3, outputGroup);
       pass.dispatchWorkgroups(1);
       pass.end();
       encoder.copyBufferToBuffer(output, 0, readback, 0, bytes);
@@ -1405,9 +1231,7 @@ ${rayTraceCompute({
     if (!this._bvhBuffer || !this._instancesBuffer) {
       throw new Error('WebGPU BVH buffers are not ready.');
     }
-    const bufferBindGroup = _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(0),
-      entries: [
+    const bufferEntries: GPUBindGroupEntry[] = [
         this._bvhBuffer,
         this._instancesBuffer,
         this._attrBuffers,
@@ -1420,23 +1244,20 @@ ${rayTraceCompute({
               buffer: buffer!
             }
           }) satisfies GPUBindGroupEntry
-      )
-    });
-    const texturesBindGroup = _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(1),
-      entries: [
-        {
+      );
+    const textureEntries: GPUBindGroupEntry[] = [
+        ...(this._bindless ? [] : [{
           binding: 0,
           resource: this._mapsSampler
         },
         {
           binding: 1,
           resource: this._maps!.createView()
-        },
+        }]),
         {
           binding: 3,
           resource: {
-            buffer: this._mapInfoUniform
+            buffer: this._bindless?.metadata ?? this._mapInfoUniform
           }
         },
         { binding: 4, resource: this._envTex!.createView() },
@@ -1448,10 +1269,14 @@ ${rayTraceCompute({
           binding: 10,
           resource: this._adaptiveSamplingTexture.createView()
         }
-      ]
+      ];
+    const bufferBindGroup = _device.createBindGroup({layout: bindGroupPipeline.getBindGroupLayout(0),
+      entries: this._bindless ? bufferEntries.concat(textureEntries.map(e => ({...e, binding: e.binding + 4}))) : bufferEntries});
+    const texturesBindGroup = this._bindless ? undefined : _device.createBindGroup({
+      layout: bindGroupPipeline.getBindGroupLayout(1), entries: textureEntries
     });
     const uniformBindGroup = _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(2),
+      layout: bindGroupPipeline.getBindGroupLayout(this._bindless ? 1 : 2),
       entries: Object.keys(this._uniforms).map(
         (key, i) =>
           ({
@@ -1464,7 +1289,7 @@ ${rayTraceCompute({
     });
     const target = this._targetOutputs.get(this._activeTarget)!;
     const outputBindGroup = target.pipeline === bindGroupPipeline && target.bindGroup || _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(3),
+      layout: bindGroupPipeline.getBindGroupLayout(this._bindless ? 2 : 3),
       entries: [
         this._outColorBuffer,
         this._outNormalBuffer,
@@ -1482,7 +1307,7 @@ ${rayTraceCompute({
     target.pipeline = bindGroupPipeline;
     this._rayTraceBindGroups = [
       bufferBindGroup,
-      texturesBindGroup,
+      ...(texturesBindGroup ? [texturesBindGroup] : []),
       uniformBindGroup,
       outputBindGroup
     ];
@@ -1544,6 +1369,7 @@ ${rayTraceCompute({
     }
 
     const pass = encoder.beginComputePass(descriptor);
+    if (this._bindless?.table) setResourceTable(pass, this._bindless.table);
     if (!this._rayTracePipeline || !this._rayTraceBindGroups) {
       throw new Error('WebGPU ray tracing pass was submitted before it was ready.');
     }
@@ -1572,8 +1398,18 @@ ${rayTraceCompute({
   }
 
   getDiagnostics() {
+    const atlas = this._materialData instanceof MaterialTable ? this._materialData.textureAtlasStats : undefined;
     return {
-      textureAtlas: this._materialData?.textureAtlasStats,
+      textureAtlas: atlas,
+      materialTextures: {
+        requested: this._textureSelection.requested,
+        active: this._bindless ? 'bindless' as const : 'atlas' as const,
+        fallbackReason: this._textureSelection.fallbackReason,
+        ...(this._bindless?.diagnostics ?? {
+          textureCount: atlas?.textureCount ?? 0, estimatedBytes: atlas?.estimatedBytes ?? 0,
+          scale: atlas?.scale ?? 1, metadataBytes: 0, resourceTableCapacity: 0, retiredBytes: 0
+        })
+      },
       shaderCompilation: this._shaderCompilationDiagnostics,
       lightSampling: {
         emissiveTriangles: this._emissiveTriangles.length,
@@ -1647,15 +1483,14 @@ ${rayTraceCompute({
   }
 
   setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed = 0) {
-    const code = samplingPatternCode(pattern);
-    const logSPP = zSobolLog2SPP(code === 1 ? maxSamples - 1 : maxSamples);
+    const sampling = traceSampling(pattern, maxSamples, sequenceSeed);
+    const {code, logSPP} = sampling;
     const views = this._rtUniform.views;
     const changed = this._constants.SAMPLING_PATTERN !== code ||
       views.sequenceSeed[0] !== (sequenceSeed >>> 0) ||
       (code === 1 && views.zSobolLogSPP[0] !== logSPP);
     this._constants.SAMPLING_PATTERN = code;
-    views.sequenceSeed[0] = sequenceSeed;
-    views.zSobolLogSPP[0] = logSPP;
+    writeTraceSampling(views, sampling);
     return changed;
   }
 
@@ -1688,13 +1523,10 @@ ${rayTraceCompute({
   }
 
   setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number }) {
-    this._rtUniform.views.bounces[0] = normalizeBounces(options.bounces);
-    this._rtUniform.views.bevel[0] = +options.bevel;
-    this._rtUniform.views.dispersionWavelengths[0] = options.dispersionWavelengths;
-    this._rtUniform.views.directLightCandidates[0] = normalizeDirectLightCandidates(options.directLightCandidates);
+    writeTraceQuality(this._rtUniform.views, options);
   }
 
-  private _setEnvMap(envImage: EnvironmentMapSource | undefined) {
+  private _setEnvMap(envImage: EnvironmentSource | undefined) {
     const device = this._device;
     // Always create env tex
     if (
@@ -1703,38 +1535,53 @@ ${rayTraceCompute({
     ) {
       this._envImageSource = envImage;
 
-      this._envTex?.destroy();
-      this._envDistributionTex?.destroy();
-
-      const distribution = envImage && envMapDistribution(envImage);
-      const usage =
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT;
-      this._envTex = device.createTexture({
-        format: 'rgba32float',
-        usage,
-        label: 'Env',
-        size: {
-          width: envImage ? envImage.width : 1,
-          height: envImage ? envImage.height : 1,
-          depthOrArrayLayers: 1
-        }
-      });
-      this._envDistributionTex = device.createTexture({
-        format: 'rg32float',
-        usage,
-        label: 'Env Distribution',
-        size: {
-          width: distribution ? distribution.width : 1,
-          height: distribution ? distribution.height : 1,
-          depthOrArrayLayers: 1
-        }
-      });
-      if (envImage && distribution) {
-        device.queue.writeTexture(
+      const sky = envImage && 'sky' in envImage ? envImage : undefined;
+      if (sky && (sky.width + 2 > device.limits.maxTextureDimension2D || sky.height + 1 > device.limits.maxTextureDimension2D)) throw new RangeError('ProceduralSky resolution exceeds the device texture size limit.');
+      const gpuDistribution = envImage && (sky || envImage.width * envImage.height >= 65536) &&
+        WGPUEnvMapDistribution.supported(device, envImage.width, envImage.height);
+      if (sky && !gpuDistribution) throw new RangeError('ProceduralSky resolution exceeds the GPU sampling storage limit; reduce resolution.');
+      const distribution = envImage && !('sky' in envImage) && !gpuDistribution ? envMapDistribution(envImage) : undefined;
+      const distributionWidth = envImage ? envImage.width + 2 : 1;
+      const distributionHeight = envImage ? envImage.height + 1 : 1;
+      const width = envImage?.width ?? 1;
+      const height = envImage?.height ?? 1;
+      const resized = !this._envTex || this._envTex.width !== width || this._envTex.height !== height ||
+        !this._envDistributionTex || this._envDistributionTex.width !== distributionWidth || this._envDistributionTex.height !== distributionHeight;
+      if (resized) {
+        this._envTex?.destroy();
+        this._envDistributionTex?.destroy();
+        const usage =
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.RENDER_ATTACHMENT;
+        this._envTex = device.createTexture({
+          format: 'rgba32float',
+          usage: usage | GPUTextureUsage.STORAGE_BINDING,
+          label: 'Env',
+          size: {
+            width,
+            height,
+            depthOrArrayLayers: 1
+          }
+        });
+        this._envDistributionTex = device.createTexture({
+          format: 'rg32float',
+          usage: usage | GPUTextureUsage.STORAGE_BINDING,
+          label: 'Env Distribution',
+          size: {
+            width: distributionWidth,
+            height: distributionHeight,
+            depthOrArrayLayers: 1
+          }
+        });
+      }
+      if (envImage) {
+        if ('sky' in envImage) {
+          this._skyBaker ??= new WGPUSkyBaker(device);
+          this._skyBaker.bake(envImage, this._envTex!);
+        } else device.queue.writeTexture(
           {
-            texture: this._envTex
+            texture: this._envTex!
           },
           envImage.data.buffer,
           {
@@ -1746,23 +1593,20 @@ ${rayTraceCompute({
             depthOrArrayLayers: 1
           }
         );
-        device.queue.writeTexture(
-          {
-            texture: this._envDistributionTex
-          },
-          distribution.data.buffer,
-          {
-            bytesPerRow: distribution.width * 4 * 2
-          },
-          {
-            width: distribution.width,
-            height: distribution.height,
-            depthOrArrayLayers: 1
-          }
-        );
-      }
+        if (gpuDistribution) {
+          this._envDistribution ??= new WGPUEnvMapDistribution(device);
+          this._envDistribution.build(this._envTex!, this._envDistributionTex!);
+        } else if (distribution) {
+          this._envDistribution?.dispose();
+          device.queue.writeTexture(
+            { texture: this._envDistributionTex! }, distribution.data.buffer,
+            { bytesPerRow: distribution.width * 4 * 2 },
+            { width: distribution.width, height: distribution.height, depthOrArrayLayers: 1 }
+          );
+        }
+      } else this._envDistribution?.dispose();
 
-      this._needsUpdateBindGroups = true;
+      this._needsUpdateBindGroups ||= resized;
     }
 
     this._constants.USE_ENVMAP = !!envImage;
@@ -2004,6 +1848,7 @@ ${rayTraceCompute({
 
   setBackground(background?: SceneBackground) {
     this._rtUniform.views.backgroundMapTransform.set(backgroundMapTransform(background));
+    this._rtUniform.views.backgroundMapRotation.set(backgroundMapRotation(background));
     this._constants.USE_BACKGROUND = !!background;
     const backgroundImage =
       background && !Array.isArray(background)
@@ -2039,92 +1884,59 @@ ${rayTraceCompute({
   }
 
   private _setBackgroundMap(
-    backgroundImage: TexturePixelSource | undefined
+    backgroundImage: EnvironmentSource | undefined
   ) {
     if (backgroundImage === this._backgroundImageSource && this._backgroundTex) {
       return;
     }
     this._backgroundImageSource = backgroundImage;
-    this._backgroundTex?.destroy();
-
     const width = backgroundImage?.width ?? 1;
     const height = backgroundImage?.height ?? 1;
-    this._backgroundTex = this._device.createTexture({
-      format: 'rgba32float',
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT,
-      label: 'Background',
-      size: { width, height, depthOrArrayLayers: 1 }
-    });
-
-    if (backgroundImage) {
+    if (backgroundImage && 'sky' in backgroundImage && (width > this._device.limits.maxTextureDimension2D || height > this._device.limits.maxTextureDimension2D)) throw new RangeError('ProceduralSky resolution exceeds the device texture size limit.');
+    const resized = !this._backgroundTex || this._backgroundTex.width !== width || this._backgroundTex.height !== height;
+    if (resized) {
+      this._backgroundTex?.destroy();
+      this._backgroundTex = this._device.createTexture({
+        format: 'rgba32float',
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING,
+        label: 'Background',
+        size: { width, height, depthOrArrayLayers: 1 }
+      });
+    }
+    if (backgroundImage && 'sky' in backgroundImage) {
+      this._skyBaker ??= new WGPUSkyBaker(this._device);
+      this._skyBaker.bake(backgroundImage, this._backgroundTex!);
+    } else if (backgroundImage) {
       const source = backgroundImage.data;
       const data =
         source instanceof Float32Array
           ? source
-          : Float32Array.from(source, (value) =>
-              (source instanceof Uint8Array || source instanceof Uint8ClampedArray) ? value / 255 : value
-            );
+          : source instanceof Uint8Array || source instanceof Uint8ClampedArray
+            ? Float32Array.from(source, value => value / 255)
+            : Float32Array.from(source);
       this._device.queue.writeTexture(
-        { texture: this._backgroundTex },
+        { texture: this._backgroundTex! },
         data.buffer,
         { bytesPerRow: width * 4 * 4 },
         { width, height, depthOrArrayLayers: 1 }
       );
     }
-    this._needsUpdateBindGroups = true;
+    this._needsUpdateBindGroups ||= resized;
   }
 
   private _updateLightSamplingData() {
-    const choices = this._lightChoices;
-    choices.reserve(1 + this._analyticLights.length + this._emissiveTriangles.length);
-    choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, estimateEnvironmentPower(this._envImageSource));
-    this._analyticLights.forEach((light, i) => choices.push(LIGHT_CHOICE_ANALYTIC, i, estimateAnalyticLightPower(light)));
-    this._emissiveTriangles.forEach((triangle, i) => choices.push(LIGHT_CHOICE_EMISSIVE_TRIANGLE, i, triangle.area * triangle.samplingLuminance));
-    const distribution = buildLightAliasTable(choices);
-    const domainDiagnostics = {
-      environment: { count: 0, weight: 0, pmf: 0 },
-      infinite: { count: 0, weight: 0, pmf: 0 },
-      localAndEmissive: { count: 0, weight: 0, pmf: 0 }
-    };
-    this._analyticLightSelectionPmfs = new Array(
-      this._analyticLights.length
-    ).fill(0);
-    this._rtUniform.views.envLightPmf[0] = 0;
-    const domains = [domainDiagnostics.environment, domainDiagnostics.infinite, domainDiagnostics.localAndEmissive];
-    for (let i = 0; i < choices.count; i++) {
-      const type = choices.sourceTypes[i], source = choices.sourceIndices[i];
-      const pmf = distribution.pmfs[i];
-      const domainIndex = type === LIGHT_CHOICE_ENVIRONMENT ? LIGHT_DOMAIN_ENVIRONMENT :
-        type === LIGHT_CHOICE_ANALYTIC && this._analyticLights[source]?.type === 'DirectionalLight' ?
-          LIGHT_DOMAIN_INFINITE : LIGHT_DOMAIN_LOCAL_AND_EMISSIVE;
-      const domain = domains[domainIndex];
-      domain.count++; domain.weight += choices.weights[i]; domain.pmf += pmf;
-      if (type === LIGHT_CHOICE_ENVIRONMENT) this._rtUniform.views.envLightPmf[0] = pmf;
-      else if (type === LIGHT_CHOICE_ANALYTIC) this._analyticLightSelectionPmfs[source] = pmf;
-      else this._emissiveTriangles[source].selectionPmf = pmf;
-    }
-    this._lightDomainDiagnostics = domainDiagnostics;
-    this._rtUniform.views.lightChoiceCount[0] = choices.count;
-    this._rtUniform.views.lightWeightTotal[0] = distribution.totalWeight;
-
-    const emissiveTexels = this._emissiveTriangles.length * 6;
-    const choiceTexels = Math.max(choices.count, 1);
-    const profileStartTexel = emissiveTexels + choiceTexels;
-    const packedIES = packIESProfiles(this._analyticLights, profileStartTexel);
-    this._iesProfileTexelOffsets = packedIES.offsets;
-    const totalTexels = Math.max(profileStartTexel + packedIES.texelCount, 1);
-    const maxDimension = this._device.limits.maxTextureDimension2D;
-    const width = Math.min(
-      maxDimension,
-      Math.max(16, Math.ceil(Math.sqrt(totalTexels) / 16) * 16)
-    );
-    const height = Math.ceil(totalTexels / width);
-    if (height > maxDimension) {
-      throw new Error('Too many emissive triangles for the light sampling texture.');
-    }
+    this._constants.LIGHT_CAPABILITIES = lightShaderCapabilities(this._analyticLights.map(light => light.type), this._emissiveTriangles.length);
+    const lighting = prepareSceneLightSampling(this._analyticLights, this._emissiveTriangles,
+      this._envImageSource && 'sky' in this._envImageSource ? proceduralEnvironmentPower(this._envImageSource) : estimateEnvironmentPower(this._envImageSource), this._device.limits.maxTextureDimension2D, this._lightChoices, this._lightSamplingScratch,
+      this._shadowCatcherLightChoices);
+    this._analyticLightSelectionPmfs = lighting.analyticPmfs;
+    this._iesProfileTexelOffsets = lighting.profiles.offsets;
+    this._lightDomainDiagnostics = lighting.domains;
+    const {lightWidth: width, lightHeight: height, lightData: textureData} = lighting;
+    writeTraceLighting(this._rtUniform.views, lighting);
     const resized = !this._lightSamplingTexture || width !== this._lightSamplingTextureSize[0] || height !== this._lightSamplingTextureSize[1];
     if (
       !this._lightSamplingTexture ||
@@ -2141,17 +1953,6 @@ ${rayTraceCompute({
       this._lightSamplingTextureSize = [width, height];
       this._needsUpdateBindGroups = true;
     }
-    const textureData = this._lightSamplingScratch?.length === width * height * 4
-      ? this._lightSamplingScratch : new Float32Array(width * height * 4);
-    textureData.fill(0);
-    if (this._emissiveTriangles.length) {
-      packEmissiveTriangles(this._emissiveTriangles, textureData);
-    }
-    new Uint32Array(textureData.buffer).set(
-      distribution.choices,
-      emissiveTexels * 4
-    );
-    textureData.set(packedIES.data, profileStartTexel * 4);
     const previous = this._lightSamplingData;
     const full = resized || !previous || this._lightSamplingTriangleCount !== this._emissiveTriangles.length;
     const words = new Uint32Array(textureData.buffer);
@@ -2176,8 +1977,6 @@ ${rayTraceCompute({
     this._lightSamplingScratch = previous;
     this._lightSamplingData = textureData;
     this._lightSamplingTriangleCount = this._emissiveTriangles.length;
-    this._rtUniform.views.lightSamplingTextureWidth[0] = width;
-    this._rtUniform.views.lightChoiceTexelOffset[0] = emissiveTexels;
     this._needsUpdateAnalyticLightsBuffer = true;
     this._needsUpdateLightSamplingData = false;
   }
@@ -2237,7 +2036,7 @@ ${rayTraceCompute({
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
 
-    const materialData = (this._materialData = new MaterialTable(
+    const materialData = (this._materialData = this._createMaterialData(
       materials,
       this._analyticLights,
       {
@@ -2252,26 +2051,8 @@ ${rayTraceCompute({
     );
     this._needsUpdateLightSamplingData = true;
 
-    const attrNames = [
-      'position',
-      'normal',
-      'uv',
-      'uv1',
-      'color',
-      'tangent',
-      'materialIndex'
-    ] as const;
-    const attributes = attrNames.map((a) => mergedGeometry[a]);
-    const fixedSize = 4;
-    let stride = 0;
-    const offsets = attrNames.map((attrName, idx) => {
-      const attr = attributes[idx];
-      const offset = stride;
-      if (attr) {
-        stride += fixedSize;
-      }
-      return offset;
-    });
+    const attributeLayout = sceneAttributeLayout(mergedGeometry);
+    const {stride, offsets} = attributeLayout;
 
     const attrBufferData = new F32(
       mergedGeometry.vertexCount * stride
@@ -2307,17 +2088,7 @@ ${rayTraceCompute({
       0
     );
 
-    Object.assign(this._constants, {
-      TLAS_STACK_SIZE: retainedShaderCapacity(traversalStackSizes.tlas, Number(this._constants.TLAS_STACK_SIZE ?? 0)),
-      BLAS_STACK_SIZE: retainedShaderCapacity(traversalStackSizes.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32),
-      USE_UV: mergedGeometry.uv != null,
-      USE_VERTEX_COLOR: mergedGeometry.color != null,
-      ATTR_STRIDE: stride / fixedSize,
-      ...offsets.reduce((obj, off, idx) => {
-        obj[attrNames[idx].toUpperCase() + '_OFF'] = off / fixedSize;
-        return obj;
-      }, {} as Record<string, number>)
-    });
+    Object.assign(this._constants, sceneTraversalConstants(traversalStackSizes.tlas, traversalStackSizes.blas, this._constants), attributeLayout.constants);
     this._updateMaterialConstants(materials, materialData, mergedGeometry);
     this._updateTextures(materialData);
 
@@ -2339,7 +2110,7 @@ ${rayTraceCompute({
     this._needsRefitTLAS = false;
   }
 
-  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable, mergedGeometry: Geometry) {
+  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable | WGPUBindlessMaterialData, mergedGeometry: Geometry) {
     const hasTransmission = materials.some((m) => m.transmissionWeight > 0);
     if (hasTransmission !== this._hasTransmission) {
       this._hasTransmission = hasTransmission;
@@ -2354,67 +2125,10 @@ ${rayTraceCompute({
       this._rayTracePipelineLayout = undefined;
     }
 
-    const HAS_BEVEL = materials.some((m) => m.bevelSize > 0);
-    const SPECTRAL =
-      materials.some((m) => m.transmissionDispersionScale > 0);
-    const HAS_MEDIUM = materials.some(materialUsesMedium);
-    // Retain the atlas uniform capacity when a stage/material is removed.
-    // Shrinking the array would rebuild every pipeline again on the next edit.
-    const NUM_MAPS = Math.max(
-      Math.ceil(+materialData.defines.NUM_MAPS / 10) * 10,
-      Number(this._constants.NUM_MAPS ?? 0),
-      20
-    );
-    // Either layer's map requires independent normals, including a smooth
-    // coat over a mapped base. Unmapped materials retain the shared path.
-    const USE_COAT_NORMAL_FRAMES = materials.some(m => m.coatWeight > 0 && (!!m.normalMap || !!m.coatNormalMap));
-
-    Object.assign(this._constants, {
-      // Match the atlas UV selector. Keep the second set when any texture
-      // needs it; material/texture edits already rebuild these constants.
-      USE_UV1: materialData.bufferData.mapUvChannel.some(channel => channel > 0.5),
-      // Isotropic OpenPBR constructs its own basis. Normal mapping uses
-      // triangle UV differentials rather than this vertex tangent.
-      USE_TANGENT: mergedGeometry.tangent != null &&
-        materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0 || (!!material.coatNormalMap && material.coatWeight > 0)),
-
-      USE_COAT_NORMAL_FRAMES,
-      USE_ANISOTROPY_DIRECTIONS: USE_COAT_NORMAL_FRAMES || materials.some(m =>
-        m.specularAnisotropy > 0 && (m.specularAnisotropyModel === 'gltf' || !!m.anisotropyMap || m.specularAnisotropyRotation !== 0) ||
-        m.coatAnisotropy > 0 && m.coatAnisotropyRotation !== 0),
-      HAS_MEDIUM,
-      HAS_SHADOW_CATCHER: this._hasShadowCatcher,
-      HAS_THIN_FILM: materials.some((material) => material.thinFilmWeight > 0),
-      HAS_COAT: materials.some((material) => material.coatWeight > 0),
-      HAS_FUZZ: materials.some((material) => material.fuzzWeight > 0),
-      HAS_SUBSURFACE: materials.some((material) => material.subsurfaceWeight > 0),
-      HAS_BEVEL,
-      HAS_ALPHA_MASK: materials.some(
-        (m) => resolveMaterialAlphaMode(m) === 'mask'
-      ),
-      HAS_ALPHA_BLEND: materials.some(
-        (m) => resolveMaterialAlphaMode(m) === 'blend'
-      ),
-      HAS_ALPHA: materials.some(
-        (m) => resolveMaterialAlphaMode(m) !== 'opaque'
-      ),
-
-      SPECTRAL,
-      BEVEL_SAMPLES: this._bevelSamples,
-
-      USE_RR: true,
-      // Match WebGL: defer roulette for multiple-scattering SSS paths.
-      RR_MAX: HAS_MEDIUM ? 12 : 2,
-
-      NUM_UNIFORM_LIGHTS: FIXED_LIGHT_COUNT,
-
-      ...materialData.defines,
-
-      NUM_MAPS,
-      ...materialTextureFeatures(materialData.defines),
-      USE_NORMAL_MAPS: +materialData.defines.NUM_NORMAL_MAPS > 0
-    });
-
+    Object.assign(this._constants, wgpuMaterialConstants(materials, materialData, mergedGeometry,
+      this._bevelSamples, Number(this._constants.NUM_MAPS ?? 0)));
+    // Runtime storage metadata has no texture-count specialization.
+    if (this._bindless) this._constants.NUM_MAPS = 20;
   }
 
   private _updateGeometryData() {
@@ -2457,7 +2171,7 @@ ${rayTraceCompute({
     const res = this._preparedMeshData!;
     let materialData = this._materialData!;
     if (update.level === 'textures') {
-      materialData = this._materialData = new MaterialTable(res.materials, this._analyticLights, {
+      materialData = this._materialData = this._createMaterialData(res.materials, this._analyticLights, {
         maxTextureArrayBytes: this._maxTextureArrayBytes,
         maxTextureArrayLayers: this._device.limits.maxTextureArrayLayers,
         maxTextureDimension2D: this._device.limits.maxTextureDimension2D
@@ -2605,7 +2319,27 @@ ${rayTraceCompute({
     this._needsRefitTLAS = false;
   }
 
-  private _updateTextures(materialData: MaterialTable) {
+  private _createMaterialData(...args: ConstructorParameters<typeof MaterialTable>): MaterialTable | WGPUBindlessMaterialData {
+    if (this._bindless) {
+      const data = new WGPUBindlessMaterialData(args[0], args[1]);
+      const reason = bindlessLimitReason(this._device, data.textures.length);
+      if (!reason) return data;
+      this._textureSelection.fallbackReason = reason;
+      const retired = this._bindless;
+      this._retiredBindless.add(retired);
+      void this._device.queue.onSubmittedWorkDone().catch(() => {}).then(() => {retired.dispose(); this._retiredBindless.delete(retired);});
+      this._bindless = undefined;
+      this._computeShaderModule = undefined; this._rayTracePipelineLayout = undefined;
+    }
+    return new MaterialTable(...args);
+  }
+
+  private _updateTextures(materialData: MaterialTable | WGPUBindlessMaterialData) {
+    if (materialData instanceof WGPUBindlessMaterialData) {
+      this._bindless!.update(materialData.textures, this._maxTextureArrayBytes);
+      this._needsUpdateBindGroups = true;
+      return;
+    }
     // Textures
     // TODO Avoid zero length array.
     const mapInfo = materialData.bufferData.mapInfo ?? [0, 0, 0, 0];
@@ -2808,14 +2542,8 @@ ${rayTraceCompute({
     this._device.queue.writeBuffer(
       this._uniforms.cameraUniform,
       0,
-      new F32([
-        ...this._viewProjInv,
-        ...this._cameraWorld,
-        this._apertureRadius,
-        this._focusDistance,
-        0,
-        0
-      ])
+      packCameraUniform(this._viewProjInv, this._cameraWorld,
+        this._apertureRadius, this._focusDistance)
     );
   }
 
@@ -2849,7 +2577,12 @@ ${rayTraceCompute({
   }
 
   dispose() {
+    this._disposed = true;
+    this._envDistribution?.dispose();
+    this._skyBaker?.dispose();
+    this._bindless?.dispose(); this._retiredBindless.forEach(textures => textures.dispose()); this._retiredBindless.clear();
     this._shaderCache.clear();
+    this._shaderCapabilities.clear();
     const buffers = new Set<GPUBuffer | undefined>([
       ...Array.from(this._targetOutputs.values()).flatMap(target => target.buffers),
       this._mapInfoUniform,

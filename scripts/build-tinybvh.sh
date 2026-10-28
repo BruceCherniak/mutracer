@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TINYBVH_REVISION="0e4584287823252cf83f0e9cd072848bec5f79c5"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_DIR="$PROJECT_DIR/src/tinybvh"
-TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mutracer-tinybvh.XXXXXX")"
-trap 'rm -rf "$TEMP_DIR"' EXIT
-
-curl --fail --location --silent --show-error \
-  "https://raw.githubusercontent.com/jbikker/tinybvh/$TINYBVH_REVISION/tiny_bvh.h" \
-  --output "$TEMP_DIR/tiny_bvh.h"
+INCLUDE_DIR="$(node "$SCRIPT_DIR/fetch-tinybvh.mjs")"
 
 em++ "$SOURCE_DIR/tinybvh_wrapper.cpp" \
-  -I"$TEMP_DIR" \
+  -I"$INCLUDE_DIR" \
   -O3 \
   -std=c++20 \
   --no-entry \
@@ -26,4 +20,4 @@ em++ "$SOURCE_DIR/tinybvh_wrapper.cpp" \
   -o "$SOURCE_DIR/tinybvh.wasm"
 chmod 644 "$SOURCE_DIR/tinybvh.wasm"
 
-echo "Built $SOURCE_DIR/tinybvh.wasm from tinybvh@$TINYBVH_REVISION"
+echo "Built $SOURCE_DIR/tinybvh.wasm from $INCLUDE_DIR"

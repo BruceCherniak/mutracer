@@ -45,6 +45,10 @@ For an application-owned animation frame, update the animation mixer first,
 then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 `engine.update()`, `render.refine()` and `engine.display.present(render)` in order.
 
+For a library-generated sky, pass `environment: new ProceduralSky()` in the
+conversion or sync options. See [ProceduralSky](./api.md#proceduralsky) for
+configuration and backend limits.
+
 ## What is converted
 
 | Three.js | MuTracer |
@@ -69,7 +73,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `RectAreaLight` | `RectLight` |
 | `AmbientLight` | `AmbientLight` |
 | `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight`; orientation follows Three.js, so a `DataTexture` with `flipY = false` has its first row at the bottom |
-| `scene.background` color / texture | Background; the environment itself when `background === environment` |
+| `scene.background` color / texture | Explicit background, independent of environment lighting |
 
 Three.js `opacity` maps to `geometryOpacity`; thin-shell choices map to
 `geometryThinWalled`. Metadata accepts the five [canonical and compatibility
@@ -95,10 +99,15 @@ Material textures preserve independent `wrapS` and `wrapT`: repeat,
 clamp-to-edge and mirrored repeat. UV repeat and offset apply before wrapping;
 later wrap edits synchronize automatically. Displacement uses the same modes.
 
-`scene.environmentIntensity` controls environment lighting, including zero;
-`scene.environmentRotation` rotates it using the source Euler order. Both
-synchronize automatically. They do not change ambient lights or an explicitly
-assigned `scene.background` texture.
+`scene.environmentIntensity` scales environment lighting (`0` disables it);
+ambient lights and explicit backgrounds keep their own brightness.
+`scene.backgroundIntensity` scales an explicit texture background; colors are
+unaffected. `scene.environmentRotation` and `scene.backgroundRotation`
+independently rotate environment lighting and explicit texture backgrounds. All
+of these synchronize automatically; rotations preserve Euler order. An unset
+background follows the environment. `mutracerGroundedSkybox` uses only its own
+`rotation` (default `0`) and `intensity` (default `1`), ignoring
+`scene.backgroundRotation` and `scene.backgroundIntensity`.
 
 Thin-film ranges keep their endpoint order, including minimum greater than
 maximum, and retain the converter's 0–20 µm endpoint clamp. The converter uses

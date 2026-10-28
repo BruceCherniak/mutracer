@@ -5,6 +5,11 @@ Open **Examples → MuTracer collection** for models curated for this viewer, or
 [glTF Research Scenes](https://github.com/ErfanMo77/gltf-research-scenes) collection.
 Scenes download on demand from GitHub; cards show approximate download sizes
 and link to each scene's source and license. Large scenes need more memory.
+glTF Research Scenes load with **Ground shadow** off; you can enable it in Lighting.
+
+On desktop, choose **Pin to right panel** in Examples to keep the collection
+open while loading models. **Unpin examples** returns it to the popover.
+The pinned layout is saved in this browser.
 
 glTF/GLB imports include directional, point and spot lights and emissive meshes.
 Benchmark scenes also load their sunlight and available environment maps.

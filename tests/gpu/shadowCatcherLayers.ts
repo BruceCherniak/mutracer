@@ -66,10 +66,11 @@ export async function checkShadowCatcherLayers(device: GPUDevice) {
         color: buffer([...rgb, samples * (f * alpha + backgroundCoverage)]),
         normal: buffer([0, samples * (f + c), 0, samples]),
         albedo: buffer([samples * (f + c), samples * (f + c), samples * (f + c), samples * (f + c)]),
+        // Moments z/w: occluded and total light samples, four per catcher hit.
         shadowCatcher: buffer([
-          c * samples, backgroundCoverage * samples, c * samples, c * shadow * samples,
+          c * samples, backgroundCoverage * samples, c * samples, 0,
           ...backdrop.map(v => v * backgroundCoverage * samples), backgroundCoverage * samples,
-          0, 0, 0, 0
+          0, 0, 4 * c * shadow * samples, 4 * c * samples
         ])
       }, true);
       compose.setUniform('flatBackgroundColor', [...backdrop, 1]);

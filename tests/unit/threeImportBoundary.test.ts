@@ -9,11 +9,12 @@ function files(root: string): string[] {
 it('keeps Three.js dependencies inside the two integration modules', () => {
   const root = resolve('src'), allowed = new Set(['util/fromTHREE.ts', 'util/threeDeformation.ts']), violations: string[] = [];
   for (const path of files(root)) {
+    const name = relative(root, path).replaceAll('\\', '/');
     const source = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true);
     function visit(node: ts.Node) {
       const specifier = (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) ? node.moduleSpecifier :
         ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword ? node.arguments[0] : undefined;
-      if (specifier && ts.isStringLiteral(specifier) && /^three(?:\/|$)/.test(specifier.text) && !allowed.has(relative(root, path))) violations.push(relative(root, path));
+      if (specifier && ts.isStringLiteral(specifier) && /^three(?:\/|$)/.test(specifier.text) && !allowed.has(name)) violations.push(name);
       ts.forEachChild(node, visit);
     }
     visit(source);

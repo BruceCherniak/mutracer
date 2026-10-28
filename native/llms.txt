@@ -1,0 +1,48 @@
+# MuTracer native SDK
+
+> Experimental Rust (`mutracer_native_probe`, crate in `native/host`) and C (`native/include`) SDK for the MuTracer path tracer on wgpu, plus a standalone glTF viewer. No JavaScript runtime. macOS arm64 (Metal), Linux x64 (Vulkan), Windows x64 (DX12/Vulkan). API and ABI are unstable.
+
+## Essentials
+
+- Build: `npm ci`, `npm ci --prefix native/toolchain --include=optional`, `export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"`, `npm run native:scene:static`; Rust needs `MUTRACER_AOT_ARCHIVE`, C links `mutracer_native_probe`; [build and link](README.md#build-and-link).
+- Pick an API: Scene + Engine for most apps; Context for one low-level accumulation and polling jobs; descriptors for binary scenes; [API table](README.md#apis).
+- Minimal program: build a Scene, `Engine::new`, `Render::new`, `set_scene_object`, `update`, `converge`, `read_pixels`; the default scene is unlit and black; [quick start](README.md#quick-start).
+- API reference: options, defaults, errors and lifetimes live on each C declaration in `include/*.h` and on the Rust items in `host/src/api/` and `host/src/scene_api/`; the guides cover workflows and behavior across calls.
+- C conventions: check every `mt_status`, initialize records with `*_default()`, query sizes with NULL/0, compare `mt_abi_version()`; engine images are top row first, context images bottom row first; [conventions](README.md#c-api-conventions).
+
+## Scenes
+
+- Handles, defaults, ownership and threads: [build a scene](docs/scene.md#build-a-scene).
+- Edits: change the Scene, then `set_scene_object` + `update`; incremental vs full preparation and `pending_commit_kind`: [edit a scene](docs/scene.md#edit-a-scene).
+- glTF/GLB: `Scene::import_gltf` / `mt_scene_import_gltf`, names via `ImportedScene::names` / `mt_scene_find`; [support and limits](docs/gltf.md).
+- Picking: `Scene::picker().raycast` / `mt_scene_picker_create` + `mt_scene_picker_raycast`; immutable CPU snapshots with mesh/instance/material hits; [usage and limits](docs/scene.md#pick-scene-objects).
+- Binary v4 descriptors, record layouts and scene limits: [scene format](docs/scene-format.md).
+
+## Rendering
+
+- Engine/Render/Display/RenderLoop object model, offline and interactive flows, `update` semantics, clearing: [engine](docs/engine.md).
+- Threads: engine objects one thread at a time, only `mt_render_cancel` concurrent; window engines stay on the window thread; [threads](docs/engine.md#threads-and-callbacks).
+- Select a GPU: `Engine::adapters` + `Engine::on_adapter`; C `mt_gpu_adapters` + `mt_engine_create_on_adapter`; [device selection](docs/engine.md#select-a-gpu).
+- Device loss is terminal; Rust `Engine::on_device` hosts must forward loss notifications; [device loss](docs/engine.md#device-loss).
+- HWRT is the default backend with software fallback; known Metal HWRT sample miss; [backends](README.md#ray-tracing-backends).
+- Browser differences: [table](docs/engine.md#differences-from-the-browser-library).
+
+## Display and output
+
+- Composition order, effects, shadow catchers, RGBA8/PNG export: [composition](docs/display.md#composition).
+- C Vulkan device/image sharing and native display callbacks: [Vulkan hosts](docs/vulkan.md).
+- Rust GPU textures and custom passes: [GPU images](docs/display.md#gpu-images-rust), [passes](docs/display.md#custom-display-passes-rust).
+- Windows: Rust `attach_surface` with `Engine::on_device`; C `mt_engine_create_for_window`; HDR falls back to SDR and exports stay SDR; [windows](docs/display.md#window-presentation), [HDR](docs/display.md#hdr-window-output).
+- AOVs: opt in with render/custom-filter masks; Rust TemporalGpu adds accepted 1-spp frame history; [surface outputs and temporal limits](docs/denoising.md#surface-outputs). Display channels visualize explicitly enabled kinds with [display-only mappings](docs/display.md#aov-channels).
+
+## Denoising
+
+- OIDN schedules on renders, custom filters, standalone `mutracer-denoise.h`, runtime lookup (`MUTRACER_OIDN_LIBRARY`): [denoising](docs/denoising.md).
+
+## Low-level context
+
+- `create → commit → render → read_pixels`, jobs with `mt_job_poll`, cancellation: [context](docs/context.md).
+
+## Contributing
+
+- Commands, environment variables, CI, architecture and validation: [contributor guide](CONTRIBUTING.md).

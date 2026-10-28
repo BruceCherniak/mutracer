@@ -1,3 +1,4 @@
+import {hdrResolveWGSL} from './wgsl/compose.frag.wgsl.js';
 import { getTargetShaderCache } from './WGPUShaderCache.js';
 import { textureBytes } from './gpuMemory.js';
 import shadowCatcherAccumulationWGSL from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
@@ -5,6 +6,7 @@ import { fullScreenQuadVertexShaderWGSL } from './WGPUFullQuadPass.js';
 
 export function createNormalizeRayTraceOutputWGSL(layers = false, catcher = true) {
   return /* wgsl */ `
+${hdrResolveWGSL}
 @group(0) @binding(0) var<storage, read> colorBuffer: array<vec4f>;
 @group(0) @binding(1) var<storage, read> normalBuffer: array<vec4f>;
 @group(0) @binding(2) var<storage, read> albedoBuffer: array<vec4f>;
@@ -75,8 +77,10 @@ fn main(@builtin(position) coord: vec4f) -> FSOutput {
   ` : `output.color = vec4f(
     // average the color by hit count.
     // So the antialised edge color will be correct when having transparent background
-    color.rgb / select(total, hit, hit > 0.0),
-    color.a / total
+    vec3f(hdr_resolve_component(color.r,normal.a,hit,1.0,true),
+      hdr_resolve_component(color.g,normal.a,hit,1.0,true),
+      hdr_resolve_component(color.b,normal.a,hit,1.0,true)),
+    hdr_resolve_component(color.a,normal.a,hit,1.0,false)
   );
 
   output.normal = vec4f(0.0);
@@ -85,7 +89,12 @@ fn main(@builtin(position) coord: vec4f) -> FSOutput {
     output.normal = vec4f(normal.rgb / total * 0.5 + 0.5, 1.0);
   }
   output.albedo = vec4f(albedo.rgb / total, clamp(hit / total, 0.0, 1.0));
-  ${catcher ? 'output.shadowCatcher = shadowCatcherBuffer[idx].mask / total;' : ''}
+  ${catcher ? `let shadow = shadowCatcherBuffer[idx];
+  // Opacity is the ratio of the summed occluded and total light sample
+  // counts; a per-sample ratio average would keep its low-sample bias. Alpha
+  // carries it scaled by coverage, as composition expects.
+  output.shadowCatcher = vec4f(shadow.mask.rgb / total,
+    shadow.mask.r / total * select(0.0, shadow.moments.z / shadow.moments.w, shadow.moments.w > 0.0));` : ''}
   `}
   return output;
 }

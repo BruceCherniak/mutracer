@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Engine, Render, RenderLoop, Sync,
+  Engine, Render, RenderLoop, Sync, ProceduralSky,
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
-import { DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
-import { Environment, createSky, loadHDR, parseHDR } from './environment';
+import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
@@ -79,7 +79,8 @@ export class ViewerEngine {
   private readonly controls: OrbitControls;
   private readonly ground: THREE.Mesh;
   private readonly modelGroup = new THREE.Group();
-  private readonly environment = new Environment(createSky());
+  private readonly sky = new ProceduralSky({ time: get().settings.skyTime });
+  private readonly environment = new Environment({ data: new Float32Array([0, 0, 0, 1]), width: 1, height: 1 });
   private modelEnvironment: Environment | null = null;
   private readonly studioAmbient = new Environment(createStudioAmbient());
   private readonly studioRig = new THREE.Group();
@@ -136,7 +137,7 @@ export class ViewerEngine {
     this.engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
     this.preview = new Render(this.engine, {resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125}, maxSamples: 1,
       bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
-    this.final = new Render(this.engine, {fallback: this.preview});
+    this.final = new Render(this.engine, {fallback: this.preview, batchSamples: true});
     this.engine.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
 
     this.scene.add(this.modelGroup);
@@ -328,6 +329,8 @@ export class ViewerEngine {
     this.modelId = null; // Fit must not overwrite the saved view before restoration.
     this.setModel(model, edits);
     const cameraRestored = restored ? this.restoreCamera(id) : false;
+    const researchScene = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research';
+    if (researchScene) setSettings({ groundShadow: false }, { record: false });
     const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
     if (authoredLighting && !cameraRestored) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
@@ -347,7 +350,7 @@ export class ViewerEngine {
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
     if (!cameraRestored && this.modelCameras.length) {
-      if (MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research') {
+      if (researchScene) {
         setSettings({ cameraIndex: 0 });
       } else {
         const count = this.modelCameras.length;
@@ -499,6 +502,7 @@ export class ViewerEngine {
     const owner = this;
     return new THREESync(this.engine, {
       scene: this.scene, get camera() {return owner.activeCamera();}, controls: this.controls,
+      get environment() { return owner.settings.lighting !== 'studio' && owner.settings.envId === 'sky' ? owner.sky : undefined; },
       get updateControls() {return owner.settings.cameraIndex < 0;},
       onMeshConverted: (mesh, source, group) => {
         if (source === this.ground) return;
@@ -518,7 +522,7 @@ export class ViewerEngine {
     }
     const url = environmentUrl(preset, this.settings.envResolution);
     if (!url) {
-      this.setEnvironmentData(createSky(), id);
+      this.applySky(id);
       return;
     }
     const name = `${preset.name} ${this.settings.envResolution.toUpperCase()}`;
@@ -528,6 +532,12 @@ export class ViewerEngine {
       showToast(`Could not load ${preset.name}: ${(error as Error).message}. Using the procedural sky.`, 'error');
       useViewer.setState((s) => ({ settings: { ...s.settings, envId: 'sky' } }));
     }
+  }
+
+  private applySky(_id: string) {
+    this.cancelEnvironmentDownload();
+    this.sky.time = this.settings.skyTime;
+    this.applyBackground();
   }
 
   private async loadEnvironmentFromURL(url: string) {
@@ -568,7 +578,7 @@ export class ViewerEngine {
     set({ envLoading: null });
   }
 
-  private setEnvironmentData(data: ReturnType<typeof createSky>, id: string) {
+  private setEnvironmentData(data: EquirectData, id: string) {
     this.cancelEnvironmentDownload();
     this.environment.setSource(data);
     this.applyBackground();
@@ -589,7 +599,7 @@ export class ViewerEngine {
     // The studio ambient is a plain gradient, so it is shown as a backdrop.
     const grounded = autoGroundedSkybox(get().modelRadius, groundedHeight);
     this.scene.userData.mutracerGroundedSkybox = background === 'grounded' && !studio ? {
-      texture: environment.texture,
+      texture: this.settings.envId === 'sky' ? this.sky : environment.texture,
       intensity,
       rotation: this.scene.environmentRotation.y,
       height: grounded.height,
@@ -623,6 +633,7 @@ export class ViewerEngine {
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
     const r = this.final, display = this.engine.display;
     this.engine.bvhBuilder = s.bvhBuilder;
+    r.aovs = this.preview.aovs = VIEWER_AOVS.filter(kind => kind === s.output);
     r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = s.resolutionScale;
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
@@ -638,13 +649,15 @@ export class ViewerEngine {
       temperature: s.temperature, tint: s.tint,
       bloomIntensity: s.bloomIntensity, bloomThreshold: s.bloomThreshold, bloomRadius: s.bloomRadius,
       vignette: s.vignette, channel: s.output, shadowCatcherAlpha: s.groundOpacity,
+      aovDepthRange: [0, s.aovDepthFar], aovPositionScale: s.aovPositionScale,
+      aovMotionScale: s.aovMotionScale, aovIdComponent: s.aovIdComponent,
     };
     Object.assign(display, displaySettings);
     this.ground.visible = s.groundShadow;
     this.controls.autoRotate = s.autoRotate;
     this.controls.enabled = true;
 
-    if ((changed('envId') || changed('envResolution')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
+    if ((changed('envId') || changed('envResolution') || (changed('skyTime') && s.envId === 'sky')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
     if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') || changed('studioSize')) this.applyStudioRig();
     if (changed('studioAmbientColor')) {
       // THREE.Color converts the sRGB hex to linear RGB.
@@ -1329,7 +1342,7 @@ export class ViewerEngine {
   async downloadViewportImage() {
     if (this.exporting) return;
     try {
-      const samples = (this.displayed ?? this.final).samples;
+      const samples = this.displaySamples(this.displayed ?? this.final);
       if (samples === 0) throw new Error('The viewport has not rendered an image yet');
       const blob = await this.captureImage();
       this.downloadImage(blob, samples, 'viewport');
@@ -1368,13 +1381,20 @@ export class ViewerEngine {
     if (this.exporting) throw new Error('A render is already running');
     this.exporting = true; this.exportAbort = new AbortController();
     const background = this.settings.background;
-    const camera = this.activeCamera().clone(); setAspect(camera, options.width / options.height);
+    const source = this.activeCamera();
+    source.updateWorldMatrix(true, false);
+    const camera = source.clone();
+    // A detached clone must retain the model camera's full parent transform.
+    camera.matrixAutoUpdate = false;
+    camera.matrix.copy(source.matrixWorld);
+    setAspect(camera, options.width / options.height);
     let image: Render | undefined;
     set({export: {stage: 'final', samples: 0, target: options.samples}});
     try {
       if (options.transparent && background !== 'transparent') { this.settings = {...this.settings, background: 'transparent'}; this.applyBackground(); }
       this.sync.update(); this.viewSync.update(); this.engine.update();
       image = new Render(this.engine, {width: options.width, height: options.height,
+        aovs: this.final.aovs, aovSamples: this.final.aovSamples,
         maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping,
         samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
         dispersionWavelengths: this.final.dispersionWavelengths, directLightCandidates: this.final.directLightCandidates,
@@ -1493,7 +1513,7 @@ export class ViewerEngine {
     const phase = this.loop.tick();
     this.publishLens(this.activeCamera());
     const shown = phase === 'previewing' ? this.preview : this.final;
-    if (shown.samples > 0) this.displayed = shown;
+    if (this.displaySamples(shown) > 0) this.displayed = shown;
     // Query only after the renderer uploads the current animation pose and
     // camera. Readback runs alongside subsequent frames.
     if (phase !== 'preparing' && phase !== 'compiling' && phase !== 'error') {
@@ -1503,8 +1523,12 @@ export class ViewerEngine {
     this.updateSelectionRect();
   };
 
+  private displaySamples(render: Render): number {
+    return VIEWER_AOVS.some(kind => kind === this.settings.output) ? render.aovSamplesRendered : render.samples;
+  }
+
   private publishStats(phase: RenderPhase, now: number, force: boolean) {
-    const samples = phase === 'previewing' ? 0 : this.final.samples;
+    const samples = phase === 'previewing' ? 0 : this.displaySamples(this.final);
     // Restarted accumulation (an edit, a camera move or an animation frame).
     if (samples < this.lastSamples || samples <= 1) this.sampleStart = now;
     // Time stops at the last added sample, so it freezes once rendering finishes.
@@ -1515,7 +1539,7 @@ export class ViewerEngine {
       // Preparation keeps the previous scene's accumulation alive. Only a
       // rendering phase can confirm that the newly loaded model has a sample.
       const hasNewSample = (samples > 0 && (phase === 'converging' || phase === 'denoising' || phase === 'finished')) ||
-        (phase === 'previewing' && (this.displayed?.samples ?? 0) > 0);
+        (phase === 'previewing' && (this.displayed ? this.displaySamples(this.displayed) : 0) > 0);
       if (hasNewSample || phase === 'error') {
         this.awaitingFirstSample = false;
         set({ loading: null });

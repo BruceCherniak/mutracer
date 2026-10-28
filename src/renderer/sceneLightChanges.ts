@@ -1,13 +1,13 @@
-import { SceneLight } from '../scene/Scene.js';
+import type { SceneLight } from '../scene/Scene.js';
 import { snapshotFields, snapshotsEqual } from './sceneChangeDetector.js';
 import { generateEnvMapFromSceneComponents } from './envMapCreation.js';
-import { EnvironmentMapSource } from './envMapDistribution.js';
+import type { EnvironmentSource } from './envMapDistribution.js';
 import Texture from '../scene/Texture.js';
 
 /** Synthesized environment data is retained across analytic-light edits. */
 export class SceneEnvironmentCache {
   private _snapshot: unknown[][] = [];
-  private _image?: EnvironmentMapSource;
+  private _image?: EnvironmentSource;
   update(lights: readonly SceneLight[]) {
     const ambient = lights.filter(light => light.type === 'AmbientLight');
     const environment = lights.filter(light => light.type === 'EnvironmentLight');

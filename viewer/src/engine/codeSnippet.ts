@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { DEFAULT_JNLM_OPTIONS, VERSION, type DenoiserOptions } from '@meimu/mutracer';
-import type { Settings } from '../store';
+import { VIEWER_AOVS, type Settings } from '../store';
 import { getDenoiserOptions } from './denoiserSettings';
 
 type Vec3 = [number, number, number];
@@ -57,6 +57,7 @@ const DISPLAY_DEFAULTS: [keyof Settings, string, unknown][] = [
 const num = (value: number) => String(Number(value.toPrecision(6)));
 const vec = (values: readonly number[]) => values.map(num).join(', ');
 const literal = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(literal).join(', ')}]`;
   if (typeof value === 'number') return num(value);
   if (typeof value === 'string') return `'${value}'`;
   if (typeof value === 'boolean' || value === null) return String(value);
@@ -88,7 +89,8 @@ function denoiser(settings: Settings, webgpu: boolean, preview: boolean) {
 export function generateCode(snapshot: CodeSnapshot): string {
   const s = snapshot.settings;
   const studio = s.lighting === 'studio';
-  const hdr = !studio && !snapshot.blackEnvironment;
+  const procedural = !studio && s.envId === 'sky' && !snapshot.environmentUrl && !snapshot.blackEnvironment;
+  const hdr = !studio && !procedural && !snapshot.blackEnvironment;
   const cam = snapshot.camera;
   const ortho = cam.projection === 'orthographic';
   const lens = !ortho && s.fStop > 0;
@@ -96,6 +98,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
   const out = (...rows: string[]) => lines.push(...rows);
   const imports = ['Engine', 'RenderLoop', 'THREESync'];
   if (lens || snapshot.animation) imports.push('Sync');
+  if (procedural) imports.push('ProceduralSky');
 
   const placeholders = [
     ...(snapshot.modelUrl ? [] : ['./model.glb']),
@@ -161,6 +164,9 @@ export function generateCode(snapshot: CodeSnapshot): string {
         'scene.environment = ambient;'
       );
     }
+  } else if (procedural) {
+    env = 'environment';
+    out(`const environment = new ProceduralSky({ time: ${num(s.skyTime)} });`);
   } else if (hdr) {
     env = 'environment';
     out(
@@ -241,7 +247,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
   out(
     '',
     'const engine = new Engine({ canvas });',
-    'const sync = new THREESync(engine, { scene, camera, controls });'
+    `const sync = new THREESync(engine, { scene, camera, controls${procedural ? ', environment' : ''} });`
   );
   if (lens) {
     syncs.push('lens');
@@ -269,6 +275,13 @@ export function generateCode(snapshot: CodeSnapshot): string {
 
   const display: Record<string, unknown> = {};
   for (const [key, name, fallback] of DISPLAY_DEFAULTS) if (s[key] !== fallback) display[name] = s[key];
+  const aovs = VIEWER_AOVS.filter(kind => kind === s.output);
+  if (aovs.length) {
+    if (s.aovDepthFar !== 10) display.aovDepthRange = [0, s.aovDepthFar];
+    if (s.aovPositionScale !== 1) display.aovPositionScale = s.aovPositionScale;
+    if (s.aovMotionScale !== 16) display.aovMotionScale = s.aovMotionScale;
+    if (s.aovIdComponent !== 'object') display.aovIdComponent = s.aovIdComponent;
+  }
   if (s.groundShadow && s.groundOpacity !== 1) display.shadowCatcherAlpha = s.groundOpacity;
   if (Object.keys(display).length) out(`Object.assign(engine.display, ${object(display)});`);
 
@@ -276,12 +289,14 @@ export function generateCode(snapshot: CodeSnapshot): string {
   for (const [key, fallback] of Object.entries(RENDER_DEFAULTS) as [keyof typeof RENDER_DEFAULTS, unknown][]) {
     if (s[key] !== fallback) final[key] = s[key];
   }
+  if (aovs.length) final.aovs = aovs;
   final.denoiser = denoiser(s, snapshot.webgpu, false);
   let preview: Record<string, unknown> | false = false;
   if (s.previewEnabled) {
     const scale = s.previewMaxResolutionScale;
     const minScale = Math.min(PREVIEW_DEFAULTS.minScale, scale);
     preview = {
+      aovs: aovs.length ? aovs : undefined,
       resolutionScale: scale !== PREVIEW_DEFAULTS.resolutionScale ? scale : undefined,
       adaptiveResolution: minScale !== PREVIEW_DEFAULTS.minScale ? {targetFrameMs: 80, minScale} : undefined,
       bounces: Math.min(PREVIEW_DEFAULTS.bounces, s.bounces) !== PREVIEW_DEFAULTS.bounces ? s.bounces : undefined,

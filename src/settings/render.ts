@@ -9,6 +9,8 @@ type Descriptor<K extends keyof Render> = {
 const both = ['webgpu', 'webgl'] as const;
 // Trace fields are exhaustive: adding a pipeline setting requires a descriptor.
 export const traceSchema = {
+  aovs: {key: 'aovs', default: [], kind: 'execution', backends: both},
+  aovSamples: {key: 'aovSamples', default: 16, kind: 'execution', backends: both},
   bounces: {key: 'bounces', default: 3, kind: 'image', backends: both},
   clamping: {key: 'clamping', default: 0, kind: 'image', backends: both},
   bevel: {key: 'bevel', default: true, kind: 'image', backends: both},
@@ -21,7 +23,7 @@ export const traceSchema = {
   maxSamples: {key: 'maxSamples', default: 2048, kind: 'sample-cap', backends: both},
   timeBudgetMs: {key: 'timeBudgetMs', default: 21, kind: 'execution', backends: both},
   maxTiles: {key: 'maxTiles', default: Infinity, kind: 'execution', backends: both},
-  allowMultipleSamplesPerFrame: {key: 'allowMultipleSamplesPerFrame', default: false, kind: 'execution', backends: both},
+  batchSamples: {key: 'batchSamples', default: false, kind: 'execution', backends: both},
 } satisfies {[K in keyof TraceSettings]: Descriptor<K>};
 export const renderSchema = [
   ...Object.values(traceSchema),

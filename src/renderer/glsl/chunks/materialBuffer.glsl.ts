@@ -1,6 +1,6 @@
 import { simpleTextureSample, thinFilmTextureSample } from '../../materialTextureSlots.js';
-import { materialRowsGlsl } from '../../materialLayout.js';
-import { materialAlphaModeConstants } from '../../../scene/OpenPBRMaterial.js';
+import { materialRowsGlsl } from '../../materialLayoutSchema.js';
+import { materialAlphaModeConstants } from '../../materialConstants.js';
 import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15

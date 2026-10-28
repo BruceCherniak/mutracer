@@ -1,5 +1,5 @@
 import type { ShaderCompilationDiagnostics } from './RenderingPipeline.js';
-import { FragmentShader, ShaderDefineValue, ShaderUniform } from './shader.js';
+import { FragmentShader, type ShaderDefineValue, type ShaderUniform } from './shader.js';
 
 export { FragmentShader, Shader, createShaderMixin, glsl } from './shader.js';
 
@@ -212,6 +212,7 @@ export class Texture2D {
 
   protected _format(gl: WebGL2RenderingContext, channels = 4) {
     const type = this._options.type || gl.UNSIGNED_BYTE;
+    if (type === gl.UNSIGNED_INT) return {type, format: gl.RGBA_INTEGER, internalFormat: gl.RGBA32UI};
     const formats = [gl.RED, gl.RG, gl.RGB, gl.RGBA];
     const floatFormats = [gl.R32F, gl.RG32F, gl.RGB32F, gl.RGBA32F];
     const halfFloatFormats = [gl.R16F, gl.RG16F, gl.RGB16F, gl.RGBA16F];
@@ -456,6 +457,7 @@ export class WebGLProgramBindings {
   bind(renderer: WebGLDevice) {
     const gl = renderer.gl;
     const program = this.getProgram(renderer);
+    if (!renderer.isProgramCompiled(program)) return false;
     gl.useProgram(program);
     let textureUnit = 0;
     for (const [name, uniform] of Object.entries(this.uniforms)) {
@@ -470,6 +472,7 @@ export class WebGLProgramBindings {
         setUniform(gl, location, uniform, value);
       }
     }
+    return true;
   }
 }
 
@@ -569,13 +572,14 @@ function composeFragment(
     })
     .join('\n');
   const outputCode = shader.outputs
-    .map((name, index) => `layout(location=${index}) out highp vec4 out_${name};`)
+    .map((name, index) => `layout(location=${index}) out highp ${shader.outputTypes[name] ?? 'vec4'} out_${name};`)
     .join('\n');
   return /* glsl */ `#version 300 es
 precision highp float;
 precision highp int;
 precision highp sampler2D;
 precision highp sampler2DArray;
+precision highp usampler2D;
 ${defineCode}
 ${outputCode}
 ${uniformCode}
@@ -598,6 +602,8 @@ export class WebGLDevice {
   private _viewportStack: Array<[number, number, number, number]> = [];
   private _programs = new Set<WebGLProgram>();
   private _parallel?: KHR_parallel_shader_compile;
+  private _pendingPrograms = new Map<WebGLProgram, {shader: FragmentShader; shaders: WebGLShader[]}>();
+  private _programErrors = new Map<WebGLProgram, Error>();
   private _compilationStart = 0;
   private _compilationRecords: {
     program: WebGLProgram; label: string; bytes: number; lines: number; fingerprint: string;
@@ -631,22 +637,28 @@ export class WebGLDevice {
     for (let i = 0; i < source.length; i++) hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
     const creationStart = performance.now();
     const program = gl.createProgram()!;
+    const asynchronous = !!this._parallel && shader.parallelCompile;
+    const shaders: WebGLShader[] = [];
     const compile = (type: number, source: string) => {
       const result = gl.createShader(type)!;
+      shaders.push(result);
       gl.shaderSource(result, source);
       gl.compileShader(result);
-      if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) {
+      // COMPILE_STATUS and LINK_STATUS can synchronously wait for the driver.
+      // Poll COMPLETION_STATUS_KHR before either query for large programs.
+      if (!asynchronous && !gl.getShaderParameter(result, gl.COMPILE_STATUS)) {
         const message = gl.getShaderInfoLog(result);
         gl.deleteShader(result);
         throw new Error(`${shader.name || 'WebGL shader'}: ${message}\n${source}`);
       }
       gl.attachShader(program, result);
-      gl.deleteShader(result);
+      if (!asynchronous) gl.deleteShader(result);
     };
     compile(gl.VERTEX_SHADER, fullscreenVertex);
     compile(gl.FRAGMENT_SHADER, fragment);
     gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    if (asynchronous) this._pendingPrograms.set(program, {shader, shaders});
+    else if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
       throw new Error(
         `${shader.name || 'WebGL program'}: ${gl.getProgramInfoLog(program)}`
       );
@@ -656,15 +668,39 @@ export class WebGLDevice {
       bytes: new TextEncoder().encode(source).byteLength, lines: source.split('\n').length,
       fingerprint: (hash >>> 0).toString(16).padStart(8, '0'), startedAt,
       generationMs, creationMs: performance.now() - creationStart,
-      completedAt: this._parallel ? undefined : performance.now()});
+      completedAt: asynchronous ? undefined : performance.now()});
     return program;
+  }
+
+  isProgramCompiled(program: WebGLProgram) {
+    const error = this._programErrors.get(program);
+    if (error) throw error;
+    const pending = this._pendingPrograms.get(program);
+    if (!pending) return true;
+    const gl = this.gl;
+    if (!gl.getProgramParameter(program, this._parallel!.COMPLETION_STATUS_KHR)) return false;
+    this._pendingPrograms.delete(program);
+    try {
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        const details = pending.shaders.filter(s => !gl.getShaderParameter(s, gl.COMPILE_STATUS))
+          .map(s => `${gl.getShaderInfoLog(s)}\n${gl.getShaderSource(s)}`).join('\n');
+        const failure = new Error(`${pending.shader.name || 'WebGL program'}: ${gl.getProgramInfoLog(program)}${details ? '\n' + details : ''}`);
+        this._programErrors.set(program, failure);
+        throw failure;
+      }
+    } finally {
+      pending.shaders.forEach(shader => gl.deleteShader(shader));
+    }
+    const record = this._compilationRecords.find(record => record.program === program);
+    if (record) record.completedAt = performance.now();
+    return true;
   }
 
   /** Cumulative program compilation measurements used by preparation progress. */
   getShaderCompilationDiagnostics(): ShaderCompilationDiagnostics {
     const now = performance.now(), records = this._compilationRecords;
     for (const record of records) {
-      if (record.completedAt === undefined && (!this._parallel || this.gl.getProgramParameter(record.program, this._parallel.COMPLETION_STATUS_KHR))) record.completedAt = now;
+      if (record.completedAt === undefined && this.isProgramCompiled(record.program)) record.completedAt = now;
     }
     const completed = records.filter(record => record.completedAt !== undefined);
     const duration = completed.length === records.length && records.length > 0
@@ -695,9 +731,8 @@ export class WebGLDevice {
   }
 
   isAllProgramCompiled() {
-    if (!this._parallel) return true;
     for (const program of this._programs) {
-      if (!this.gl.getProgramParameter(program, this._parallel.COMPLETION_STATUS_KHR)) {
+      if (!this.isProgramCompiled(program)) {
         return false;
       }
     }
@@ -729,6 +764,9 @@ export class WebGLDevice {
   }
 
   dispose() {
+    this._pendingPrograms.forEach(pending => pending.shaders.forEach(shader => this.gl.deleteShader(shader)));
+    this._pendingPrograms.clear();
+    this._programErrors.clear();
     this._programs.forEach((program) => this.gl.deleteProgram(program));
     this._programs.clear();
     this._compilationRecords = [];

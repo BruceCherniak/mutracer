@@ -2,22 +2,24 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import OpenPBRMaterial, {
-  MaterialTextureName
-} from '../scene/OpenPBRMaterial.js';
-import Texture from '../scene/Texture.js';
+import type MaterialState from '../scene/MaterialState.js';
+import type { MaterialTextureName } from '../scene/materialTextureNames.js';
+import type TextureState from '../scene/TextureState.js';
 
 // retrieve textures used by meshes, grouping textures from meshes shared *across all* mesh properties
-export function mergeTexturesFromMaterials<T extends MaterialTextureName>(
-  materials: OpenPBRMaterial[],
+export function mergeTexturesFromMaterials<M extends MaterialState, T extends MaterialTextureName>(
+  materials: M[],
   textureNames: readonly T[]
+): {textures: NonNullable<M[T]>[]; indices: Record<string, number[]>};
+export function mergeTexturesFromMaterials(
+  materials: MaterialState[], textureNames: readonly MaterialTextureName[]
 ) {
   const textureMap: {
-    textures: Texture[];
-    indices: Record<T, number[]>;
+    textures: TextureState[];
+    indices: Record<string, number[]>;
   } = {
     textures: [],
-    indices: {} as Record<T, number[]>
+    indices: {} as Record<string, number[]>
   };
 
   for (const name of textureNames) {
@@ -32,9 +34,9 @@ export function mergeTexturesFromMaterials<T extends MaterialTextureName>(
 }
 
 function texturesFromMaterials(
-  materials: OpenPBRMaterial[],
+  materials: MaterialState[],
   textureName: MaterialTextureName,
-  textures: Texture[]
+  textures: TextureState[]
 ) {
   const indices = [];
 

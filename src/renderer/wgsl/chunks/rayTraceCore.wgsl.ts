@@ -1,20 +1,23 @@
-import { materialBufferWgsl } from '../../materialLayout.js';
+import { materialBufferWgsl } from '../../materialLayoutSchema.js';
+import {ALL_LIGHT_SHADER_CAPABILITIES, LIGHT_SHADER_CAPABILITIES} from '../../shaderCapabilities.js';
 import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
 import {
   CONSTANT_DIRECTIONAL_LIGHT,
   CONSTANT_RECT_LIGHT,
   CONSTANT_SPHERE_LIGHT,
   CONSTANT_SPOT_LIGHT
-} from '../../lightsUtil.js';
+} from '../../lightConstants.js';
 
 export default function rayTraceCore({
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
-  hasSceneAlpha = true
+  hasSceneAlpha = true,
+  lightCapabilities = ALL_LIGHT_SHADER_CAPABILITIES
 }: {
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
   hasSceneAlpha?: boolean;
+  lightCapabilities?: number;
 }) {
   return /*wgsl*/ `
 // https://www.w3.org/WAI/GL/wiki/Relative_luminance
@@ -29,6 +32,11 @@ const RECT_LIGHT = ${CONSTANT_RECT_LIGHT};
 const SPHERE_LIGHT = ${CONSTANT_SPHERE_LIGHT};
 const DIRECTIONAL_LIGHT = ${CONSTANT_DIRECTIONAL_LIGHT};
 const SPOT_LIGHT = ${CONSTANT_SPOT_LIGHT};
+const HAS_SCENE_SPHERE_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.SphereLight) !== 0};
+const HAS_SCENE_RECT_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.RectLight) !== 0};
+const HAS_SCENE_SPOT_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.SpotLight) !== 0};
+const HAS_SCENE_DIRECTIONAL_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.DirectionalLight) !== 0};
+const HAS_SCENE_EMISSIVE_LIGHT = ${(lightCapabilities & LIGHT_SHADER_CAPABILITIES.emissive) !== 0};
 
 struct Ray {
   o: vec3f,
@@ -264,8 +272,12 @@ struct RayTraceUniform {
   sequenceSeed: u32,
   zSobolLogSPP: u32,
   sampleSequenceOffset: u32,
+  // Shadow-catcher light table, relative to lightChoiceTexelOffset.
+  shadowCatcherChoiceOffset: i32,
+  shadowCatcherChoiceCount: i32,
   environmentRotation: mat4x4f,
   backgroundMapTransform: vec4f,
+  backgroundMapRotation: mat4x4f,
 }
 
 // Buffers

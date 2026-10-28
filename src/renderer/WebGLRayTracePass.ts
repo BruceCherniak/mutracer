@@ -1,3 +1,9 @@
+import {AovPrimitiveCache} from './AovPrimitiveCache.js';
+import {aovTraceFragment} from './glsl/aovTrace.frag.js';
+import {WebGLAov} from './WebGLAov.js';
+import {packAovScene} from './aovScene.js';
+import {aovMask, type AovKind} from './aov.js';
+import { WebGLSkySource } from './WebGLSkySource.js';
 import { normalizeBounces } from './pathLimits.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
 import { updateTLASInstanceColors } from './bvhAccel.js';
@@ -32,7 +38,7 @@ import {
   type FlattendBVH
 } from './bvhAccel.js';
 import {
-  generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform
+  generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform, backgroundMapRotation
 } from './envMapCreation.js';
 import {
   envMapDistribution,
@@ -53,7 +59,7 @@ import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
-import { SceneBackground, SceneLight } from '../scene/Scene.js';
+import type { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { isIntelMac, numberArraysEqual } from './util.js';
 import Camera from '../scene/Camera.js';
 import {
@@ -126,6 +132,7 @@ function packLightsToTexture(
 // TODO use one method to set all required properties.
 // Ensure necessary properties are set.
 class WebGLRayTracePass {
+  private _aovPrimitiveCache = new AovPrimitiveCache();
   private readonly _renderer: WebGLRenderer;
   private _meshes: Mesh[] = [];
   private _sceneEnvironment = new SceneEnvironmentCache();
@@ -188,6 +195,7 @@ class WebGLRayTracePass {
   private _envMap = new WebGLTexture2D(commonLinearFloatProps);
   private _envMapDistribution = new WebGLTexture2D(commonLinearFloatProps);
   private _envImageSource?: EnvironmentMapSource;
+  private readonly _skySource = new WebGLSkySource();
   private _backgroundTex = new WebGLTexture2D(commonLinearFloatProps);
 
   private _hasEnvMap = false;
@@ -195,6 +203,7 @@ class WebGLRayTracePass {
   private _groundedBackgroundParams = new Float32Array([0, 0, 0, 0]);
   private _groundedBackgroundCenter = new Float32Array([0, 0]);
   private _backgroundMapTransform = backgroundMapTransform();
+  private _backgroundMapRotation = new Float32Array([1,0,0, 0,1,0, 0,0,1]);
 
   private _bounces = 2;
   private _bevelSamples = DEFAULT_BEVEL_SAMPLES;
@@ -238,6 +247,8 @@ class WebGLRayTracePass {
   private _apertureRadius = 0;
   private _focusDistance = 10;
 
+  private _aovPass: WebGLFullQuadPass<string, 'geometry' | 'position' | 'diffuse' | 'specular'>;
+  private _aovCenter: WebGLFullQuadPass<string, 'id' | 'motion'>;
   private _tracePasses: WebGLFullQuadPass<any, any>[];
   private readonly _depthPass: WebGLFullQuadPass<never, 'depth'>;
   private readonly _depthAbort = new AbortController();
@@ -292,7 +303,9 @@ class WebGLRayTracePass {
       shader: depthQueryFrag, outputs: ['depth'],
       outputParams: { depth: commonNearestFloatProps }
     });
-    this._tracePasses = [this._mainPass, this._shadowCatcherPass, this._depthPass];
+    this._aovPass = new WebGLFullQuadPass('AOV accumulation', renderer, {shader:aovTraceFragment(false), outputs:['geometry','position','diffuse','specular'], outputParams: Object.fromEntries(['geometry','position','diffuse','specular'].map(name=>[name,commonNearestFloatProps]))});
+    this._aovCenter = new WebGLFullQuadPass('AOV center',renderer,{shader:aovTraceFragment(true),outputs:['id','motion'],outputParams:{id:{...commonNearestFloatProps,type:5125},motion:commonNearestFloatProps}});
+    this._tracePasses = [this._aovPass, this._aovCenter, this._mainPass, this._shadowCatcherPass, this._depthPass];
     this._tracePasses.forEach((pass) => {
       pass.setDefines({
         OES_texture_float_linear: !!renderer.gl.getExtension(
@@ -301,6 +314,14 @@ class WebGLRayTracePass {
       });
     });
     this._mainPass.setUniform('openPbrEnergyLut', this._openPbrEnergyLut);
+    this._aovPass.setUniform('openPbrEnergyLut', this._openPbrEnergyLut);
+  }
+
+  preparePrograms() {
+    this.prepare();
+    const main = this._mainPass.isProgramReady();
+    const shadow = !this._hasShadowCatcher || this._shadowCatcherPass.isProgramReady();
+    return main && shadow;
   }
 
   createPass(
@@ -380,8 +401,10 @@ class WebGLRayTracePass {
 
   setBackground(background?: SceneBackground) {
     this._backgroundMapTransform.set(backgroundMapTransform(background));
+    const rotation = backgroundMapRotation(background);
+    this._backgroundMapRotation.set([rotation[0],rotation[1],rotation[2], rotation[4],rotation[5],rotation[6], rotation[8],rotation[9],rotation[10]]);
     const backgroundImage =
-      background && generateBackgroundMapFromSceneBackground(background)!;
+      background ? this._skySource.resolve(generateBackgroundMapFromSceneBackground(background)) : undefined;
 
     if (backgroundImage) {
       this._backgroundTex.source = backgroundImage;
@@ -539,10 +562,15 @@ class WebGLRayTracePass {
     return this._debugBvhData;
   }
 
+  /** @internal */
+  _loadDiagnosticAccumulation(inputs: Record<string, WebGLTexture2D>, catcher: boolean) {
+    this._mainPass.loadDiagnosticOutputs({color: inputs.color, albedo: inputs.albedo, normal: inputs.normal, moments: inputs.moments});
+    this._shadowCatcherPass.loadDiagnosticOutputs({shadowCatcher: inputs.shadowCatcher, catcherBackground: inputs.catcherBackground, catcherMoments: inputs.catcherMoments});
+    this._hasShadowCatcher = catcher;
+  }
+
   getDiagnostics() {
-    return {
-      textureAtlas: this._materialData?.textureAtlasStats
-    };
+    return { textureAtlas: this._materialData?.textureAtlasStats };
   }
 
   private _updateMeshData() {
@@ -813,7 +841,7 @@ class WebGLRayTracePass {
     ) as AnalyticLight[];
     const numAnalyticLights = analyticLights.length;
 
-    const envImage = this._sceneEnvironment.update(lights);
+    const envImage = this._skySource.resolve(this._sceneEnvironment.update(lights));
     const rotation = environmentRotation(lights);
     const rotation3 = [rotation[0], rotation[1], rotation[2], rotation[4], rotation[5], rotation[6], rotation[8], rotation[9], rotation[10]];
     this._tracePasses.forEach(pass => pass.setUniform('environmentRotation', rotation3));
@@ -1020,6 +1048,7 @@ class WebGLRayTracePass {
       pass.setUniform('groundedBackgroundParams', this._groundedBackgroundParams);
       pass.setUniform('groundedBackgroundCenter', this._groundedBackgroundCenter);
       pass.setUniform('backgroundMapTransform', this._backgroundMapTransform);
+      pass.setUniform('backgroundMapRotation', this._backgroundMapRotation);
 
       pass.setDefines({
         // Double bounce fix on intel mac
@@ -1055,6 +1084,38 @@ class WebGLRayTracePass {
   // WebGL has uniform per-pixel counts; setSampleCount already includes offset.
   setSampleSequenceOffset(_offset: number) {}
 
+  prepareAovs(state: WebGLAov, camera: Camera, width: number, height: number, kinds: readonly AovKind[]) {
+    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
+    const gl = this._renderer.gl;
+    if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
+    this.prepare(); state.resize(width,height);
+    this._aovPass.setDefines({AOV_REFLECTANCE: (aovMask(kinds) & 24) !== 0});
+    if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history,this._aovPrimitiveCache.get(this._preparedMeshData,this._tlas)); state.frame=packed.frame; state.setScene(packed.words); }
+    this._aovCenter.setUniform('aovScene',state.scene); this._aovCenter.setUniform('previousId',state.previousCenter!.id);this._aovCenter.setUniform('previousMotion',state.previousCenter!.motion); this._aovPass.setUniform('aovScene',state.scene);
+    this._aovCenter.setSize(width,height); this._aovPass.setSize(width,height);
+    const previous=state.accumulation[(state.samples+1)%2];
+    const center=this._aovCenter.isProgramReady();
+    const accumulation=this._aovPass.isProgramReady({previousGeometry:previous.geometry,previousPosition:previous.position,previousDiffuse:previous.diffuse,previousSpecular:previous.specular});
+    return center && accumulation;
+  }
+
+  renderAovs(state: WebGLAov, camera: Camera, width: number, height: number, samples: number, cap: number, kinds: readonly AovKind[], sequenceOffset = 0) {
+    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
+    if (!this.prepareAovs(state,camera,width,height,kinds)) return false;
+    if (!state.centerReady) {this._aovCenter.createPass({},state.center);state.centerReady=true;state.history.accept(state.frame!);}
+    const target=Math.min(samples,cap);
+    if ((aovMask(kinds) & 31) === 0) state.samples = target;
+    while(state.samples<target){
+      const output=state.accumulation[state.samples%2], previous=state.accumulation[(state.samples+1)%2];
+      this._aovPass.setUniform('aovMask',aovMask(kinds));
+      this._aovPass.setUniform('aovSample',state.samples);
+      this._aovPass.setUniform('sampleCount',state.samples+sequenceOffset);
+      this._aovPass.createPass({previousGeometry:previous.geometry,previousPosition:previous.position,previousDiffuse:previous.diffuse,previousSpecular:previous.specular},output);
+      state.samples++;
+    }
+    return true;
+  }
+
   async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {
     if (this._depthAbort.signal.aborted || this._invalid || !this._preparedMeshData ||
       !this._renderer.isAllProgramCompiled()) return;
@@ -1067,6 +1128,7 @@ class WebGLRayTracePass {
   }
 
   dispose() {
+    this._skySource.dispose();
     this._depthAbort.abort();
     this._materialData?.dispose(this._renderer.gl);
     this._materialData = undefined;

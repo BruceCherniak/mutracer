@@ -5,7 +5,7 @@ See [progressive rendering](./progressive-rendering.md) for complete examples.
 
 ## Engine
 
-`new Engine({canvas?, backend?, device?})` manages the device and one GPU
+`new Engine({canvas?, backend?, device?, textureBinding?})` manages the device and one GPU
 scene. `scene` and `camera` default to undefined. Assign them and call
 `update()` to commit edits before rendering; see [updates](./updates.md).
 
@@ -14,6 +14,7 @@ scene. `scene` and `camera` default to undefined. Assign them and call
 | `canvas` | new HTML canvas, or OffscreenCanvas without document | Accepts either canvas type; default `engine.display.canvas` |
 | `device` | undefined | Caller-owned WebGPU device; see [requirements](#device-requirements) |
 | `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2 |
+| `textureBinding` | `'atlas'` | Constructor-only; `'auto'` tries experimental WebGPU bindless textures, with atlas fallback; see [texture bindings](#texture-bindings) |
 | `bvhBuilder` | `'builtin'` | JavaScript or `'tinybvh'` WebAssembly |
 | `bvhWorkerCount` | `'auto'` | Hardware concurrency minus one, clamped 1–4; or positive integer |
 | `bvhLayout` | `'bvh2'` | Static TinyBVH layout; see [BVH](./bvh.md) |
@@ -40,6 +41,28 @@ Events are `progress` (`{stage: 'device' | 'bvh' | 'shaders', progress}`),
 `error` (`Error`), and `devicelost` (`{reason, recovering}`). Each error object
 is reported once; console errors are deduplicated by message. Invalid light
 values are clamped and reported while rendering continues.
+
+### Texture bindings
+
+Use `new Engine({textureBinding: 'auto'})` to try bindless material textures
+on WebGPU. The default `'atlas'` uses the existing texture atlas. This option
+is fixed at construction. Check `engine.getDiagnostics()?.materialTextures`
+for the active mode, fallback reason, scale and estimated texture bytes.
+
+Bindless requires a resource-table feature enabled on the device and sufficient
+device limits. Chrome currently exposes an experimental implementation behind
+Unsafe WebGPU Support. Devices without it, including WebGL 2, use atlas textures.
+Caller-owned devices must enable `sampling-resource-table` or
+`chromium-experimental-sampling-resource-table` when available;
+`getRecommendedDeviceDescriptor()` does not request these experimental features.
+
+`textureAtlasBudgetBytes` applies to both modes. Bindless keeps independent
+textures and scales them together to fit the estimated pixel budget, preserving
+the current LOD 0 filtering and color rules. GPU allocation overhead, resource
+tables and metadata add memory beyond that estimate. Replacing textures can
+temporarily retain the previous GPU resources. Benefits depend on scene texture
+sizes and editing patterns; bindless does not guarantee faster rendering.
+See [texture updates](./updates.md#materials-textures-and-lights).
 
 ### Device requirements
 
@@ -104,6 +127,7 @@ other sequences retain their completed samples.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `maxSamples` | `2048` | Complete sample budget |
+| `aovs` / `aovSamples` | `[]` / `16` | Optional [surface outputs](#surface-outputs) / independent positive integer sample cap |
 | `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
 | `directLightCandidates` | `4` | WebGPU light candidates, clamped 1–16; ignored on WebGL |
@@ -115,7 +139,7 @@ other sequences retain their completed samples.
 | `width` / `height` | undefined | Paired fixed constructor dimensions; getters report actual output dimensions |
 | `adaptiveResolution` | `false` | `{targetFrameMs, minScale}` for scale-based renders; both required, positive, minScale ≤ resolutionScale |
 | `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Tile time budget / tiles per call |
-| `allowMultipleSamplesPerFrame` | `false` | Add multiple samples when time permits |
+| `batchSamples` | `false` | Let one refine submit several samples within timeBudgetMs; see [sample batching](./progressive-rendering.md#sample-batching). `allowMultipleSamplesPerFrame` is a deprecated alias |
 | `fallback` | `null` | Single-level Render on the same engine |
 | `denoiser` | `null` | Per-render configuration; read back through the frozen `denoiser` getter and change with `setDenoiser()`; see [denoising](./denoising.md) |
 
@@ -129,13 +153,15 @@ or alpha, plus its existing early depth termination.
 
 | Method / property | Meaning |
 | --- | --- |
-| `refine()` | Trace within this render's budget; returns status |
+| `refine(channel?, options?)` | Trace beauty or an enabled AOV within this render's budget; returns status |
 | `converge(options)` | Deterministic offline image; see below |
 | `readPixels(kind = 'hdr')` | Read this render; see [pixel outputs](#pixel-outputs) |
 | `engine` | Owning engine |
 | `denoising` | Queued/running inference, including intermediate updates; default false |
 | `on('sample', listener)` | Complete samples: `{samples, isFirstFrame, frameTimeMs}`; returns unsubscribe |
 | `samples` | Complete samples since restart; stale engine inputs report 0 |
+| `gpuSampleTimeMs` | Latest WebGPU full beauty sample estimate in ms; undefined without timestamps, for stale inputs or during converge |
+| `whenReadyToRefine()` | Wait for the next release of WebGPU sampling queue capacity; resolves immediately if none is queued or on WebGL; submits no work |
 | `converged` | `samples >= maxSamples`, independently of filtering |
 | `status` | Preparing, compiling, converging, denoising, finished or error |
 | `setDenoiser(options)` | Replace the denoiser configuration; resolves when the filter is ready |
@@ -148,6 +174,14 @@ during shader compilation. Intermediate progressive denoising stays
 completed filtering. Synchronous execution failures return `'error'` and set
 engine.lastError. Invalid lifecycle operations (disposed render or refine during
 converge) throw.
+
+`refine(undefined, {batchSamples, targetBatchTimeMs, deferResolve})`
+overrides batching for one call without changing render settings or discarding
+samples. The first two options default to the render's execution settings.
+`targetBatchTimeMs` must be positive and finite, defaults to `timeBudgetMs`, is
+capped by that budget and is ignored on WebGL. `deferResolve` (default false,
+WebGPU only) leaves the displayed image unchanged for calls between display
+frames; the next presentation or pixel read updates it once with every new sample.
 
 A fallback gets one sample when the requested render cannot finish its first
 sample within budget and the fallback has no current complete image. A ready
@@ -191,7 +225,7 @@ otherwise. Worker visibility and control forwarding are described in
 | `coalesceSceneUpdates` | false | Defer commits during preview inference, then commit latest camera/scene |
 
 `engine`, `display`, `preview` (possibly undefined) and `final` are read-only.
-`changing` defaults false; `samples` counts final only and reports 0 during preview; `status` starts preparing.
+`changing` defaults false; `samples` counts final beauty samples and reports 0 during preview; `status` starts preparing.
 `select({changing})` defaults to changing ? preview : final. `addSync`/`removeSync`
 manage integrations without disposing them. `tick` executes a manual frame;
 `start`/`stop` manage animation frames. `converge` accepts the same options as
@@ -228,10 +262,16 @@ quality defaults to the browser encoder value.
 | `temperature`, `tint`, `vignette` | `0` |
 | `bloomIntensity`, `bloomThreshold`, `bloomRadius` | `0`, `1`, `0.6` |
 | `hdrOutputEnabled` | `false`; WebGPU only |
-| `channel: DisplayChannel` | `'final'`; also albedo, normal, shadow, shadowCatcher |
+| `channel: DisplayChannel` | `'final'`; also albedo, normal, shadow, shadowCatcher and the seven [AOV kinds](#aov-visualization) |
+| `aovDepthRange` | `[0, 10]`; finite scene-unit black/white depths, `0 <= near < far` |
+| `aovPositionScale` | `1`; finite positive scene-unit half-range around the origin |
+| `aovMotionScale` | `16`; finite positive pixel displacement for full brightness |
+| `aovIdComponent: AovIdComponent` | `'object'`; also instance, material, primitive |
 | `shadowCatcherColor`, `shadowCatcherAlpha` | `[0, 0, 0]`, `1` |
 
 All display settings apply at composition and retain accumulated samples.
+AOV mapping numbers must remain finite in float32; depth endpoints must remain
+distinct after conversion.
 Use the exported `DisplaySettings` type for a partial batch:
 
 ```ts
@@ -259,9 +299,11 @@ semantics are documented in [Custom denoisers](./denoising.md#custom-denoisers).
 
 ### Pixel outputs
 
-`readPixels(kind = 'hdr')` returns `{ width, height, data: Float32Array }`,
-RGBA with the top row first. Dimensions describe the internal render texture,
-which WebGPU rounds up to multiples of 16. Before a pipeline exists, it returns an empty image.
+`readPixels(kind = 'hdr')` returns `{ width, height, data }`. `data` is a
+`Uint32Array` for `id` and a `Float32Array` for every other kind.
+Pixels are RGBA with the top row first. Dimensions describe the internal render
+texture, which WebGPU rounds up to multiples of 16. Before a pipeline exists,
+beauty and OIDN-guide reads return an empty image; AOV reads reject.
 
 | Kind | Values |
 | --- | --- |
@@ -275,6 +317,120 @@ its final native output is also display encoded. Readback preserves these
 existing pipeline semantics. If no denoiser is attached or denoising has not
 completed, `denoised` returns `hdr` and warns once per render. The method
 makes a CPU copy and can be costly; avoid calling it every animation frame.
+
+### Surface outputs
+
+Request only the surface outputs you need on each render:
+
+```ts
+const render = new Render(engine, {
+  aovs: ['depth', 'position', 'id', 'motion'], aovSamples: 16
+});
+await render.converge({samples: 64});
+const depth = await render.readPixels('depth'); // Float32Array, RGBA
+const ids = await render.readPixels('id');      // Uint32Array, RGBA
+```
+
+You can change `render.aovs` or `render.aovSamples` after sampling. Continue
+calling `refine()` to regenerate AOVs for the current view; beauty samples and
+completed denoising are preserved. AOV accumulation restarts when either changes.
+
+| Kind | RGBA contents |
+| --- | --- |
+| `depth` | Camera-forward distance in scene units, 0, 0, coverage |
+| `position` | World position xyz, coverage |
+| `roughness` | Specular roughness, metalness, unsupported-reflectance fraction, coverage |
+| `diffuseAlbedo` | Directional-hemispherical diffuse reflectance RGB, valid coverage |
+| `specularAlbedo` | Directional-hemispherical specular reflectance RGB, valid coverage |
+| `id` | Object, local instance (0 for ordinary meshes), material, source triangle index; background is `0xFFFFFFFF` in all channels |
+| `motion` | Previous position minus current position in pixels, x right and y down; z = 0, alpha = 3 for valid history or 0 otherwise |
+
+Depth, position, roughness and reflectance average independent jittered primary
+rays, including depth of field, up to `min(samples, aovSamples)`. RGB values use
+hit-count normalization; alpha is hit coverage over all AOV samples. Reflectance
+uses only supported hits for both normalization and valid coverage. A blank pixel
+is zero. These passes preserve beauty samples but do not sample the same paths.
+Alpha holes use the first surface with alpha ≥ 0.5, skipping shadow catchers,
+with at most 32 layers.
+
+ID and motion use the unjittered pixel center without depth of field. `Mesh.aovId`
+and `OpenPBRMaterial.aovId` default to process-unique integers. Explicit values
+must be integers from 0 through `0xFFFFFFFE`, unique among the scene's objects
+or materials respectively. Commit changes with `engine.update()`. Keep identities
+stable and avoid reusing an ID for a different object while history is live.
+Instance IDs are local indices; primitive IDs refer to the geometry's original
+triangle order. A ray exactly on a shared edge can select either adjacent
+triangle; host/GPU rounding can choose different IDs at that boundary.
+
+Motion history belongs to each render and advances when it produces an AOV
+frame. Camera pose and rigid object transforms can reproject across updates.
+The first frame, changed dimensions or projection, missing identities, changed
+topology or vertex positions, and failed visibility correspondence invalidate
+motion. Device recovery also clears history. Deformed vertices have no motion
+estimate; validity 0 must not be treated as a stationary surface.
+
+Reflectance outputs are separate from the existing OIDN `albedo` guide.
+Coat, fuzz, anisotropy, subsurface/volume scattering, bevel, thin film,
+dispersion, partial alpha and nonstandard materials are unsupported by this
+reflectance estimate. Such hits contribute to `roughness.b` and have zero
+reflectance validity. Reflectance uses expensive BSDF quadrature; request it
+only when needed.
+
+Reading a kind absent from `render.aovs` rejects. A custom denoiser can request
+its own [AOV inputs](./denoising.md#custom-denoisers). With neither request there
+are no AOV allocations or passes. Enabling any kind costs about 128 GPU bytes
+per pixel on WebGPU or 192 on WebGL, plus scene identity/history data; each
+custom denoiser AOV snapshot adds 16 bytes per pixel. A render may retain one
+reusable snapshot per kind between denoising calls. Readback adds a CPU copy.
+WebGPU dimensions remain subject to device buffer limits. A full-frame AOV
+sample runs independently of tile/adaptive sampling and may exceed the render's
+time budget at large resolutions. WebGL requires `EXT_color_buffer_float`.
+
+### AOV visualization
+
+Select an enabled surface output on Display to present or export it:
+
+```ts
+engine.display.channel = 'depth'; // render.aovs must include 'depth'
+engine.display.aovDepthRange = [0, 20];
+engine.display.present(render);
+const png = await engine.display.toBlob(render);
+```
+
+| Channel | Display mapping |
+| --- | --- |
+| `depth` | Black at the near depth, white at the far depth, clamped outside the range |
+| `position` | World xyz mapped to RGB; origin is 0.5 and ±position scale maps to 0/1 |
+| `roughness` | RGB = roughness, metalness, unsupported-reflectance fraction |
+| `diffuseAlbedo`, `specularAlbedo` | Linear reflectance RGB clamped to [0, 1], then sRGB encoded |
+| `id` | Stable pseudocolor for the selected uint32 ID component; colors can collide |
+| `motion` | Direction as hue (+x is red, +y is yellow-green), displacement/scale as brightness |
+
+AOV channels bypass tone mapping, grading, bloom, vignette and denoising;
+registered display passes still run. Background and invalid reflectance or
+motion are transparent; accumulated outputs use their coverage as alpha. Zero valid motion
+is opaque black. The first frame's invalid motion is transparent.
+Selecting a kind absent from `render.aovs` rejects, even if a custom denoiser
+requests it. An enabled output awaiting sampling keeps the current canvas;
+export rejects until that output is ready. Display selection alone does not enable tracing.
+Changing the channel or mapping preserves beauty samples, raw AOV values and completed denoising.
+With `RenderLoop`, selecting an enabled AOV traces surface outputs without
+advancing beauty or running a denoiser, including after camera or scene edits.
+When viewing motion, the loop refreshes once inputs settle so stationary surfaces
+return to black. Switching between preview and final first displays zero motion;
+subsequent camera or object changes show motion from that view.
+ID and motion need one center sample; other AOVs stop at the smaller of
+`maxSamples` and `aovSamples`. Loop status can be `finished` while beauty
+`samples` remains zero. Switching back to Final resumes beauty for the current
+view. Direct `render.refine()` and `converge()` still trace beauty and requested
+AOVs together. Use `render.refine(kind)` for a surface-only step and
+`render.aovSamplesRendered` for its progress. The existing `normal` and `albedo` channels keep their OIDN-guide meaning.
+
+These mappings also apply to PNG export. Raw `render.readPixels(kind)` retains
+the [surface formats](#surface-outputs) above. WebGPU HDR presentation decodes
+the mapped colors to linear light; the visualization stays within SDR white.
+Visualization retains an extra 8 GPU bytes per render pixel on WebGPU or 4 on
+WebGL until the AOV resources are resized or disposed.
 
 ### Depth sampling
 
@@ -311,11 +467,12 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 | `Geometry`, `GeometryAttribute` | Triangle data: required `position`; optional `normal` and `indices` are generated at construction; `vertexCount` / `triangleCount` getters; optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | `new OpenPBRMaterial(params?)`; see [materials](./materials.md) |
 | `Texture` | HTMLImageElement, HTMLCanvasElement, ImageBitmap, OffscreenCanvas or `{ data, width, height }`; `colorSpace`: `'srgb'` or `'linear'`; default undefined uses sRGB for images/bytes and linear for `Float32Array`/`Int32Array`; independent `wrapS` / `wrapT`: `'repeat'` (default), `'clamp-to-edge'`, `'mirrored-repeat'`, applied after UV scale/offset for material textures |
+| `ProceduralSky`, `ProceduralSkyOptions` | Clear-sky environment texture; [usage and options](#proceduralsky) |
 | `Camera` | `new Camera({ projection: 'perspective', ... })` or orthographic; `position`, `lookAt()`, `copy(source)`, `clone()`; aspect defaults to automatic; depth of field with `fStop`, `focusDistance`, `sensorHeight`, `metersPerUnit` ([details](./getting-started.md#depth-of-field)) |
 | `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Parameter-object constructors; analytic lights use `transform`, `position`, `lookAt()` and rigid axes. See [lights](./getting-started.md#lights) |
 | `EnvironmentLight` | `new EnvironmentLight({map, intensity?})`; `intensity` defaults to `1`, scales environment radiance, and accepts `0` to disable lighting. Ambient lights and explicit background textures retain their own brightness. `transform` rotates the environment from local to world space (identity by default); translation and positive axis scale are ignored. An explicit background texture keeps its own orientation |
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
-| `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground`; grounded backgrounds accept `rotation` around +Y in radians (default `0`) and `intensity` (default `1`). These affect only the background; the ground stays level and alpha is preserved |
+| `SceneBackground` | `[r, g, b, a]`, `Texture`, `EquirectBackground` (`{type: 'Equirect', map, transform?, intensity?}`) or `GroundedSkyboxBackground`. Equirect `transform`: column-major map-to-world rotation (default identity); translation and positive axis scale are ignored. Grounded `rotation`: radians around +Y (default `0`). `intensity` on either: nonnegative RGB multiplier, default `1`. These affect only the background; ground stays level and alpha is preserved |
 
 `OpenPBRMaterial` accepts canonical `specularRoughnessAnisotropy` (default `0`),
 `coatRoughnessAnisotropy` (`0`), `subsurfaceScatterAnisotropy` (`0`),
@@ -362,6 +519,39 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 (initially `0`) and `markVerticesUpdated(): this`, which advances only
 `version`. See [scene updates](./updates.md) for when to call each.
 
+### ProceduralSky
+
+Use the sky as an environment map, an explicit background, or the map of a
+`GroundedSkyboxBackground`:
+
+```ts
+import { ProceduralSky, EnvironmentLight } from '@meimu/mutracer';
+
+const sky = new ProceduralSky({ resolution: [2048, 1024], time: 15 });
+scene.lights.push(new EnvironmentLight({ map: sky }));
+// With no explicit scene.background, the environment is also the background.
+sky.time = 9;
+engine.update();
+```
+
+| Option / property | Default | Behavior |
+| --- | --- | --- |
+| `resolution` | `[2048, 1024]` | Positive integer equirectangular width and height; assign a new pair to resize |
+| `time` | `15` | Local solar time in hours, from `0` to `24`, for an equinox at latitude 40° |
+
+Time and resolution assignments follow the normal [scene update rules](./updates.md).
+Use `EnvironmentLight.intensity` and `transform` for brightness and rotation.
+With Three.js, pass the sky as the `environment` option to `THREESync` or
+`fromTHREEScene`; the Three.js scene still supplies intensity and rotation.
+
+Higher resolutions use more memory and can exceed device limits. Frequent
+time edits can be slower with WebGL 2. Dispose the engine when finished;
+`ProceduralSky` needs no separate disposal.
+
+This is a clear atmosphere without clouds, stars, moonlight or artificial
+light. Very low resolutions can blur or miss the small sun disk. Use the sky
+for environments and backgrounds, not material texture slots.
+
 ## Helpers
 
 | Export | Description |
@@ -373,7 +563,7 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 | `THREESync` | Keeps a `THREE.Scene` in sync: `new THREESync(engine, {scene?, camera?, controls?, updateControls?})`; RenderLoop calls update; dispose when done; conversion hooks `convertMaterial` / `convertLight`; see [Three.js](./threejs.md#custom-conversion) |
 | `fromTHREECamera(camera, options?)` | Converts a Three.js camera; one-shot conversion; THREESync retains and updates cameras. Reads `focus` and the film height; `FromTHREECameraOptions` sets `fStop` (default `0`), `focusDistance` and `metersPerUnit` (default `1`) |
 | `fromTHREEScene` | One-shot Three.js scene conversion with FromTHREESceneOptions conversion hooks; every call reruns hooks and creates fresh default objects |
-| `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
+| `FromTHREESceneOptions` | Optional `environment` overrides the Three.js environment with a MuTracer `Texture` or `ProceduralSky` (default undefined); optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
 | `VERSION` | Library version |
 
 `@meimu/mutracer/oidn` exports weight constants (`OIDN_MODEL_FILENAMES`,

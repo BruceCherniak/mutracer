@@ -186,7 +186,7 @@ selects `blend`. With none of these inputs, `auto` selects `opaque`.
 
 | Property | Description |
 | --- | --- |
-| `shadowCatcher` | Invisible ground that only receives shadows; composite over a transparent background |
+| `shadowCatcher` | Invisible ground that only receives shadows of the environment and analytic lights, not of emissive meshes; composite over a transparent background |
 | `unlit` | Shows emission without scattering or lighting other surfaces |
 | `bevelSize` | Rounded-edge shading radius in scene units; `0` disables (see below) |
 

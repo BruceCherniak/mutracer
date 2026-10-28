@@ -7,16 +7,20 @@ import { mapAlphaUsageConstants } from '../../materialConstants.js';
 
 import {
   materialAlphaModeConstants
-} from '../../../scene/OpenPBRMaterial.js';
+} from '../../materialConstants.js';
 
 export function createMaterialBufferWgsl({
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
-  hasSceneAlpha = true
+  hasSceneAlpha = true,
+  hasTransmission = true,
+  hasMetalness = true
 }: {
   hasSceneAlpha?: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
+  hasTransmission?: boolean;
+  hasMetalness?: boolean;
 } = {}) {
   const alphaModeAssignment = hasSceneAlpha
     ? '(*ma).alphaMode = i32(matData.alphaMode);'
@@ -306,6 +310,8 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     (*ma).specularRoughness = mix((*ma).specularRoughness,
       pow(min(1.0, baseRoughness2 * baseRoughness2 + 2.0 * coatRoughness2 * coatRoughness2), 0.25), (*ma).coatWeight);
   }
+  ${hasTransmission ? '' : /* wgsl */ `(*ma).transmissionWeight = 0.0;`}
+  ${hasMetalness ? '' : /* wgsl */ `(*ma).baseMetalness = 0.0;`}
   let color = getInstanceColor(instanceIndex) * vertexColor;
   (*ma).baseColor *= color;
   if ((*ma).materialType == UNLIT) { (*ma).emission *= color; }

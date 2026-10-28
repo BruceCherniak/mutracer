@@ -28,6 +28,7 @@ export type { JNLMOptions } from './renderer/jnlm.js';
 // Scene description
 export type {
   AnalyticLight,
+  EquirectBackground,
   GroundedSkyboxBackground,
   Scene,
   SceneBackground,
@@ -49,6 +50,8 @@ export type {
   MaterialAlphaMode,
   UVProjection
 } from './scene/OpenPBRMaterial.js';
+export { default as ProceduralSky } from './scene/ProceduralSky.js';
+export type { ProceduralSkyOptions } from './scene/ProceduralSky.js';
 export { default as Texture } from './scene/Texture.js';
 export type { TextureDataSource, TextureWrapMode, TextureColorSpace } from './scene/Texture.js';
 export type { ColorRGB, ColorRGBA, Vec2, Vec3, Mat4 } from './types.js';
@@ -97,12 +100,14 @@ export type { SamplingPattern } from './renderer/sampling.js';
 export { default as Engine } from './Engine.js';
 export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions, BVHBuilder, DepthSampleArea, TextureAtlasLimits } from './Engine.js';
 export { default as Display } from './Display.js';
-export type { BlobOptions, DisplayChannel, DisplaySettings, PostProcess, PostProcessContext } from './Display.js';
+export type { BlobOptions, DisplayChannel, AovIdComponent, DisplaySettings, PostProcess, PostProcessContext } from './Display.js';
 export { default as Render } from './Render.js';
-export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult, DenoiserOptions, Denoiser, DenoiseInput, CustomDenoiserOptions, DenoiseSchedule, JNLMDenoiserOptions, OIDNDenoiserOptions, RenderStatus, SampleEvent } from './Render.js';
+export type { RenderOptions, RenderSettings, RefineOptions, ConvergeOptions, ConvergeResult, DenoiserOptions, Denoiser, DenoiseInput, CustomDenoiserOptions, DenoiseSchedule, JNLMDenoiserOptions, OIDNDenoiserOptions, RenderStatus, SampleEvent } from './Render.js';
 
 export { default as Sync } from './Sync.js';
 export { default as RenderLoop } from './RenderLoop.js';
 export type { RenderLoopOptions, RenderLoopStatus } from './RenderLoop.js';
 
 export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';
+
+export type {AovKind} from './renderer/aov.js';

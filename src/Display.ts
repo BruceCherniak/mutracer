@@ -1,9 +1,11 @@
+import {displayAovKind, validateAovDisplay, type AovIdComponent} from './renderer/aovDisplay.js';
+export type {AovIdComponent} from './renderer/aovDisplay.js';
 import {createCanvas} from './util/canvas.js';
 import type Engine from './Engine.js';
 import type Render from './Render.js';
 import type { ToneMapping, DisplayChannel } from './renderer/RenderingPipeline.js';
 import type { ColorRGB } from './types.js';
-import { displaySettingsKey, applyDisplaySettings } from './settings/display.js';
+import { displaySettingsKey, displayFilterSettingsKey, applyDisplaySettings } from './settings/display.js';
 /** Display image channels. Default final. */
 export type {DisplayChannel} from './renderer/RenderingPipeline.js';
 /** Image encoding options for Display.toBlob. */
@@ -24,7 +26,11 @@ export interface DisplaySettings {
   /** Bloom luminance threshold. Default 1. */ bloomThreshold?: number;
   /** Bloom radius in 0–1. Default 0.6. */ bloomRadius?: number;
   /** Extended-range WebGPU presentation, ignored on WebGL. Default false. */ hdrOutputEnabled?: boolean;
-  /** Display image channel. Default final. */ channel?: DisplayChannel;
+  /** Display image channel. Default final. AOV channels require explicit Render.aovs. */ channel?: DisplayChannel;
+  /** Finite float32 scene-unit depths mapped to black/white; 0 <= near < far. Default [0, 10]. */ aovDepthRange?: readonly [number, number];
+  /** Finite positive float32 scene-unit half-range around the origin for position RGB. Default 1. */ aovPositionScale?: number;
+  /** Finite positive float32 input-pixel displacement mapped to full motion brightness. Default 16. */ aovMotionScale?: number;
+  /** Stable ID lane to colorize. Default object. */ aovIdComponent?: AovIdComponent;
   /** Linear shadow-catcher color. Default black. */ shadowCatcherColor?: ColorRGB;
   /** Shadow-catcher opacity multiplier. Default 1. */ shadowCatcherAlpha?: number;
 }
@@ -54,7 +60,11 @@ export default class Display {
   /** Bloom luminance threshold. Default 1. */ bloomThreshold = 1;
   /** Bloom radius in 0–1. Default 0.6. */ bloomRadius = 0.6;
   /** Extended-range WebGPU presentation, ignored on WebGL. Default false. */ hdrOutputEnabled = false;
-  /** Display image channel. Default final. */ channel: DisplayChannel = 'final';
+  /** Display image channel. Default final. AOV channels require explicit Render.aovs. */ channel: DisplayChannel = 'final';
+  /** Finite float32 scene-unit depths mapped to black/white; 0 <= near < far. Default [0, 10]. */ aovDepthRange: readonly [number, number] = [0, 10];
+  /** Finite positive float32 scene-unit half-range around the origin for position RGB. Default 1. */ aovPositionScale = 1;
+  /** Finite positive float32 input-pixel displacement mapped to full motion brightness. Default 16. */ aovMotionScale = 16;
+  /** Stable ID lane to colorize. Default object. */ aovIdComponent: AovIdComponent = 'object';
   /** Linear shadow-catcher color. Default black. */ shadowCatcherColor: ColorRGB = [0, 0, 0];
   /** Shadow-catcher opacity multiplier. Default 1. */ shadowCatcherAlpha = 1;
   private constructor(private readonly engine: Engine, canvas: HTMLCanvasElement | OffscreenCanvas) { this.canvas = canvas; }
@@ -66,16 +76,23 @@ export default class Display {
     if (this.canvas.width !== width) this.canvas.width = width;
     if (this.canvas.height !== height) this.canvas.height = height;
   }
+  private readonly _filterSettings = new WeakMap<Render, string>();
   private readonly settings = new WeakMap<Render, string>();
   /** @internal */ _configure(render: Render) {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
     const target = render._output;
     if (!target) return;
+    const kind = displayAovKind(this.channel);
+    if (!kind && !['final','normal','albedo','shadow','shadowCatcher'].includes(this.channel)) throw new RangeError('Unknown display channel');
+    if (kind && !render.aovs.includes(kind)) throw new Error(`AOV ${kind} is not enabled on the selected render`);
+    validateAovDisplay({depthRange: this.aovDepthRange, positionScale: this.aovPositionScale, motionScale: this.aovMotionScale, idComponent: this.aovIdComponent});
     const key = displaySettingsKey(this);
+    const filterKey = displayFilterSettingsKey(this);
     const previous = this.settings.get(render);
     if (previous !== key) {
       this.settings.set(render, key);
-      if (previous !== undefined) render._displayChanged();
+      if (previous !== undefined && this._filterSettings.get(render) !== filterKey) render._displayChanged();
+      this._filterSettings.set(render, filterKey);
     }
     target.activate();
     applyDisplaySettings(this, target);
@@ -95,7 +112,11 @@ export default class Display {
   private compose(render: Render) {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
     const target = render._output;
-    if (!target?.presentationComplete) return;
+    if (!target) return;
+    const kind = displayAovKind(this.channel);
+    if (!kind && !target.presentationComplete) return;
+    if (kind && !render.aovs.includes(kind)) throw new Error(`AOV ${kind} is not enabled on the selected render`);
+    if (kind && target.aovReady && !target.aovReady(kind)) return;
     this._configure(render);
     target.drawPostProcess();
     if (this._postProcesses.length && this.engine.backend === 'webgl') this.warnPostProcess();
@@ -106,9 +127,9 @@ export default class Display {
   /** Presents a complete image or fallback. Keeps fallback visible until the first intermediate filter finishes. Does not trace. */
   present(render: Render): Render | undefined {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
-    const ready = this.channel === 'final' && render.fallback ? render._presentable : render._complete;
+    const ready = this.channel === 'final' && render.fallback ? render._presentable : render._completeFor(this.channel);
     const fallback = render.fallback;
-    const selected = ready ? render : fallback && (this.channel === 'final' ? fallback._presentable : fallback._complete) ? fallback : undefined;
+    const selected = ready ? render : fallback && (this.channel === 'final' ? fallback._presentable : fallback._completeFor(this.channel)) ? fallback : undefined;
     if (!selected) return;
     const target = this.compose(selected);
     if (!target) return;

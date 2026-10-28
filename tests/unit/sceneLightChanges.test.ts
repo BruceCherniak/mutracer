@@ -14,9 +14,10 @@ it('retains environment synthesis during analytic edits and invalidates ambient/
   const first = cache.update(lights)!; analytic.intensity++;
   expect(cache.update(lights)).toBe(first);
   ambient.intensity=2; const next=cache.update(lights)!;
-  expect(next).not.toBe(first); expect(Array.from(next.data)).toEqual([3,4,5,1]);
+  expect(next).not.toBe(first); expect(Array.from('data' in next ? next.data : [])).toEqual([3,4,5,1]);
   map.image = {data:new Float32Array([5,4,3,1]),width:1,height:1}; map.markUpdated();
-  expect(Array.from(cache.update(lights)!.data)).toEqual([7,6,5,1]);
+  const updated = cache.update(lights)!;
+  expect(Array.from('data' in updated ? updated.data : [])).toEqual([7,6,5,1]);
   expect(cache.update([])).toBeUndefined();
 });
 it('tracks RectLight pixel edits and slot order independently of analytic parameters', () => {

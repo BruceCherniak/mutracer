@@ -1,5 +1,4 @@
 // Import without browser globals to verify all relative ESM paths resolve.
-// The optional oidn entry awaits an upstream oidn-web ESM fix.
 const library = await import('../lib/main.js');
 for (const name of ['Engine', 'Display', 'Render']) if (typeof library[name] !== 'function') throw new Error(`Missing ${name} export`);
 if ('Renderer' in library) throw new Error('Removed Renderer export is still exposed');
@@ -55,9 +54,14 @@ function checkStaticDependencies(file) {
     const specifier = statement.moduleSpecifier;
     if (!specifier || !ts.isStringLiteral(specifier)) continue;
     const name = specifier.text;
-    if (name === 'oidn-web' || name.startsWith('oidn-web/')) throw new Error(`Static OIDN dependency in ${file}.`);
-    if (name.startsWith('.') && name.endsWith('.js')) checkStaticDependencies(path.resolve(path.dirname(file), name));
+    if (/^oidn-web(?:gpu)?(?:\/|$)/.test(name)) throw new Error(`Static OIDN dependency in ${file}.`);
+    if (name.startsWith('.') && name.endsWith('.js')) {
+      const target = path.resolve(path.dirname(file), name);
+      checkStaticDependencies(file.endsWith('.d.ts') ? target.replace(/\.js$/, '.d.ts') : target);
+    }
   }
 }
 checkStaticDependencies(path.join(declarationsRoot, 'main.js'));
-console.log('Main ESM static dependency graph does not import oidn-web.');
+console.log('Main ESM static dependency graph does not import oidn-webgpu.');
+checkStaticDependencies(path.join(declarationsRoot, 'main.d.ts'));
+console.log('Main declaration dependency graph does not import oidn-webgpu.');

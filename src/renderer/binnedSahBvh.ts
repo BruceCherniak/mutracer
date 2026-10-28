@@ -190,7 +190,8 @@ export function buildBinnedSahBvh(aabbs: Float32Array, count: number): BinnedSah
         if (binOf(centers[p * 3 + bestAxis], nMin, scale) <= bestPos) {
           src++;
         } else {
-          primIndices[src] = primIndices[--j];
+          // Explicit numeric expression also supports scriptc typed-array stores.
+          primIndices[src + 0] = primIndices[--j];
           primIndices[j] = p;
         }
       }
