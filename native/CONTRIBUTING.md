@@ -151,6 +151,22 @@ on rendering. Keep GPU work sequential. Run the applicable full `native:ci`,
 changes to inputs it validates, rather than after every intermediate edit.
 Filtered Rust tests do not replace the final AOT, C consumer or GPU validation.
 
+### Focused regression runs
+
+Use `node native/scripts/ci.mjs --only host-tests --gpu-tests 'display|jnlm'
+--batch-gpu-tests` with an existing `MUTRACER_AOT_ARCHIVE` and host
+`CARGO_TARGET_DIR` during iteration. `--only` and `--skip` select comma-separated
+step names; `--gpu-tests` selects ignored host tests by regular expression.
+Batch mode shares a process and is intended for focused tests. Subset reports
+always leave `validated` false. Run the complete gate once at final review.
+
+`node scripts/reference-capture.mjs capture COMMIT` caches fixed inputs and
+browser/native outputs by commit; `compare COMMIT` captures the current checkout
+and reports byte and float differences. Set `MUTRACER_REFERENCE_CACHE` outside the
+checkout and `MUTRACER_OIDN_DISPLAY_INPUT` to the frozen HDR/guide directory.
+`node scripts/reference-performance.mjs COMMIT` measures active CPU frames and
+live JS heap after forced GC; it expands from one to three rounds above 3%.
+
 ### Environment variables
 
 | Variable | Purpose |

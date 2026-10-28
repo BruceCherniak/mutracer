@@ -16,3 +16,5 @@ plans/
 .cache/tinybvh/
 native/**/*.lib.ll
 native/host/target/
+
+.cache/
