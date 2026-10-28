@@ -67,14 +67,16 @@ struct Registry {
     next: u64,
     objects: HashMap<u64, Object>,
 }
-static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
+static REGISTRY: std::sync::LazyLock<Mutex<Registry>> = std::sync::LazyLock::new(|| {
+    Mutex::new(Registry {
+        next: 1,
+        ..Default::default()
+    })
+});
 
 fn registry<T>(f: impl FnOnce(&mut Registry) -> Result<T>) -> Result<T> {
     let mut slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    f(slot.get_or_insert_with(|| Registry {
-        next: 1,
-        ..Default::default()
-    }))
+    f(&mut slot)
 }
 fn insert(object: Object) -> Result<u64> {
     registry(|r| {
@@ -245,18 +247,7 @@ unsafe fn copy_out(
     unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), pixels.cast(), bytes.len()) };
     Ok(())
 }
-fn fill(buffer: &mut [c_char], text: &str) {
-    let mut count = text.len().min(buffer.len().saturating_sub(1));
-    while !text.is_char_boundary(count) {
-        count -= 1;
-    }
-    for (slot, byte) in buffer.iter_mut().zip(text.as_bytes()[..count].iter()) {
-        *slot = *byte as c_char;
-    }
-    if let Some(end) = buffer.get_mut(count) {
-        *end = 0;
-    }
-}
+use crate::status::fill;
 
 include!("abi_window.rs");
 
@@ -774,13 +765,7 @@ pub unsafe extern "C" fn mt_gpu_adapters(
         for (index, adapter) in adapters.iter().enumerate() {
             let info = adapter.get_info();
             let mut name = [0; 256];
-            let mut end = info.name.len().min(255);
-            while !info.name.is_char_boundary(end) {
-                end -= 1;
-            }
-            for (out, byte) in name.iter_mut().zip(info.name[..end].bytes()) {
-                *out = byte as c_char;
-            }
+            fill(&mut name, &info.name);
             let record = MtGpuAdapterInfo {
                 struct_size: std::mem::size_of::<MtGpuAdapterInfo>() as u32,
                 index: index as u32,
@@ -1934,8 +1919,8 @@ pub unsafe extern "C" fn mt_render_read_pixels(
         }
         let image = render_of(handle)?.read_pixels(kind)?;
         let bytes: Vec<u8> = match image.id_data {
-            Some(ids) => ids.iter().flat_map(|v| v.to_le_bytes()).collect(),
-            None => image.data.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            Some(ids) => bytemuck::cast_slice(&ids).to_vec(),
+            None => bytemuck::cast_slice(&image.data).to_vec(),
         };
         unsafe { copy_out(&bytes, pixels, size, written) }
     })

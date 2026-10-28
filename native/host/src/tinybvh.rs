@@ -162,32 +162,17 @@ pub(super) fn aabbs(boxes: &[f32]) -> Result<Built> {
 // Validated native packets are aligned by their owner allocation. Borrow them
 // directly on little-endian hosts; unaligned callers retain the safe copy path.
 fn floats(bytes: &[u8]) -> Cow<'_, [f32]> {
-    if cfg!(target_endian = "little")
-        && bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0
-    {
-        // f32 admits every bit pattern; immutable input outlives the borrow.
-        Cow::Borrowed(unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast(), bytes.len() / 4) })
-    } else {
-        Cow::Owned(
-            bytes
-                .chunks_exact(4)
-                .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
-                .collect(),
-        )
+    let bytes = &bytes[..bytes.len() / 4 * 4];
+    match bytemuck::try_cast_slice(bytes) {
+        Ok(values) => Cow::Borrowed(values),
+        Err(_) => Cow::Owned(bytemuck::pod_collect_to_vec(bytes)),
     }
 }
 fn words(bytes: &[u8]) -> Cow<'_, [u32]> {
-    if cfg!(target_endian = "little")
-        && bytes.as_ptr().align_offset(std::mem::align_of::<u32>()) == 0
-    {
-        Cow::Borrowed(unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast(), bytes.len() / 4) })
-    } else {
-        Cow::Owned(
-            bytes
-                .chunks_exact(4)
-                .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
-                .collect(),
-        )
+    let bytes = &bytes[..bytes.len() / 4 * 4];
+    match bytemuck::try_cast_slice(bytes) {
+        Ok(values) => Cow::Borrowed(values),
+        Err(_) => Cow::Owned(bytemuck::pod_collect_to_vec(bytes)),
     }
 }
 fn build_job(data: &[u8], instances: bool) -> Result<Built> {
@@ -342,6 +327,27 @@ pub(super) fn jobs_with_ids(packet: &[u8], instances: bool, capture_ids: bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn byte_views_borrow_aligned_words_and_copy_unaligned_words() {
+        let values = [1u32, 0x80000000, 0x7fc00001, 0x3f800000];
+        let bytes = bytemuck::cast_slice(&values);
+        assert!(matches!(words(bytes), Cow::Borrowed(_)));
+        assert!(matches!(floats(bytes), Cow::Borrowed(_)));
+        let mut storage = [0u32; 5];
+        let unaligned = &mut bytemuck::cast_slice_mut::<u32, u8>(&mut storage)[1..18];
+        unaligned[..16].copy_from_slice(bytes);
+        unaligned[16] = 255;
+        assert!(matches!(words(unaligned), Cow::Owned(_)));
+        assert!(matches!(floats(unaligned), Cow::Owned(_)));
+        assert_eq!(&*words(unaligned), &values);
+        assert_eq!(
+            floats(unaligned)
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            values
+        );
+    }
     fn packet(jobs: &[Vec<u8>]) -> Vec<u8> {
         let header = 16 + jobs.len() * 32;
         let mut output = vec![0; header];

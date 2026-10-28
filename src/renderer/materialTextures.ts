@@ -7,9 +7,12 @@ import type { MaterialTextureName } from '../scene/materialTextureNames.js';
 import type TextureState from '../scene/TextureState.js';
 
 // retrieve textures used by meshes, grouping textures from meshes shared *across all* mesh properties
+export function mergeTexturesFromMaterials<M extends MaterialState, T extends MaterialTextureName>(
+  materials: M[],
+  textureNames: readonly T[]
+): {textures: NonNullable<M[T]>[]; indices: Record<string, number[]>};
 export function mergeTexturesFromMaterials(
-  materials: MaterialState[],
-  textureNames: readonly MaterialTextureName[]
+  materials: MaterialState[], textureNames: readonly MaterialTextureName[]
 ) {
   const textureMap: {
     textures: TextureState[];

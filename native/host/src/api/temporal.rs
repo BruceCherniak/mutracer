@@ -112,11 +112,7 @@ impl State {
             )?);
             self.source = source;
         }
-        let camera_values: Vec<_> = packet
-            .camera
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-            .collect();
+        let camera_values: Vec<_> = bytemuck::pod_collect_to_vec::<u8, f32>(&packet.camera);
         let raw = Camera::from_bytes(request.camera).ok_or("Invalid temporal camera")?;
         let world = glam::Mat4::from_cols_slice(&camera_values[16..32]);
         let view = world.inverse();
@@ -133,10 +129,7 @@ impl State {
         {
             let packed =
                 crate::scene::prepare_camera(&lens.to_bytes(), request.size[0], request.size[1])?;
-            let values: Vec<_> = packed[..64]
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                .collect();
+            let values: Vec<_> = bytemuck::pod_collect_to_vec::<u8, f32>(&packed[..64]);
             self.projection = Some((lens, request.size, glam::Mat4::from_cols_slice(&values)));
         }
         let projection_inverse = self.projection.as_ref().unwrap().2;

@@ -124,7 +124,8 @@ struct Entry {
     resources: HashMap<u64, Resource>,
     names: HashMap<(u32, String), Vec<u64>>,
 }
-static SCENES: Mutex<Option<HashMap<u64, Arc<Mutex<Entry>>>>> = Mutex::new(None);
+static SCENES: std::sync::LazyLock<Mutex<HashMap<u64, Arc<Mutex<Entry>>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT: AtomicU64 = AtomicU64::new(1);
 fn next() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
@@ -134,7 +135,6 @@ fn register(entry: Entry) -> u64 {
     SCENES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .get_or_insert_default()
         .insert(id, Arc::new(Mutex::new(entry)));
     id
 }
@@ -142,8 +142,7 @@ fn with_scene<T>(id: u64, f: impl FnOnce(&mut Entry) -> Result<T>) -> Result<T> 
     let entry = SCENES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .and_then(|s| s.get(&id))
+        .get(&id)
         .cloned()
         .ok_or_else(invalid_handle)?;
     let mut entry = entry.try_lock().map_err(|e| match e {
@@ -278,13 +277,7 @@ unsafe fn texture(p: *const TextureDesc) -> Result<Texture> {
     let pixels = if d.storage == 0 {
         TexturePixels::Rgba8(bytes.into())
     } else {
-        TexturePixels::Rgba32F(
-            bytes
-                .chunks_exact(4)
-                .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
-                .collect::<Vec<_>>()
-                .into(),
-        )
+        TexturePixels::Rgba32F(bytemuck::pod_collect_to_vec::<u8, f32>(bytes).into())
     };
     Ok(Texture {
         pixels,
@@ -387,8 +380,7 @@ pub extern "C" fn mt_scene_destroy(scene: u64, error: *mut c_char, cap: usize) -
         let entry = SCENES
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .and_then(|r| r.get(&scene))
+            .get(&scene)
             .cloned()
             .ok_or_else(invalid_handle)?;
         // A caught panic fails the builder, but its owned resources must remain
@@ -403,8 +395,6 @@ pub extern "C" fn mt_scene_destroy(scene: u64, error: *mut c_char, cap: usize) -
         SCENES
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .as_mut()
-            .unwrap()
             .remove(&scene)
             .ok_or_else(invalid_handle)?;
         Ok(())

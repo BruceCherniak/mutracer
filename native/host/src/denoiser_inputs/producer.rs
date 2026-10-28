@@ -128,10 +128,7 @@ impl FrameProducer {
         if f32::from_le_bytes(camera[128..132].try_into()?) != 0.0 {
             return Err("Frame producer requires the actual pinhole camera".into());
         }
-        let packed: Vec<_> = camera
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-            .collect();
+        let packed: Vec<_> = bytemuck::pod_collect_to_vec::<u8, f32>(camera);
         let expected_inverse = glam::Mat4::from_cols_array(&metadata.camera.view_inverse)
             * glam::Mat4::from_cols_array(&metadata.camera.projection_inverse);
         for (actual, expected) in packed[..16]
@@ -287,10 +284,7 @@ impl FrameProducer {
         } else {
             vec![0; 52]
         };
-        let metadata_bytes: Vec<_> = metadata_words
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
+        let metadata_bytes: Vec<_> = bytemuck::cast_slice(&metadata_words).to_vec();
         let motion_metadata = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -314,7 +308,7 @@ impl FrameProducer {
         let inverse_view = previous_camera.view_inverse;
         let previous_forward = -glam::Vec3::from_slice(&inverse_view[8..11]).normalize();
         let previous_jitter = previous.map_or([0.; 2], |p| p.metadata.jitter_pixels);
-        let mut resolve_parameters: Vec<u8> = current_matrix
+        let resolve_values: Vec<f32> = current_matrix
             .into_iter()
             .chain(previous_matrix)
             .chain([inverse_view[12], inverse_view[13], inverse_view[14], 0.])
@@ -325,13 +319,14 @@ impl FrameProducer {
                 0.,
             ])
             .chain([previous_jitter[0], previous_jitter[1], 0., 0.])
-            .flat_map(|value| value.to_le_bytes())
             .collect();
-        resolve_parameters.extend(
-            [u32::from(previous.is_some()), u32::from(stable), 0, 0]
-                .into_iter()
-                .flat_map(|v| v.to_le_bytes()),
-        );
+        let mut resolve_parameters = bytemuck::cast_slice(&resolve_values).to_vec();
+        resolve_parameters.extend_from_slice(bytemuck::cast_slice(&[
+            u32::from(previous.is_some()),
+            u32::from(stable),
+            0,
+            0,
+        ]));
         let resolve_parameters = uniform("Frame correspondence parameters", &resolve_parameters);
         let previous_pixels = previous.map_or(&outputs[4], |p| &p.resources.producer_buffers[6]);
         let mut resolve_entries = vec![wgpu::BindGroupEntry {

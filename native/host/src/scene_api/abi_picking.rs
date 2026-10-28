@@ -35,13 +35,13 @@ struct Snapshot {
     picker: ScenePicker,
     handles: HashMap<Resource, u64>,
 }
-static PICKERS: Mutex<Option<HashMap<u64, Arc<Snapshot>>>> = Mutex::new(None);
+static PICKERS: std::sync::LazyLock<Mutex<HashMap<u64, Arc<Snapshot>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 fn get(id: u64) -> Result<Arc<Snapshot>> {
     PICKERS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .and_then(|m| m.get(&id))
+        .get(&id)
         .cloned()
         .ok_or_else(invalid_handle)
 }
@@ -71,7 +71,6 @@ pub unsafe extern "C" fn mt_scene_picker_create(
         PICKERS
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get_or_insert_default()
             .insert(id, Arc::new(snapshot));
         unsafe {
             out.write(id);
@@ -85,8 +84,7 @@ pub extern "C" fn mt_scene_picker_destroy(picker: u64, error: *mut c_char, capac
         PICKERS
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .as_mut()
-            .and_then(|m| m.remove(&picker))
+            .remove(&picker)
             .ok_or_else(invalid_handle)?;
         Ok(())
     })

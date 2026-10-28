@@ -113,7 +113,12 @@ struct Registry {
     next: u64,
     contexts: HashMap<u64, Context>,
 }
-static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
+static REGISTRY: std::sync::LazyLock<Mutex<Registry>> = std::sync::LazyLock::new(|| {
+    Mutex::new(Registry {
+        next: 1,
+        contexts: HashMap::new(),
+    })
+});
 /// Tests: install the per-sample primary-hit audit in hardware preparations.
 #[cfg(test)]
 pub(crate) static AUDIT_PREPARATIONS: std::sync::atomic::AtomicBool =
@@ -127,16 +132,10 @@ pub(crate) static AUDIT_HISTORY_SAMPLES: std::sync::atomic::AtomicU32 =
 #[cfg(test)]
 pub(crate) fn audit_history(handle: u64, samples: u32) -> crate::sample_audit::History {
     let slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    let scene = slot.as_ref().unwrap().contexts[&handle]
-        .scene
-        .as_ref()
-        .unwrap();
+    let scene = slot.contexts[&handle].scene.as_ref().unwrap();
     crate::sample_audit::read_history(
         scene,
-        slot.as_ref().unwrap().contexts[&handle]
-            .target
-            .as_ref()
-            .unwrap(),
+        slot.contexts[&handle].target.as_ref().unwrap(),
         samples,
     )
     .unwrap()
@@ -146,8 +145,8 @@ pub(crate) fn audit_history(handle: u64, samples: u32) -> crate::sample_audit::H
 #[cfg(test)]
 pub(crate) fn audit_sample(handle: u64, sample: u32) -> Option<[usize; 3]> {
     let slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    let scene = slot.as_ref()?.contexts.get(&handle)?.scene.as_ref()?;
-    let target = slot.as_ref()?.contexts.get(&handle)?.target.as_ref()?;
+    let scene = slot.contexts.get(&handle)?.scene.as_ref()?;
+    let target = slot.contexts.get(&handle)?.target.as_ref()?;
     target.buffers.get(&layout::resource::QUERY_COUNTS)?;
     let a = crate::sample_audit::read(scene, target, sample).ok()?;
     Some([a.primary_hits, a.short_pixels, a.invalid_pixels])
@@ -178,10 +177,7 @@ fn with_registry<T>(operation: impl FnOnce(&mut Registry) -> Result<T>) -> Resul
             std::sync::TryLockError::WouldBlock => fail(Status::Busy, "Context registry is active"),
             std::sync::TryLockError::Poisoned(_) => "Context registry is poisoned".into(),
         })?;
-        let registry = slot.get_or_insert_with(|| Registry {
-            next: 1,
-            contexts: HashMap::new(),
-        });
+        let registry = &mut *slot;
         // Catch while guards remain in scope, avoiding mutex poisoning.
         TOUCHED.set(None);
         match std::panic::catch_unwind(AssertUnwindSafe(|| operation(registry))) {
@@ -249,10 +245,6 @@ fn write_result(error: *mut c_char, capacity: usize, result: Result<()>) -> i32 
             &e.to_string(),
         ),
     }
-}
-// Probes have their own owned inputs and use the same dedicated AOT runtime.
-pub(super) fn check_owner() -> Result<()> {
-    Ok(())
 }
 fn context(registry: &mut Registry, handle: u64) -> Result<&mut Context> {
     let context = registry
@@ -1087,7 +1079,7 @@ fn commit_inner(
     // holds the registry while waiting for CPU preparation. Cancellation wins
     // until this point; after publication the new scene is committed atomically.
     let mut slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    let registry = slot.as_mut().expect("initialized context registry");
+    let registry = &mut *slot;
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<()> {
         // Destroy cancels a pending commit before removing its context.
         let context = context(registry, handle).or_else(|error| {
@@ -1687,11 +1679,9 @@ fn read_pixels_with(
     })
 }
 pub(crate) fn read_pixels(handle: u64, kind: u32) -> Result<Vec<f32>> {
-    Ok(read_pixels_with(handle, kind, || Ok(()), |_| Ok(true))?
-        .unwrap()
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-        .collect())
+    Ok(bytemuck::pod_collect_to_vec(
+        &read_pixels_with(handle, kind, || Ok(()), |_| Ok(true))?.unwrap(),
+    ))
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_read_pixels(
@@ -1816,7 +1806,7 @@ pub unsafe extern "C" fn mt_context_submit(
 /// GPU trace time of the most recently completed job; no readback waits.
 pub(crate) fn job_gpu_time(handle: u64) -> Option<f64> {
     let slot = REGISTRY.try_lock().ok()?;
-    slot.as_ref()?.contexts.get(&handle)?.job.as_ref()?.gpu_ms
+    slot.contexts.get(&handle)?.job.as_ref()?.gpu_ms
 }
 /// `owner` is the scene a linked context renders; it is needed only to dispatch.
 fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> Result<()> {
@@ -2095,9 +2085,7 @@ mod tests {
         });
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let preparing = REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle]
-                .commit
-                .is_some();
+            let preparing = REGISTRY.lock().unwrap().contexts[&handle].commit.is_some();
             if preparing {
                 break;
             }
@@ -2117,7 +2105,7 @@ mod tests {
             );
             loop {
                 assert_eq!(mt_job_poll(job, 0, error.as_mut_ptr(), error.len()), 0);
-                if !job_active(&REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle]) {
+                if !job_active(&REGISTRY.lock().unwrap().contexts[&handle]) {
                     break;
                 }
                 assert!(Instant::now() < deadline);
@@ -2240,9 +2228,7 @@ mod tests {
         });
         let deadline = Instant::now() + Duration::from_secs(5);
         let pending = loop {
-            let pending = REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle]
-                .commit
-                .clone();
+            let pending = REGISTRY.lock().unwrap().contexts[&handle].commit.clone();
             if let Some(pending) = pending {
                 break pending;
             }
@@ -2262,15 +2248,7 @@ mod tests {
         assert_eq!(committing.join().unwrap(), Status::Cancelled as i32);
         assert_eq!(destroying.join().unwrap(), 0);
         assert!(*pending.finished.lock().unwrap());
-        assert!(
-            !REGISTRY
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .contexts
-                .contains_key(&handle)
-        );
+        assert!(!REGISTRY.lock().unwrap().contexts.contains_key(&handle));
     }
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
@@ -2607,7 +2585,7 @@ mod tests {
             }),
             Status::ContextFailed as i32
         );
-        assert!(REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle].failed);
+        assert!(REGISTRY.lock().unwrap().contexts[&handle].failed);
         let input = scene::tests::input();
         unsafe {
             assert_eq!(
@@ -2620,7 +2598,7 @@ mod tests {
                 ),
                 0
             );
-            assert!(!REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle].failed);
+            assert!(!REGISTRY.lock().unwrap().contexts[&handle].failed);
             assert_eq!(
                 mt_context_destroy(handle, error.as_mut_ptr(), error.len()),
                 0
@@ -3000,15 +2978,10 @@ pub unsafe extern "C" fn mt_context_backend(
             unsafe {
                 *active = backend;
             }
-            let bytes = status.as_bytes();
-            let mut n = bytes.len().min(reason_capacity - 1);
-            while !status.is_char_boundary(n) {
-                n -= 1;
-            }
-            unsafe {
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), reason.cast(), n);
-                *reason.add(n) = 0;
-            }
+            status::fill(
+                unsafe { std::slice::from_raw_parts_mut(reason, reason_capacity) },
+                &status,
+            );
         })
     };
     write_result(error, capacity, result)

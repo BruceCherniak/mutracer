@@ -353,9 +353,6 @@ export function makeTileRenderWithPredict() {
   };
 }
 
-export type TileRenderWithPredict = ReturnType<
-  typeof makeTileRenderWithPredict
->;
 
 function pixelsPerTileEstimate(gl: WebGL2RenderingContext) {
   const maxRenderbufferSize = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);

@@ -1884,10 +1884,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                                 snapshot.samples,
                             )
                             .map_err(|e| e.to_string())?;
-                            Ok(bytes
-                                .chunks_exact(4)
-                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                                .collect())
+                            Ok(bytemuck::pod_collect_to_vec::<u8, f32>(&bytes))
                         };
                         (
                             read(&snapshot.buffers.color)?,
@@ -1899,12 +1896,10 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                     let buffers = if !resident_mode && custom.gpu_inputs() {
                         use wgpu::util::DeviceExt;
                         let upload = |values: &[f32]| {
-                            let bytes: Vec<u8> =
-                                values.iter().flat_map(|v| v.to_le_bytes()).collect();
                             gpu.device
                                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                                     label: Some("MuTracer custom denoiser input"),
-                                    contents: &bytes,
+                                    contents: bytemuck::cast_slice(values),
                                     usage: wgpu::BufferUsages::STORAGE
                                         | wgpu::BufferUsages::COPY_SRC,
                                 })
@@ -1958,10 +1953,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                                 1,
                             )
                             .map_err(|e| e.to_string())?;
-                            bytes
-                                .chunks_exact(4)
-                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                                .collect()
+                            bytemuck::pod_collect_to_vec::<u8, f32>(&bytes)
                         }
                     };
                     super::custom_denoise::validate(pixels, size).map(|pixels| {
@@ -2821,18 +2813,17 @@ impl Render {
                             DenoisedImage::DisplayGpu { pixels: buffer, .. }
                             | DenoisedImage::Gpu { pixels: buffer, .. }
                             | DenoisedImage::Resident(super::GpuDenoiseOutput { buffer, .. }) => {
-                                crate::read_average(
-                                    &state.gpu.device,
-                                    &state.gpu.queue,
-                                    buffer,
-                                    width,
-                                    height,
-                                    1,
+                                bytemuck::pod_collect_to_vec(
+                                    &crate::read_average(
+                                        &state.gpu.device,
+                                        &state.gpu.queue,
+                                        buffer,
+                                        width,
+                                        height,
+                                        1,
+                                    )
+                                    .map_err(|e| error(Status::Error, e.to_string()))?,
                                 )
-                                .map_err(|e| error(Status::Error, e.to_string()))?
-                                .chunks_exact(4)
-                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                                .collect()
                             }
                         };
                         return Ok(Image {

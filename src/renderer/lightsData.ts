@@ -106,7 +106,6 @@ export function getRectLightUOrV(light: RectLight, uOrV: 0 | 1) {
   const size = dimensions[uOrV] * (uOrV ? -1 : 1);
   return [read(axis, 0)*size,read(axis, 1)*size,read(axis, 2)*size];
 }
-export function getRectLightPosition(light: RectLight) { return light.position; }
 
 export function getRectLightArea(light: RectLight) {
     const size = matrixStorage(light.size);

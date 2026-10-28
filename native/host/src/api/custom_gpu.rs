@@ -370,10 +370,7 @@ pub(crate) fn snapshot_buffers(
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
-            contents: &values
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect::<Vec<_>>(),
+            contents: bytemuck::cast_slice(&values),
             usage: wgpu::BufferUsages::UNIFORM,
         });
     let resources = [

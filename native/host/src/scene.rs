@@ -1227,17 +1227,14 @@ impl PreparedState {
     /// Camera and trace uniforms of a render target on this scene, plus the
     /// production shader when the target's sampling pattern or bevel samples differ.
     pub(crate) fn aov_metadata(&self, camera: &[u8], size: [u32; 2]) -> Result<Vec<u32>> {
-        let mut input: Vec<u8> = size.into_iter().flat_map(u32::to_le_bytes).collect();
+        let mut input: Vec<u8> = bytemuck::cast_slice(&size).to_vec();
         input.extend_from_slice(camera);
         let state = self.clone();
         let packet = runtime::call(move || native_step(mt_core_scene_aov, &input, state.token))?;
         if packet.len() < 80 || packet.len() % 4 != 0 {
             return Err("Invalid AOV metadata".into());
         }
-        Ok(packet[16..]
-            .chunks_exact(4)
-            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-            .collect())
+        Ok(bytemuck::pod_collect_to_vec::<u8, u32>(&packet[16..]))
     }
     pub(super) fn target(
         &self,
@@ -1267,7 +1264,7 @@ impl PreparedState {
         } else {
             res::SOFTWARE_SHADER
         } as u32;
-        for word in [
+        input.extend_from_slice(bytemuck::cast_slice(&[
             size[0],
             size[1],
             quality,
@@ -1276,9 +1273,7 @@ impl PreparedState {
             alpha_blend_strategy,
             0,
             0,
-        ] {
-            input.extend_from_slice(&word.to_le_bytes());
-        }
+        ]));
         input.extend_from_slice(camera);
         let state = self.clone();
         let packet = runtime::call_with_loss(loss, move || {
@@ -2013,7 +2008,6 @@ pub unsafe extern "C" fn mt_probe_render_scene(
             }
             std::sync::TryLockError::Poisoned(_) => "Native probe lock is poisoned".into(),
         })?;
-        context::check_owner()?;
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let output = unsafe { CStr::from_ptr(output) }
             .to_str()

@@ -2054,6 +2054,7 @@ dependencies = [
  "anyhow",
  "ash",
  "base64 0.22.1",
+ "bytemuck",
  "cc",
  "glam",
  "gltf",

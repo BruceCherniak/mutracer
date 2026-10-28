@@ -85,10 +85,7 @@ impl GpuTimer {
             .map_async(wgpu::MapMode::Read, move |r| {
                 let _ = sender.send(r);
             });
-        device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
+        crate::GpuDevice::wait(device)?;
         receiver.recv_timeout(Duration::from_secs(5))??;
         let result = (|| {
             let mapped = self.readback.slice(..).get_mapped_range()?;

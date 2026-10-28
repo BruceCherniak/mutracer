@@ -165,7 +165,7 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
         );
     }
     result[kh::LENGTH] = result.len() as u32;
-    Some(result.into_iter().flat_map(u32::to_le_bytes).collect())
+    Some(bytemuck::cast_slice(&result).to_vec())
 }
 
 #[cfg(test)]

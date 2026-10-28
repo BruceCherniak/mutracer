@@ -2,27 +2,7 @@
 use super::*;
 
 pub(super) fn read_raw(gpu: &GpuDevice, source: &wgpu::Buffer) -> Result<Vec<u8>> {
-    let output = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("First-hit diagnostic readback"),
-        size: source.size(),
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    encoder.copy_buffer_to_buffer(source, 0, &output, 0, source.size());
-    gpu.queue.submit([encoder.finish()]);
-    let (tx, rx) = mpsc::channel();
-    output.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(60)),
-    })?;
-    rx.recv_timeout(Duration::from_secs(5))??;
-    let bytes = output.slice(..).get_mapped_range()?.to_vec();
-    output.unmap();
-    Ok(bytes)
+    gpu.queue.read_buffer(&gpu.device, source.slice(..))
 }
 
 // Geometry is an explicit diagnostic payload, independent of shader text.
@@ -63,7 +43,6 @@ pub fn run(input: &[u8], output: &Path) -> Result<()> {
 }
 fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
     let _entry = ENTRY_LOCK.try_lock().map_err(|_| "Native core is active")?;
-    context::check_owner()?;
     let (mut scene, mut assets) = if hardware {
         scene::prepare_hardware(input)?
     } else {

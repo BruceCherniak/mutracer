@@ -119,7 +119,8 @@ mod platform {
     // Pointers address immutable static names and the plan's stable Box; access is
     // serialized by PLANS. Borrowed requirement chains are read-only to the host.
     unsafe impl Send for Plan {}
-    static PLANS: Mutex<Option<HashMap<u64, Plan>>> = Mutex::new(None);
+    static PLANS: std::sync::LazyLock<Mutex<HashMap<u64, Plan>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
     struct Lease {
         owner: u64,
         engine: Engine,
@@ -127,12 +128,14 @@ mod platform {
         thread: Option<std::thread::ThreadId>,
         gate: Arc<crate::submission::SubmissionGate>,
     }
-    static LEASES: Mutex<Option<HashMap<u64, Lease>>> = Mutex::new(None);
+    static LEASES: std::sync::LazyLock<Mutex<HashMap<u64, Lease>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
     struct Pass {
         owner: u64,
         _subscription: PostProcessSubscription,
     }
-    static PASSES: Mutex<Option<HashMap<u64, Pass>>> = Mutex::new(None);
+    static PASSES: std::sync::LazyLock<Mutex<HashMap<u64, Pass>>> =
+        std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
     fn entry(get_proc: Option<vk::PFN_vkGetInstanceProcAddr>) -> Result<ash::Entry> {
         let get_instance_proc_addr =
             get_proc.ok_or_else(|| invalid("Null vkGetInstanceProcAddr"))?;
@@ -154,10 +157,12 @@ mod platform {
         .map_err(|e| error(Status::Unavailable, e.to_string()))
     }
     pub(super) fn check_engine_ref(engine: &Engine) -> Result<()> {
-        if LEASES.lock().unwrap().as_ref().is_some_and(|m| {
-            m.values()
-                .any(|l| Arc::ptr_eq(&l.engine.inner, &engine.inner))
-        }) {
+        if LEASES
+            .lock()
+            .unwrap()
+            .values()
+            .any(|l| Arc::ptr_eq(&l.engine.inner, &engine.inner))
+        {
             return Err(error(
                 Status::InvalidState,
                 "Release the Vulkan image lease before using this engine",
@@ -166,12 +171,7 @@ mod platform {
         Ok(())
     }
     pub(super) fn check_engine(owner: u64) -> Result<()> {
-        if LEASES
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|m| m.values().any(|l| l.owner == owner))
-        {
+        if LEASES.lock().unwrap().values().any(|l| l.owner == owner) {
             return Err(error(
                 Status::InvalidState,
                 "Release the Vulkan image lease before using this engine",
@@ -182,7 +182,7 @@ mod platform {
     pub(super) fn engine_destroyed(owner: u64) {
         let removed: Vec<_> = {
             let mut passes = PASSES.lock().unwrap();
-            let map = passes.get_or_insert_default();
+            let map = &mut *passes;
             let ids: Vec<_> = map
                 .iter()
                 .filter(|(_, p)| p.owner == owner)
@@ -349,11 +349,7 @@ mod platform {
             reserved: 0,
         };
         let id = next();
-        PLANS
-            .lock()
-            .unwrap()
-            .get_or_insert_default()
-            .insert(id, plan);
+        PLANS.lock().unwrap().insert(id, plan);
         armed.store(true, Ordering::Release);
         unsafe {
             output.write(id);
@@ -365,7 +361,6 @@ mod platform {
         let removed = PLANS
             .lock()
             .unwrap()
-            .get_or_insert_default()
             .remove(&plan)
             .ok_or_else(invalid_handle)?;
         drop(removed);
@@ -391,10 +386,7 @@ mod platform {
         }
         let (adapter, raw, features, limits, options, extensions, physical) = {
             let plans = PLANS.lock().unwrap();
-            let p = plans
-                .as_ref()
-                .and_then(|m| m.get(&plan))
-                .ok_or_else(invalid_handle)?;
+            let p = plans.get(&plan).ok_or_else(invalid_handle)?;
             (
                 p.adapter.clone(),
                 p.raw_instance.clone(),
@@ -507,7 +499,7 @@ mod platform {
         let gate = engine.inner.gpu.queue.gate().ok_or_else(unavailable)?;
         let id = next();
         gate.pause();
-        LEASES.lock().unwrap().get_or_insert_default().insert(
+        LEASES.lock().unwrap().insert(
             id,
             Lease {
                 owner,
@@ -565,7 +557,7 @@ mod platform {
         };
         let thread = owner_thread(owner)?;
         gate.pause();
-        LEASES.lock().unwrap().get_or_insert_default().insert(
+        LEASES.lock().unwrap().insert(
             info.lease,
             Lease {
                 owner,
@@ -581,8 +573,7 @@ mod platform {
         let thread = LEASES
             .lock()
             .unwrap()
-            .as_ref()
-            .and_then(|m| m.get(&lease))
+            .get(&lease)
             .map(|l| l.thread)
             .ok_or_else(invalid_handle)?;
         if thread.is_some_and(|t| t != std::thread::current().id()) {
@@ -594,7 +585,6 @@ mod platform {
         let lease = LEASES
             .lock()
             .unwrap()
-            .get_or_insert_default()
             .remove(&lease)
             .ok_or_else(invalid_handle)?;
         // Foreign submissions have returned on the CPU. The next ordered library
@@ -742,7 +732,7 @@ mod platform {
             _ => return Err(invalid("Unknown Vulkan pass mode")),
         };
         let id = next();
-        PASSES.lock().unwrap().get_or_insert_default().insert(
+        PASSES.lock().unwrap().insert(
             id,
             Pass {
                 owner,
@@ -755,15 +745,13 @@ mod platform {
         let owner = PASSES
             .lock()
             .unwrap()
-            .as_ref()
-            .and_then(|m| m.get(&id))
+            .get(&id)
             .map(|p| p.owner)
             .ok_or_else(invalid_handle)?;
         engine_of(owner)?;
         let removed = PASSES
             .lock()
             .unwrap()
-            .get_or_insert_default()
             .remove(&id)
             .ok_or_else(invalid_handle)?;
         drop(removed);

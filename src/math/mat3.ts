@@ -71,5 +71,3 @@ export function normalFromMat4<T0 extends MathArray, T1 extends ReadonlyMathArra
   out[8] = (a30 * b04 - a31 * b02 + a33 * b00) * det;
   return out;
 }
-
-export type Mat3Array = Float32Array | Float64Array | number[];

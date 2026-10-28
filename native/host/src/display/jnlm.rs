@@ -214,10 +214,7 @@ impl Jnlm {
                 let words = self.parameters[pass as usize];
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("JNLM parameters"),
-                    contents: &words
-                        .into_iter()
-                        .flat_map(u32::to_le_bytes)
-                        .collect::<Vec<_>>(),
+                    contents: bytemuck::cast_slice(&words),
                     usage: wgpu::BufferUsages::UNIFORM,
                 })
             };
@@ -301,15 +298,12 @@ impl Jnlm {
             }
             let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("JNLM output parameters"),
-                contents: &[
+                contents: bytemuck::cast_slice(&[
                     self.size[0],
                     self.size[1],
                     u32::from(premultiply),
                     u32::from(settings.preserve_alpha),
-                ]
-                .into_iter()
-                .flat_map(u32::to_le_bytes)
-                .collect::<Vec<_>>(),
+                ]),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
             #[cfg(test)]

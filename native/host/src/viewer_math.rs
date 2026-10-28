@@ -10,7 +10,7 @@ unsafe extern "C" {
     );
 }
 pub(crate) fn values(kind: u32, args: &[f64]) -> Result<Vec<f64>> {
-    let bytes: Vec<u8> = args.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let bytes: Vec<u8> = bytemuck::cast_slice(args).to_vec();
     crate::runtime::call(move || {
         let mut pointer = std::ptr::null();
         let mut length = 0;

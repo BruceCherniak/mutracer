@@ -1,6 +1,9 @@
 //! Headless native experiments for raw descriptors and prepared MuTracer scenes.
 //! Blocking probes and persistent contexts expose experimental subsets of MuTracer.
 #![recursion_limit = "256"]
+#[cfg(not(target_endian = "little"))]
+compile_error!("Native byte conversions require a little-endian target");
+
 use serde_json::json;
 use std::{
     borrow::Cow,
@@ -233,6 +236,22 @@ fn storage_layout(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
+fn with_error_scopes<T>(
+    device: &wgpu::Device,
+    operation: impl FnOnce() -> Result<T>,
+    scope_error: impl FnOnce(wgpu::Error) -> Box<dyn std::error::Error>,
+) -> Result<T> {
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let result = operation();
+    let validation = pollster::block_on(validation.pop());
+    let memory = pollster::block_on(memory.pop());
+    match validation.or(memory) {
+        Some(error) => Err(scope_error(error)),
+        None => result,
+    }
+}
+
 fn read_average(
     device: &wgpu::Device,
     queue: &GpuQueue,
@@ -241,37 +260,18 @@ fn read_average(
     height: u32,
     samples: u32,
 ) -> Result<Vec<u8>> {
-    #[cfg(test)]
-    queue.record_readback();
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("MuTracer native HDR readback"),
-        size: width as u64 * height as u64 * 16,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_buffer_to_buffer(buffer, 0, &readback, 0, readback.size());
-    queue.submit([encoder.finish()]);
-    let (sender, receiver) = mpsc::channel();
-    readback
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
-    device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
-    receiver.recv_timeout(Duration::from_secs(5))??;
-    let mapped = readback.slice(..).get_mapped_range()?;
-    let mut values = Vec::with_capacity(mapped.len());
-    for channel in mapped.chunks_exact(4) {
-        let value = f32::from_le_bytes(channel.try_into()?) / samples as f32;
+    let bytes = queue.read_buffer(
+        device,
+        buffer.slice(..u64::from(width) * u64::from(height) * 16),
+    )?;
+    let mut values: Vec<f32> = bytemuck::pod_collect_to_vec(&bytes);
+    for value in &mut values {
+        *value /= samples as f32;
         if !value.is_finite() {
             return Err("Non-finite native output".into());
         }
-        values.extend_from_slice(&value.to_le_bytes());
     }
+    let values = bytemuck::cast_slice(&values).to_vec();
     Ok(values)
 }
 
@@ -307,6 +307,14 @@ struct GpuDevice {
     compilation: Arc<compilation::Compilation>,
 }
 impl GpuDevice {
+    fn wait(device: &wgpu::Device) -> Result<()> {
+        device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+        Ok(())
+    }
+
     /// Wraps a host-owned device without replacing its device-loss callback.
     fn on_device(
         adapter: &wgpu::Adapter,
@@ -614,28 +622,29 @@ impl GpuScene {
         own_target: bool,
     ) -> Result<(Self, Option<Target>)> {
         // Drain validation/OOM errors before making a candidate scene visible to a context.
-        let memory_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        let validation_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let result = Self::upload(
-            scene,
-            options,
-            assets,
-            gpu.clone(),
-            reusable,
-            reusable_hw,
-            own_target,
-        );
-        let validation = pollster::block_on(validation_scope.pop());
-        let memory = pollster::block_on(memory_scope.pop());
-        if let Some(error) = validation.or(memory) {
-            gpu.pipelines.lock().unwrap().clear();
-            gpu.compilation
-                .cached
-                .store(0, std::sync::atomic::Ordering::Release);
-            return Err(error.to_string().into());
-        }
-        result
+        with_error_scopes(
+            &gpu.device,
+            || {
+                Self::upload(
+                    scene,
+                    options,
+                    assets,
+                    gpu.clone(),
+                    reusable,
+                    reusable_hw,
+                    own_target,
+                )
+            },
+            |error| {
+                gpu.pipelines.lock().unwrap().clear();
+                gpu.compilation
+                    .cached
+                    .store(0, std::sync::atomic::Ordering::Release);
+                error.to_string().into()
+            },
+        )
     }
+
     fn upload(
         scene: Scene,
         options: &RenderOptions,
@@ -923,10 +932,7 @@ impl GpuScene {
     fn add_samples(&self, target: &mut Target, additional: u32) -> Result<()> {
         let timer = profiling::GpuTimer::new(&self.gpu.device, additional, false);
         self.dispatch_target(target, target.samples, additional, timer.as_ref())?;
-        self.gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
+        crate::GpuDevice::wait(&self.gpu.device)?;
         if profiling::gpu_enabled() {
             let gpu_ms = timer
                 .as_ref()
@@ -957,21 +963,11 @@ impl GpuScene {
         size: [u32; 2],
         previous: Option<Target>,
     ) -> Result<Target> {
-        let memory_scope = self
-            .gpu
-            .device
-            .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        let validation_scope = self
-            .gpu
-            .device
-            .push_error_scope(wgpu::ErrorFilter::Validation);
-        let result = self.build_target(packet, size, previous);
-        let validation = pollster::block_on(validation_scope.pop());
-        let memory = pollster::block_on(memory_scope.pop());
-        if let Some(error) = validation.or(memory) {
-            return Err(error.to_string().into());
-        }
-        result
+        with_error_scopes(
+            &self.gpu.device,
+            || self.build_target(packet, size, previous),
+            |error| error.to_string().into(),
+        )
     }
     fn build_target(
         &self,
@@ -1185,10 +1181,7 @@ impl GpuScene {
             encoder.clear_buffer(&target.buffers[&id], 0, None);
         }
         self.gpu.queue.submit([encoder.finish()]);
-        self.gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
+        crate::GpuDevice::wait(&self.gpu.device)?;
         target.samples = 0;
         Ok(())
     }
@@ -1257,66 +1250,55 @@ impl GpuScene {
             return Ok(None);
         };
         if updates.changed_blases.is_some() {
-            let memory_scope = self
-                .gpu
-                .device
-                .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-            let validation_scope = self
-                .gpu
-                .device
-                .push_error_scope(wgpu::ErrorFilter::Validation);
-            let result = (|| -> Result<_> {
-                let resources = self.hardware.as_ref().unwrap().rebuild_changed(
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    current,
-                    updates,
-                )?;
-                let entries = [
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.buffers[&1].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.buffers[&2].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: self.buffers[&3].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: self.buffers[&4].as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: layout::hwrt_binding::ACCELERATION as u32,
-                        resource: resources.tlas.as_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: layout::hwrt_binding::INDICES as u32,
-                        resource: resources.mapping.as_entire_binding(),
-                    },
-                ];
-                let group = self
-                    .gpu
-                    .device
-                    .create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("MuTracer changed geometry bindings"),
-                        layout: &self.pipeline.get_bind_group_layout(0),
-                        entries: &entries,
-                    });
-                Ok(Some((resources, current.clone(), group, None)))
-            })();
-            let validation = pollster::block_on(validation_scope.pop());
-            let memory = pollster::block_on(memory_scope.pop());
-            if let Some(error) = validation.or(memory) {
-                return Err(format!(
-                    "Full scene commit required: changed BLAS preparation: {error}"
-                )
-                .into());
-            }
-            return result;
+            return with_error_scopes(
+                &self.gpu.device,
+                || -> Result<_> {
+                    let resources = self.hardware.as_ref().unwrap().rebuild_changed(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        current,
+                        updates,
+                    )?;
+                    let entries = [
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.buffers[&1].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: self.buffers[&2].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self.buffers[&3].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: self.buffers[&4].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: layout::hwrt_binding::ACCELERATION as u32,
+                            resource: resources.tlas.as_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: layout::hwrt_binding::INDICES as u32,
+                            resource: resources.mapping.as_entire_binding(),
+                        },
+                    ];
+                    let group = self
+                        .gpu
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("MuTracer changed geometry bindings"),
+                            layout: &self.pipeline.get_bind_group_layout(0),
+                            entries: &entries,
+                        });
+                    Ok(Some((resources, current.clone(), group, None)))
+                },
+                |error| {
+                    format!("Full scene commit required: changed BLAS preparation: {error}").into()
+                },
+            );
         }
         let (capture, assets) = self
             .retained
@@ -1325,65 +1307,63 @@ impl GpuScene {
             .hardware_geometry(updates)
             .map_err(|error| format!("Full scene commit required: {error}"))?;
         let device = &self.gpu.device;
-        let memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let attributes = if capture.indexed {
-            Some(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("MuTracer candidate attributes"),
-                    contents: assets
-                        .get(&AssetId::Packet(3))
-                        .ok_or("Missing updated attributes")?,
-                    usage: self.buffers[&3].usage(),
-                }),
-            )
-        } else {
-            None
-        };
-        let mut candidate_buffers = self.buffers.clone();
-        if let Some(buffer) = &attributes {
-            candidate_buffers.insert(3, buffer.clone());
-        }
-        let result = hardware::prepare(
+        with_error_scopes(
             device,
-            &self.gpu.queue,
-            &capture,
-            &assets,
-            Some(&candidate_buffers),
+            || {
+                let attributes = if capture.indexed {
+                    Some(
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("MuTracer candidate attributes"),
+                            contents: assets
+                                .get(&AssetId::Packet(3))
+                                .ok_or("Missing updated attributes")?,
+                            usage: self.buffers[&3].usage(),
+                        }),
+                    )
+                } else {
+                    None
+                };
+                let mut candidate_buffers = self.buffers.clone();
+                if let Some(buffer) = &attributes {
+                    candidate_buffers.insert(3, buffer.clone());
+                }
+                let result = hardware::prepare(
+                    device,
+                    &self.gpu.queue,
+                    &capture,
+                    &assets,
+                    Some(&candidate_buffers),
+                )
+                .map(|resources| {
+                    let mut entries: Vec<_> = (0..4)
+                        .map(|i| wgpu::BindGroupEntry {
+                            binding: i,
+                            resource: candidate_buffers[&(i as usize + 1)].as_entire_binding(),
+                        })
+                        .collect();
+                    entries.extend([
+                        wgpu::BindGroupEntry {
+                            binding: layout::hwrt_binding::ACCELERATION as u32,
+                            resource: resources.tlas.as_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: layout::hwrt_binding::INDICES as u32,
+                            resource: resources.mapping.as_entire_binding(),
+                        },
+                    ]);
+                    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("MuTracer updated geometry"),
+                        layout: &self.pipeline.get_bind_group_layout(0),
+                        entries: &entries,
+                    });
+                    (resources, capture, group, attributes)
+                });
+                result.map(Some)
+            },
+            |error| {
+                format!("Full scene commit required: hardware geometry preparation: {error}").into()
+            },
         )
-        .map(|resources| {
-            let mut entries: Vec<_> = (0..4)
-                .map(|i| wgpu::BindGroupEntry {
-                    binding: i,
-                    resource: candidate_buffers[&(i as usize + 1)].as_entire_binding(),
-                })
-                .collect();
-            entries.extend([
-                wgpu::BindGroupEntry {
-                    binding: layout::hwrt_binding::ACCELERATION as u32,
-                    resource: resources.tlas.as_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: layout::hwrt_binding::INDICES as u32,
-                    resource: resources.mapping.as_entire_binding(),
-                },
-            ]);
-            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("MuTracer updated geometry"),
-                layout: &self.pipeline.get_bind_group_layout(0),
-                entries: &entries,
-            });
-            (resources, capture, group, attributes)
-        });
-        let validation = pollster::block_on(validation_scope.pop());
-        let memory = pollster::block_on(memory_scope.pop());
-        if let Some(error) = validation.or(memory) {
-            return Err(format!(
-                "Full scene commit required: hardware geometry preparation: {error}"
-            )
-            .into());
-        }
-        result.map(Some)
     }
     fn update_lighting(
         &mut self,
@@ -1572,7 +1552,7 @@ fn render_scene(
         fs::write(output.join(format!("{name}.rgba32f")), values)?;
         aov_outputs.push(name);
     }
-    let mut hdr = Vec::with_capacity(mapped.len());
+    let hdr = mapped.clone();
     let mut rgb = Vec::with_capacity(scene.width as usize * scene.height as usize * 3);
     let mut minimum = f32::INFINITY;
     let mut maximum = f32::NEG_INFINITY;
@@ -1583,7 +1563,6 @@ fn render_scene(
             if !v.is_finite() {
                 return Err("Non-finite native HDR pixel".into());
             }
-            hdr.extend_from_slice(&v.to_le_bytes());
             if channel < 3 {
                 minimum = minimum.min(v);
                 maximum = maximum.max(v);
