@@ -72,7 +72,7 @@ if(hostGpuValidation&&enabled('gpu-availability')){
  gpu=JSON.parse(probe.stdout);
  if(!gpu.hardware||!gpu.rayQuery)throw Error('Full GPU validation requires a real GPU with ray-query support.');
 }
-await run('host-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--','--test-threads=1'],
+if(!gpuFilter&&!batch)await run('host-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--','--test-threads=1'],
  {MUTRACER_TEST_CPU_ONLY:gpuValidation?'0':'1'});
 await run('postprocess-shaders',process.execPath,['native/validation/postprocess-shaders.mjs'],
  {MUTRACER_NATIVE_OUTPUT:resolve(out,'postprocess-shaders')});

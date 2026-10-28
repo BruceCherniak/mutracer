@@ -18,3 +18,4 @@ native/**/*.lib.ll
 native/host/target/
 
 .cache/
+native/toolchain/node_modules

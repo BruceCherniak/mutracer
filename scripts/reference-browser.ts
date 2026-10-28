@@ -3,6 +3,9 @@ import * as THREE from '/node_modules/three/build/three.module.js';
 import {GLTFExporter} from '/node_modules/three/examples/jsm/exporters/GLTFExporter.js';
 import {GLTFLoader} from '/node_modules/three/examples/jsm/loaders/GLTFLoader.js';
 import {Engine, Render, THREESync} from '/lib/main.js';
+import {WGPUJNLMDenoisePass} from '/lib/renderer/WGPUJNLMDenoiser.js';
+import {WebGLJNLMDenoisePass} from '/lib/renderer/WebGLJNLMDenoiser.js';
+import {createJNLMDenoiser} from '/lib/renderer/jnlm.js';
 
 const backend = new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'webgpu';
 const save = async (name, body) => {
@@ -55,6 +58,20 @@ export async function run() {
     await render.converge({samples: 32, sampleSequenceOffset: 19, timeoutMs: 120000});
     await save('jnlm.f32', (await render.readPixels('denoised')).data);
     await save('jnlm.png', await engine.display.toBlob(render));
+    if (new URLSearchParams(location.search).has('diagnostics')) {
+      const prototype = backend === 'webgl' ? WebGLJNLMDenoisePass.prototype : WGPUJNLMDenoisePass.prototype;
+      const method = backend === 'webgl' ? 'render' : 'encode', original = prototype[method];
+      let calls = 0;
+      prototype[method] = function(...args) { calls++; return original.apply(this, args); };
+      try {
+        for (const channel of ['normal', 'albedo', 'shadowCatcher']) {
+          engine.display.channel = channel; engine.display.present(render);
+          await render._output.performDenoise({kind:'jnlm',denoiser:createJNLMDenoiser({})},undefined);
+        }
+        if (calls) throw Error('Diagnostic channels ran color inference '+calls+' times');
+      } finally { prototype[method] = original; }
+    }
+
     if (errors.length) throw new Error(errors.join('\n'));
     return {passed: true, backend, samples: render.samples};
   } finally {

@@ -177,11 +177,100 @@
       "trace": [
         "AOV:Raw"
       ]
+    },
+    {
+      "name": "catcher-mask",
+      "hdr": false,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 4,
+      "trace": [
+        "AOV:Raw"
+      ]
+    },
+    {
+      "name": "hdr-normal",
+      "hdr": true,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 1,
+      "trace": [
+        "AOV:Raw"
+      ]
+    },
+    {
+      "name": "hdr-albedo",
+      "hdr": true,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 2,
+      "trace": [
+        "AOV:Raw"
+      ]
+    },
+    {
+      "name": "sdr-catcher",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "catcher": true,
+      "trace": [
+        "Compose:DisplayEncoded"
+      ]
+    },
+    {
+      "name": "sdr-catcher-scene-filtered",
+      "hdr": false,
+      "bloom": false,
+      "filter": "scene",
+      "output": 0,
+      "catcher": true,
+      "trace": [
+        "CorrectLayers:SceneLinear",
+        "Compose:DisplayEncoded"
+      ],
+      "webgl": false
+    },
+    {
+      "name": "hdr-catcher",
+      "hdr": true,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "catcher": true,
+      "trace": [
+        "Compose:DisplayLinear"
+      ],
+      "webgpuTrace": [
+        "Compose:DisplayEncoded",
+        "Decode:DisplayLinear"
+      ]
+    },
+    {
+      "name": "hdr-catcher-scene-filtered",
+      "hdr": true,
+      "bloom": false,
+      "filter": "scene",
+      "output": 0,
+      "catcher": true,
+      "trace": [
+        "CorrectLayers:SceneLinear",
+        "Compose:DisplayLinear"
+      ],
+      "webgpuTrace": [
+        "CorrectLayers:SceneLinear",
+        "Compose:DisplayEncoded",
+        "Decode:DisplayLinear"
+      ],
+      "webgl": false
     }
   ],
   "exceptions": {
     "LinearHDRSurface": "Browser HDR is sRGB encoded; native HDR surfaces are linear scRGB. Decode browser RGB before comparing.",
     "WebGLSDROnly": "WebGL 2 exposes SDR presentation only; HDR rows are tested on WebGPU and native.",
-    "WebGLJNLM": "WebGL JNLM composes in 8-bit display encoding, decodes for filtering and re-encodes; allow 2 codes for this smooth fixture."
+    "WebGLJNLM": "WebGL JNLM composes in 8-bit display encoding, decodes for filtering and re-encodes; allow 2 codes for this smooth fixture.",
+    "HalfFloatOutput": "Native HDR stores the final surface and intermediate bloom in float16; allow 1.5e-3 relative error including filter/input rounding.",
+    "WebGLSceneFilter": "WebGL has no custom scene-linear/OIDN filter; scene-filtered catcher rows require WebGPU/native."
   }
 }

@@ -17,17 +17,24 @@ fn display_parity_matrix() {
             let n = (i.wrapping_mul(1664525).wrapping_add(19) % 13) as f64 * 0.002;
             [v+n,v*0.5+n,v*0.25+n,1.]
         }).collect();
+        let catcher = row["catcher"].as_bool().unwrap_or(false);
+        let pixels:Vec<[f64;4]>=pixels.iter().map(|p| if catcher { [p[0]*0.5,p[1]*0.5,p[2]*0.5,0.5] }else{*p}).collect();
         let mut display = snapshot(&gpu, [16,16], 32, &pixels);
+        if catcher { put(&gpu,&display.albedo,&[9.6,12.8,16.,16.].repeat(256));display.metadata.has_catcher=true; }
         let shadow = gpu.device.create_buffer(&wgpu::BufferDescriptor {label:None,size:256*48,
             usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false});
         let moments: Vec<f32> = (0..256usize).flat_map(|i| {
             let p=pixels[(15-i/16)*16+i%16];let l=(p[0]*0.2126+p[1]*0.7152+p[2]*0.0722) as f32;
-            [0.,0.,0.,0.,0.,0.,0.,0.,l*32.,(l*l+10.)*32.,0.,0.]
+            [if catcher {16.}else{0.},0.,0.,if catcher {8.}else{0.},0.,0.,0.,0.,l*32.,(l*l+10.)*32.,0.,0.]
         }).collect();
         put(&gpu,&shadow,&moments);display.shadow=Some(shadow);
         if row["filter"]=="jnlm" {display.set_jnlm(Some(jnlm::Options {strength:3.,..Default::default()}));}
         let settings=Settings {tone_mapping:row["tone"].as_u64().unwrap_or(0) as u32,exposure:row["exposure"].as_f64().unwrap_or(1.) as f32,output:row["output"].as_u64().unwrap() as u32,
             bloom_intensity:if row["bloom"].as_bool().unwrap(){0.2}else{0.},..Default::default()};
+        if row["filter"]=="scene" {
+            let filtered:Vec<f32>=(0..256usize).flat_map(|i| {let p=pixels[(15-i/16)*16+i%16];[p[0] as f32*0.5,p[1] as f32*0.5,p[2] as f32*0.5,p[3] as f32]}).collect();
+            display.upload(&filtered).unwrap();
+        }
         take_order();
         let hdr=row["hdr"].as_bool().unwrap();
         let bytes = if hdr {

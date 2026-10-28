@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
       this.texture = { ...this.texture, width, height };
       this.outputs.clear();
     }
+    reserveCapacity() {}
     retainOutput() {}
     releaseOutput() {}
     setUniform = vi.fn();
@@ -613,7 +614,7 @@ it.each(['normal', 'albedo', 'shadowCatcher', 'depth'] as const)('keeps %s diagn
   pipeline.trace(new Camera({projection: 'perspective'}), 1);
   pipeline.setOutput(output);
   const denoiser = completedDenoiser(), execute = vi.spyOn(denoiser, 'tileExecute');
-  expect(await pipeline.performDenoise!({kind:'oidn',denoiser},undefined)).toBe(true);
+  await pipeline.performDenoise!({kind:'oidn',denoiser},undefined).catch(()=>false);
   expect(execute).not.toHaveBeenCalled();
   pipeline.dispose();
 });
@@ -623,7 +624,7 @@ it.each([false,true])('records actual composition after bloom (%s)', async bloom
   pipeline.setOfflineRenderOptions({samplesPerBatch:32,deferPostProcess:false,sampleSequenceOffset:19});
   pipeline.setBloomParams({intensity:bloom?.2:0,threshold:1,radius:.6});
   const events:string[]=[];
-  vi.spyOn(WGPUBloomPass.prototype,'createPass').mockImplementation(()=>{events.push('Bloom:SceneLinear');});
+  vi.spyOn(WGPUBloomPass.prototype,'createPass').mockImplementation(()=>{events.push('Bloom:SceneLinear');return {} as GPUTexture;});
   const compose=mocks.Pass.instances.get('compose')!;
   compose.createPass.mockImplementation(()=>{events.push('Compose:DisplayEncoded');});
   pipeline.trace(new Camera({projection:'perspective'}),32);

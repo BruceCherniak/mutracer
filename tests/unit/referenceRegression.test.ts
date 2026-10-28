@@ -21,8 +21,8 @@ describe('focused native validation', () => {
     expect(options.enabled('host-tests')).toBe(true);
     expect(options.enabled('postprocess-shaders')).toBe(false);
     expect(options.enabled('raw-gpu-fixtures')).toBe(false);
-    expect(options.gpuFilter.test('display::jnlm::tests::capture')).toBe(true);
-    expect(options.gpuFilter.test('hardware_loop_against_fresh_l0_contexts')).toBe(false);
+    expect(options.gpuFilter!.test('display::jnlm::tests::capture')).toBe(true);
+    expect(options.gpuFilter!.test('hardware_loop_against_fresh_l0_contexts')).toBe(false);
   });
 });
 

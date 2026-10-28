@@ -2,7 +2,7 @@ import {afterEach,expect,it,vi} from 'vitest';
 import {readFileSync} from 'node:fs';
 import Render from '../../src/Render';
 import {renderFixture} from '../helpers/renderPipeline';
-const table=JSON.parse(readFileSync(new URL('../fixtures/display-schedule.json',import.meta.url),'utf8'));
+const table:{cases:{name:string;events:string[];actions:string[]}[]}=JSON.parse(readFileSync(new URL('../fixtures/display-schedule.json',import.meta.url),'utf8'));
 const settle=()=>new Promise(resolve=>setTimeout(resolve,0));
 afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();});
 it.each(table.cases)('browser schedule: $name',async(row:{events:string[];actions:string[]})=>{
