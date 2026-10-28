@@ -129,7 +129,7 @@ fn gradeColor(inputColor: vec3f) -> vec3f {
     color = select(vec3f(0.0), normal.rgb / params.originalSamples * 0.5 + 0.5, alpha > 0.0);
   } else if (params.outputKind == 2u) {
     let albedo = albedos[index] / params.originalSamples;
-    color = linearToSrgb(albedo.rgb);
+    color = albedo.rgb;
     alpha = clamp(albedo.a, 0.0, 1.0);
   }
   if ((params.flags & 2u) != 0u) { color *= alpha; }

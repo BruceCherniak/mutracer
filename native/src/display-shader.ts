@@ -35,7 +35,7 @@ ${composeDefine}
     color = select(vec3f(0.0), normal.rgb / params.originalSamples * 0.5 + 0.5, alpha > 0.0);
   } else if (params.outputKind == 2u) {
     let albedo = albedos[index] / params.originalSamples;
-    color = linearToSrgb(albedo.rgb);
+    color = albedo.rgb;
     alpha = clamp(albedo.a, 0.0, 1.0);
   }
   if ((params.flags & 2u) != 0u) { color *= alpha; }
@@ -43,8 +43,7 @@ ${composeDefine}
 }`;
 }
 
-// Share the browser's layer composition. Native keeps its existing sRGB transfer
-// instead of changing the established native display encoding to gamma 2.2.
+// Share the browser's layer composition and sRGB display transfer.
 import {createComposeMain, createCompositeDenoiseColorMain, createCompositeDenoiseAlbedoMain} from '../../src/renderer/wgsl/compose.frag.wgsl.js';
 export function nativeDisplayEffectsShader(hdr = false, output: 'display' | 'linear' | 'albedo' = 'display'): string {
   const main = createComposeMain('srgb');
@@ -135,10 +134,11 @@ ${main}
     output.color = vec4f(select(vec3f(0.0), n.rgb / params.originalSamples * 0.5 + 0.5, a > 0.0), a);
   } else if (params.outputKind == 2u) {
     let a = load_flatBackgroundMaskTex(uv, 0);
-    output.color = vec4f(linearToSrgb(a.rgb), clamp(a.a, 0.0, 1.0));
+    output.color = vec4f(a.rgb, clamp(a.a, 0.0, 1.0));
   } else if (params.outputKind == 4u) { output.color = load_shadowCatcherTex(uv, 0); }
 ${output === 'albedo' ? createCompositeDenoiseAlbedoMain('output.color') : ''}
-${(hdr && output === 'display') || output === 'linear' ? createCompositeDenoiseColorMain('output.color', 'output.color', 'srgb') : ''}
+${(hdr && output === 'display') || output === 'linear' ? `if (params.outputKind == 0u || params.outputKind == 3u) {
+${createCompositeDenoiseColorMain('output.color', 'output.color', 'srgb')} }` : ''}
   if ((params.flags & 1u) == 0u) { output.color.a = 1.0; }
   if ((params.flags & 2u) != 0u) { output.color = vec4f(output.color.rgb * output.color.a, output.color.a); }
   textureStore(outputImage, id.xy, output.color);

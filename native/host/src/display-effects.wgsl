@@ -283,7 +283,7 @@ output.color = finalColor;
     output.color = vec4f(select(vec3f(0.0), n.rgb / params.originalSamples * 0.5 + 0.5, a > 0.0), a);
   } else if (params.outputKind == 2u) {
     let a = load_flatBackgroundMaskTex(uv, 0);
-    output.color = vec4f(linearToSrgb(a.rgb), clamp(a.a, 0.0, 1.0));
+    output.color = vec4f(a.rgb, clamp(a.a, 0.0, 1.0));
   } else if (params.outputKind == 4u) { output.color = load_shadowCatcherTex(uv, 0); }
 
 

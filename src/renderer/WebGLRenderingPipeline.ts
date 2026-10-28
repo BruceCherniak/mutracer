@@ -464,6 +464,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
         return Promise.reject(new Error('This denoiser requires WebGPU.'));
       }
       if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
+      if (output !== 'final' && output !== 'shadow') return Promise.resolve(true);
       pendingDenoiser = filter.denoiser;
       drawPostProcess(true);
       return Promise.resolve(true);

@@ -11,6 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Diagnostic channels show their original images without color denoising; native albedo display now matches browser values.
 - Native HDR presentation applies JNLM to extended-range composition and can show completed display-linear denoising results.
 
 ## 0.1.5 - 2026-10-22

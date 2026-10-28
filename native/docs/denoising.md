@@ -67,6 +67,7 @@ recomputes the filter without tracing more samples.
 HDR windows filter the extended-range composition without clamping radiance to
 one. Completed display-linear OIDN results can also be presented on HDR windows;
 this does not rerun OIDN on an HDR input or recover radiance from an SDR result.
+Diagnostic channels show their original images without color denoising.
 JNLM leaves raw HDR and `Denoised` readback unchanged. Its scratch images and
 retained guide moments increase GPU memory use; HDR presentation retains another
 8 bytes per pixel. Larger

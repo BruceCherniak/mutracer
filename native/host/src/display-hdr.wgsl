@@ -283,15 +283,16 @@ output.color = finalColor;
     output.color = vec4f(select(vec3f(0.0), n.rgb / params.originalSamples * 0.5 + 0.5, a > 0.0), a);
   } else if (params.outputKind == 2u) {
     let a = load_flatBackgroundMaskTex(uv, 0);
-    output.color = vec4f(linearToSrgb(a.rgb), clamp(a.a, 0.0, 1.0));
+    output.color = vec4f(a.rgb, clamp(a.a, 0.0, 1.0));
   } else if (params.outputKind == 4u) { output.color = load_shadowCatcherTex(uv, 0); }
 
+if (params.outputKind == 0u || params.outputKind == 3u) {
 
 let encoded = max(output.color.rgb, vec3f(0.0));
 let displayLinear = select(pow((encoded + 0.055) / 1.055, vec3f(2.4)), encoded / 12.92, encoded <= vec3f(0.04045));
 output.color = vec4f(displayLinear, output.color.a);
 
-
+ }
   if ((params.flags & 1u) == 0u) { output.color.a = 1.0; }
   if ((params.flags & 2u) != 0u) { output.color = vec4f(output.color.rgb * output.color.a, output.color.a); }
   textureStore(outputImage, id.xy, output.color);

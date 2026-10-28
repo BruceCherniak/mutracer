@@ -1256,6 +1256,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   ): Promise<boolean> {
     cancelDenoise();
     if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
+    if (output !== 'final' && output !== 'shadow') return Promise.resolve(true);
     flushPostProcess();
     if (attachedDenoiser.kind === 'custom') return performCustomDenoise(attachedDenoiser.denoiser, denoiseSchedule, signal, attachedDenoiser.aovs);
     denoisedHDR = false;
