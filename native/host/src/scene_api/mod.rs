@@ -855,11 +855,7 @@ impl Scene {
                 .map(|c| (c.geometries.as_slice(), c.textures.as_slice())),
         ) {
             if let Some(c) = cache.as_mut() {
-                c.words = c
-                    .bytes
-                    .chunks_exact(4)
-                    .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-                    .collect();
+                c.words = bytemuck::pod_collect_to_vec::<u8, u32>(&c.bytes);
             }
             return Err(e);
         }
@@ -869,7 +865,7 @@ impl Scene {
             .map(std::mem::take)
             .unwrap_or_default();
         bytes.clear();
-        bytes.extend(words.iter().flat_map(|w| w.to_le_bytes()));
+        bytes.extend_from_slice(bytemuck::cast_slice(&words));
         if let Err(e) = crate::scene::validate(&bytes) {
             *cache = None;
             return Err(api::error(Status::InvalidArgument, e.to_string()));
@@ -897,20 +893,14 @@ impl Scene {
             return Ok(CommitKind::Incremental);
         }
         let next = self.next_words(Some(&c.words))?;
-        let bytes: Vec<u8> = next.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let bytes: Vec<u8> = bytemuck::cast_slice(&next).to_vec();
         crate::scene::validate(&bytes).map_err(|e| invalid(&e.to_string()))?;
         Ok(predict(&c.bytes, &bytes))
     }
 }
 fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
-    let a: Vec<u32> = previous
-        .chunks_exact(4)
-        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-        .collect();
-    let b: Vec<u32> = next
-        .chunks_exact(4)
-        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-        .collect();
+    let a: Vec<u32> = bytemuck::pod_collect_to_vec::<u8, u32>(previous);
+    let b: Vec<u32> = bytemuck::pod_collect_to_vec::<u8, u32>(next);
     if [h::GEOMETRY_COUNT, h::MESH_COUNT, h::MATERIAL_COUNT]
         .iter()
         .any(|&i| a[i] != b[i])

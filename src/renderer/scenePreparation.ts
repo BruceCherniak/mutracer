@@ -264,10 +264,11 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
   };
 }
 
-function mergeGeometry(
+export function mergeGeometry(
   geometries: Geometry[],
   globalMaterialIndicesMap: number[][],
-  regions: Map<Geometry, { vertexOffset: number; indexOffset: number; materialIndices: number[] }>
+  regions: Map<Geometry, { vertexOffset: number; indexOffset: number; materialIndices: number[] }>,
+  webgl = false
 ) {
   const totalVertexCount = geometries.reduce(
     (sum, geo) => sum + geo.vertexCount,
@@ -291,8 +292,12 @@ function mergeGeometry(
     4
   );
 
-  const hasColor = geometries.some((geo) => geo.color);
-  const hasTangent = geometries.some((geo) => geo.tangent);
+  // The flat WebGL buffer keeps its existing XYZ tangents and optional-attribute
+  // selection; instanced preparation uses XYZW tangents and independent channels.
+  const firstOptional = webgl ? geometries.find(geo => geo.color || geo.tangent) : undefined;
+  const hasColor = webgl ? !!firstOptional?.color : geometries.some(geo => geo.color);
+  const hasTangent = webgl ? !firstOptional?.color && !!firstOptional?.tangent : geometries.some(geo => geo.tangent);
+  const tangentSize = webgl ? 3 : 4;
 
   const mergedGeometry = new Geometry({
     position: positionAttrib,
@@ -304,7 +309,7 @@ function mergeGeometry(
       ? new Attribute(new Float32Array(3 * totalVertexCount).fill(1), 3)
       : undefined,
     tangent: hasTangent
-      ? new Attribute(new Float32Array(4 * totalVertexCount), 4)
+      ? new Attribute(new Float32Array(tangentSize * totalVertexCount), tangentSize)
       : undefined,
     indices: indexAttrib
   });
@@ -326,18 +331,20 @@ function mergeGeometry(
       (geometry.uv1 ?? geometry.uv)?.array ?? new Float32Array(vertexCount * 2),
       currentVertex * 2
     );
-    if (geometry.color) {
-      mergedGeometry.color!.array.set(geometry.color.array, currentVertex * 3);
+    if (mergedGeometry.color && geometry.color) {
+      mergedGeometry.color.array.set(geometry.color.array, currentVertex * 3);
     }
-    if (geometry.tangent) {
+    if (mergedGeometry.tangent && geometry.tangent) {
       const source = geometry.tangent;
-      for (let v = 0; v < vertexCount; v++) {
+      if (webgl) {
+        mergedGeometry.tangent.array.set(source.array, currentVertex * tangentSize);
+      } else for (let v = 0; v < vertexCount; v++) {
         for (let c = 0; c < 4; c++) mergedGeometry.tangent!.array[(currentVertex + v) * 4 + c] =
           c < source.itemSize ? source.array[v * source.itemSize + c] : hasGeneratedVertexTangents(geometry) ? 0 : 2;
       }
     }
 
-    writeMaterialIndices(geometry, globalMaterialIndex, materialIndexAttrib.array, currentVertex);
+    writeMaterialIndices(geometry, globalMaterialIndex, materialIndexAttrib.array, currentVertex, webgl);
 
     const meshIndices = geometry.indexArray;
     for (let i = 0; i < attributeLength(meshIndices); i++) {

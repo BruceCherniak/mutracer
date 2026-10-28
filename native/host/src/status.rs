@@ -72,16 +72,23 @@ pub(crate) fn rejected(error: Box<dyn std::error::Error>) -> Box<dyn std::error:
 /// Copy a truncated NUL-terminated UTF-8 message and return the status code.
 pub(crate) fn write(error: *mut c_char, capacity: usize, status: Status, message: &str) -> i32 {
     if !error.is_null() && capacity > 0 {
-        let mut count = message.len().min(capacity - 1);
-        while !message.is_char_boundary(count) {
-            count -= 1;
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(message.as_ptr(), error.cast(), count);
-            *error.add(count) = 0;
-        }
+        fill(
+            unsafe { std::slice::from_raw_parts_mut(error, capacity) },
+            message,
+        );
     }
     status as i32
+}
+
+/// Copy UTF-8 into a bounded C string without changing bytes past its terminator.
+pub(crate) fn fill(buffer: &mut [c_char], text: &str) {
+    let count = text.floor_char_boundary(buffer.len().saturating_sub(1));
+    for (slot, byte) in buffer.iter_mut().zip(text.as_bytes()[..count].iter()) {
+        *slot = *byte as c_char;
+    }
+    if let Some(end) = buffer.get_mut(count) {
+        *end = 0;
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -92,6 +99,48 @@ pub extern "C" fn mt_abi_version() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bounded_c_strings_preserve_utf8_terminators_and_unused_bytes() {
+        let text = "A中🙂Z";
+        for (capacity, expected) in [
+            (0, ""),
+            (1, ""),
+            (2, "A"),
+            (3, "A"),
+            (4, "A"),
+            (5, "A中"),
+            (8, "A中"),
+            (9, "A中🙂"),
+            (10, text),
+            (12, text),
+        ] {
+            let mut buffer = [0x55 as c_char; 12];
+            assert_eq!(
+                write(buffer.as_mut_ptr(), capacity, Status::Busy, text),
+                Status::Busy as i32
+            );
+            if capacity > 0 {
+                assert_eq!(
+                    unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }
+                        .to_str()
+                        .unwrap(),
+                    expected
+                );
+                assert!(
+                    buffer[expected.len() + 1..]
+                        .iter()
+                        .all(|&byte| byte == 0x55)
+                );
+            } else {
+                assert_eq!(buffer, [0x55; 12]);
+            }
+        }
+        assert_eq!(
+            write(std::ptr::null_mut(), 12, Status::Cancelled, text),
+            Status::Cancelled as i32
+        );
+        fill(&mut [], text);
+    }
     // The C header is the public contract; keep Rust values identical to it.
     #[test]
     fn header_status_codes_and_abi_version_match() {

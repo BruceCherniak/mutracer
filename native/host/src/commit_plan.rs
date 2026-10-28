@@ -35,7 +35,7 @@ impl Words<'_> {
     }
 }
 fn record(words: &[u32]) -> Vec<u8> {
-    words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    bytemuck::cast_slice(words).to_vec()
 }
 /// Same referenced content (offsets may differ); both absent counts as equal.
 fn same_span(a: &Words, ao: usize, b: &Words, bo: usize, count: usize) -> Option<bool> {

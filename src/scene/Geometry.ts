@@ -43,14 +43,6 @@ export type AttributeName =
   | 'uv'
   | 'uv1'
   | 'color';
-export const AVAILABLE_ATTRIBUTES: AttributeName[] = [
-  'position',
-  'normal',
-  'tangent',
-  'uv',
-  'uv1',
-  'color'
-];
 
 /** Triangle geometry construction data. */
 export interface GeometryInit {

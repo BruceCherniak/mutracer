@@ -18,22 +18,22 @@ pub(crate) struct Query {
     size: [u32; 2],
 }
 impl Query {
-    pub(crate) fn snapshot(scene: &GpuScene, target: Option<&Target>) -> Result<Self> {
-        let frame = target.map_or_else(|| scene.groups[2].clone(), |t| t.groups[0].clone());
+    pub(crate) fn snapshot(scene: &GpuScene, target: &Target) -> Result<Self> {
         Ok(Self {
-            pipelines: target
-                .map_or_else(|| scene.aov_pipelines.clone(), |t| t.aov_pipelines.clone()),
+            pipelines: target.aov_pipelines.clone(),
             gpu: scene.gpu.clone(),
-            shader: target.map_or_else(|| scene.depth_shader.clone(), |t| t.aov_shader.clone()),
+            shader: target.aov_shader.clone(),
             layouts: scene.layouts[..3].to_vec(),
-            groups: vec![scene.groups[0].clone(), scene.groups[1].clone(), frame],
+            groups: vec![
+                scene.groups[0].clone(),
+                scene.groups[1].clone(),
+                target.groups[0].clone(),
+            ],
             retained: scene
                 .retained
                 .clone()
                 .ok_or("AOV requires a retained scene")?,
-            size: target.map_or([scene.scene.width, scene.scene.height], |t| {
-                [t.width, t.height]
-            }),
+            size: [target.width, target.height],
         })
     }
     pub(crate) fn metadata(&self, camera: &[u8]) -> Result<Vec<u32>> {
@@ -165,7 +165,7 @@ impl Output {
             encoder.copy_buffer_to_buffer(&previous.center, 0, &previous_center, 0, pixels * 32);
             query.gpu.queue.submit([encoder.finish()]);
         }
-        let bytes: Vec<_> = words.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let bytes: Vec<_> = bytemuck::cast_slice(&words).to_vec();
         let scene = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("AOV identities/history"),
             contents: &bytes,
@@ -193,10 +193,8 @@ impl Output {
         let mut encoder = device.create_command_encoder(&Default::default());
         let run =
             |encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::ComputePipeline, sample: u32| {
-                let parameters: Vec<_> = [self.size[0], self.size[1], sample, mask]
-                    .into_iter()
-                    .flat_map(u32::to_le_bytes)
-                    .collect();
+                let parameters: Vec<_> =
+                    bytemuck::cast_slice(&[self.size[0], self.size[1], sample, mask]).to_vec();
                 let parameters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("AOV parameters"),
                     contents: &parameters,
@@ -253,7 +251,7 @@ impl Output {
             self.size[0] as u64 * self.size[1] as u64 * 32,
         );
         let words = reproject_metadata(&self.current_words, Some(&self.current_words));
-        let bytes: Vec<_> = words.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let bytes: Vec<_> = bytemuck::cast_slice(&words).to_vec();
         self.gpu.queue.write_buffer(&self.scene, 0, &bytes);
         self.gpu.queue.submit([encoder.finish()]);
         // Motion is written by the center trace, rather than resolved from
@@ -288,10 +286,8 @@ impl Output {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
-            let bytes: Vec<_> = [self.size[0], self.size[1], self.samples, index]
-                .into_iter()
-                .flat_map(u32::to_le_bytes)
-                .collect();
+            let bytes: Vec<_> =
+                bytemuck::cast_slice(&[self.size[0], self.size[1], self.samples, index]).to_vec();
             let parameters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
                 contents: &bytes,
@@ -372,7 +368,7 @@ impl Output {
             0,
             0,
         ];
-        let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        let bytes: Vec<_> = bytemuck::cast_slice(&words).to_vec();
         let parameters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("AOV display parameters"),
             contents: &bytes,
@@ -419,17 +415,18 @@ impl Output {
         // normalization on the CPU can differ from the device reciprocal by an
         // ULP, even for two reads of the same accumulation on one adapter.
         let snapshot = self.snapshot(1 << (kind - 4))?.pop().unwrap();
-        let bytes = read_bytes(&self.gpu, &snapshot.buffer)?;
+        let bytes = self
+            .gpu
+            .queue
+            .read_buffer(&self.gpu.device, snapshot.buffer.slice(..))?;
         let [width, height] = self.size;
         let mut words = Vec::with_capacity((width * height * 4) as usize);
         let row = width as usize * 16;
         // GPU accumulation/snapshots are bottom-first; public images are top-first.
         for y in (0..height as usize).rev() {
-            words.extend(
-                bytes[y * row..(y + 1) * row]
-                    .chunks_exact(4)
-                    .map(|b| u32::from_le_bytes(b.try_into().unwrap())),
-            );
+            words.extend(bytemuck::pod_collect_to_vec::<u8, u32>(
+                &bytes[y * row..(y + 1) * row],
+            ));
         }
         Ok(api::Image {
             width,
@@ -443,52 +440,18 @@ impl Output {
         })
     }
 }
-fn read_bytes(gpu: &GpuDevice, source: &wgpu::Buffer) -> Result<Vec<u8>> {
-    let device = &gpu.device;
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("AOV readback"),
-        size: source.size(),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&Default::default());
-    encoder.copy_buffer_to_buffer(source, 0, &staging, 0, source.size());
-    gpu.queue.submit([encoder.finish()]);
-    let (send, receive) = mpsc::channel();
-    staging.map_async(wgpu::MapMode::Read, .., move |r| {
-        let _ = send.send(r);
-    });
-    device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
-    receive.recv_timeout(Duration::from_secs(5))??;
-    let view = staging.get_mapped_range(..)?;
-    let bytes = view.to_vec();
-    drop(view);
-    staging.unmap();
-    Ok(bytes)
-}
 
 pub(crate) fn read_denoise_aov(gpu: &GpuDevice, aov: &api::GpuAov) -> Result<api::DenoiseAov> {
-    let bytes = read_bytes(gpu, &aov.buffer)?;
+    let bytes = gpu.queue.read_buffer(&gpu.device, aov.buffer.slice(..))?;
     let mut output = api::DenoiseAov {
         kind: aov.kind,
         data: Vec::new(),
         id_data: None,
     };
     if aov.kind == api::PixelKind::Id {
-        output.id_data = Some(
-            bytes
-                .chunks_exact(4)
-                .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-                .collect(),
-        );
+        output.id_data = Some(bytemuck::pod_collect_to_vec::<u8, u32>(&bytes));
     } else {
-        output.data = bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-            .collect();
+        output.data = bytemuck::pod_collect_to_vec::<u8, f32>(&bytes);
     }
     Ok(output)
 }

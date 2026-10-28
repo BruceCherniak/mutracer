@@ -11,7 +11,7 @@ pub(crate) struct Query {
     shader: wgpu::ShaderModule,
     layouts: Vec<wgpu::BindGroupLayout>,
     groups: [wgpu::BindGroup; 2],
-    frame: Vec<(u32, wgpu::Buffer)>,
+    frame: [wgpu::Buffer; 2],
     pipeline: Arc<OnceLock<Pipeline>>,
 }
 impl Query {
@@ -21,11 +21,17 @@ impl Query {
             shader: scene.depth_shader.clone(),
             layouts: scene.layouts[..3].to_vec(),
             groups: [scene.groups[0].clone(), scene.groups[1].clone()],
-            frame: scene.scene.bind_groups[layout::group::FRAME]
-                .entries
-                .iter()
-                .map(|entry| (entry.binding, scene.buffers[&entry.id].clone()))
-                .collect(),
+            frame: [
+                scene
+                    .gpu
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Depth query trace settings"),
+                        contents: &scene.display_trace,
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    }),
+                scene.buffers[&layout::resource::LIGHT_UNIFORM].clone(),
+            ],
             pipeline: scene.depth_pipeline.clone(),
         }
     }
@@ -86,36 +92,22 @@ impl Query {
             })
         };
         let camera = uniform("Depth query camera", camera);
-        let area: Vec<_> = area.into_iter().flat_map(f32::to_le_bytes).collect();
-        let area = uniform("Depth query area", &area);
+        let area = uniform("Depth query area", bytemuck::bytes_of(&area));
         let frame = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Depth query frame"),
             layout: &self.layouts[2],
-            entries: &self
-                .frame
-                .iter()
-                .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                    binding: *binding,
-                    resource: if *binding == layout::frame_binding::CAMERA as u32 {
-                        &camera
-                    } else {
-                        buffer
-                    }
-                    .as_entire_binding(),
-                })
-                .collect::<Vec<_>>(),
+            entries: &[(0, &camera), (1, &self.frame[0]), (2, &self.frame[1])].map(
+                |(binding, buffer)| wgpu::BindGroupEntry {
+                    binding,
+                    resource: buffer.as_entire_binding(),
+                },
+            ),
         });
         let bytes = (api::DEPTH_SAMPLE_COUNT * 16) as u64;
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Depth samples"),
             size: bytes,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Depth readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let outputs = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -142,34 +134,24 @@ impl Query {
             pass.set_bind_group(3, &outputs, &[]);
             pass.dispatch_workgroups(1, 1, 1);
         }
-        encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
         gpu.queue.submit([encoder.finish()]);
-        let (send, recv) = mpsc::channel();
-        readback.map_async(wgpu::MapMode::Read, .., move |r| {
-            let _ = send.send(r);
-        });
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            device.poll(wgpu::PollType::Poll)?;
-            gpu.loss.check()?;
-            match recv.recv_timeout(Duration::from_millis(2)) {
-                Ok(result) => {
-                    result?;
-                    break;
+        let mapped = gpu
+            .queue
+            .read_buffer(device, output.slice(..))
+            .map_err(|error| {
+                if matches!(
+                    error.downcast_ref::<wgpu::PollError>(),
+                    Some(wgpu::PollError::Timeout)
+                ) {
+                    fail(Status::Timeout, "Depth readback timed out")
+                } else {
+                    error
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    return Err(fail(Status::Timeout, "Depth readback timed out"));
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
-        let mapped = readback.get_mapped_range(..)?;
+            })?;
+        gpu.loss.check()?;
         let result = std::array::from_fn(|i| {
             f32::from_le_bytes(mapped[i * 16..i * 16 + 4].try_into().unwrap())
         });
-        drop(mapped);
-        readback.unmap();
         if result.iter().any(|v| !v.is_finite() || *v < 0.) {
             return Err("Invalid depth samples".into());
         }

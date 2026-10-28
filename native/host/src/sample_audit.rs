@@ -83,7 +83,7 @@ pub(super) fn install_history(scene: &mut Scene, assets: &mut Assets, samples: u
 
 /// Reuse the same immutable buffers and AS for an ordinary shader control.
 pub(super) fn ordinary_pipeline(state: &mut GpuScene, source: String) {
-    let layouts: Vec<_> = (0..state.groups.len())
+    let layouts: Vec<_> = (0..state.layouts.len())
         .map(|i| state.pipeline.get_bind_group_layout(i as u32))
         .collect();
     let refs: Vec<_> = layouts.iter().map(Some).collect();
@@ -126,16 +126,10 @@ pub(super) struct Sample {
     pub invalid_pixels: usize,
 }
 
-pub(super) fn read(state: &GpuScene, sample: u32) -> Result<Sample> {
+pub(super) fn read(state: &GpuScene, target: &Target, sample: u32) -> Result<Sample> {
     let data =
-        hit_diagnostics::read_raw(&state.gpu, &state.buffers[&layout::resource::QUERY_COUNTS])?;
-    let normal = hit_diagnostics::read_raw(
-        &state.gpu,
-        &state.buffers[&state
-            .scene
-            .normal_output
-            .ok_or("Missing normal accumulator")?],
-    )?;
+        hit_diagnostics::read_raw(&state.gpu, &target.buffers[&layout::resource::QUERY_COUNTS])?;
+    let normal = hit_diagnostics::read_raw(&state.gpu, &target.buffers[&layout::resource::NORMAL])?;
     classify(
         data.get(..normal.len())
             .ok_or("Short sample audit buffer")?,
@@ -168,9 +162,9 @@ impl std::fmt::Debug for History {
 }
 
 #[cfg(test)]
-pub(crate) fn read_history(state: &GpuScene, samples: u32) -> Result<History> {
+pub(crate) fn read_history(state: &GpuScene, target: &Target, samples: u32) -> Result<History> {
     let data =
-        hit_diagnostics::read_raw(&state.gpu, &state.buffers[&layout::resource::QUERY_COUNTS])?;
+        hit_diagnostics::read_raw(&state.gpu, &target.buffers[&layout::resource::QUERY_COUNTS])?;
     let samples = summarize_history(
         &data,
         state.scene.width as usize * state.scene.height as usize,
@@ -305,7 +299,7 @@ pub(super) fn retry_event(
     sample: u32,
     evidence: Option<&serde_json::Value>,
     input: &[u8],
-    states: [&GpuScene; 2],
+    states: [(&GpuScene, &Target); 2],
 ) -> Result<bool> {
     let base = std::env::var_os("MUTRACER_TEST_CAPTURE")
         .map(std::path::PathBuf::from)
@@ -319,16 +313,16 @@ pub(super) fn retry_event(
     ));
     fs::create_dir_all(&dir)?;
     fs::write(dir.join("input.bin"), input)?;
-    for (side, state) in states.iter().enumerate() {
+    for (side, (state, target)) in states.iter().enumerate() {
         for id in [
-            state.scene.color_output,
-            state.scene.normal_output.unwrap(),
-            state.scene.albedo_output.unwrap(),
+            layout::resource::COLOR,
+            layout::resource::NORMAL,
+            layout::resource::ALBEDO,
             layout::resource::QUERY_COUNTS,
         ] {
             fs::write(
                 dir.join(format!("side{side}-buffer{id}.bin")),
-                hit_diagnostics::read_raw(&state.gpu, &state.buffers[&id])?,
+                hit_diagnostics::read_raw(&state.gpu, &target.buffers[&id])?,
             )?;
         }
     }
@@ -378,7 +372,7 @@ mod tests {
                 .unwrap_or(scene.shader);
             let original = String::from_utf8(assets[&id].clone()).unwrap();
             install_history(&mut scene, &mut assets, 4).unwrap();
-            let mut state = GpuScene::new(
+            let (mut state, mut target) = GpuScene::new(
                 scene,
                 &RenderOptions {
                     flags: if backend == 1 { 4 } else { 0 },
@@ -389,22 +383,24 @@ mod tests {
             )
             .unwrap();
             for sample in 0..8 {
-                state.add_samples(1, 6., 12345).unwrap();
-                let audit = read(&state, sample).unwrap();
+                state.add_samples(&mut target, 1).unwrap();
+                let audit = read(&state, &target, sample).unwrap();
                 assert_eq!(audit.short_pixels + audit.invalid_pixels, 0);
             }
-            for sample in read_history(&state, 4).unwrap().samples {
+            for sample in read_history(&state, &target, 4).unwrap().samples {
                 assert_eq!(sample.unwritten_pixels, 0, "{sample:?}");
                 assert_eq!(sample.wrong_sequence_pixels, 0, "{sample:?}");
             }
-            let audited: Vec<_> = (0..3).map(|k| state.read_pixels(k).unwrap()).collect();
+            let audited: Vec<_> = (0..3)
+                .map(|k| state.read_target(&target, k).unwrap())
+                .collect();
             ordinary_pipeline(&mut state, original);
-            state.reset_raw().unwrap();
-            state.add_samples(8, 6., 12345).unwrap();
+            state.reset_target(&mut target).unwrap();
+            state.add_samples(&mut target, 8).unwrap();
             for kind in 0..3 {
                 assert_eq!(
                     audited[kind as usize],
-                    state.read_pixels(kind).unwrap(),
+                    state.read_target(&target, kind).unwrap(),
                     "instrumented backend {backend}, AOV {kind}"
                 );
             }

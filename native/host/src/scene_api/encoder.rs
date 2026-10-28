@@ -604,9 +604,9 @@ impl SceneData<'_> {
             {
                 continue;
             }
-            for (k, b) in t.pixels.chunks_exact(4).enumerate() {
-                w[at + k] = u32::from_le_bytes(b.try_into().unwrap());
-            }
+            let bytes = t.pixels.len() / 4 * 4;
+            bytemuck::cast_slice_mut(&mut w[at..at + bytes / 4])
+                .copy_from_slice(&t.pixels[..bytes]);
         }
         for (i, record) in self.lights.iter().enumerate() {
             let o = w[h::LIGHT_OFFSET] as usize + i * light_wire::WORDS;
@@ -629,9 +629,7 @@ impl SceneData<'_> {
             floats(w, at, &env.pixels);
         }
         let at = w[h::CAMERA_OFFSET] as usize;
-        for (k, b) in camera.chunks_exact(4).enumerate() {
-            w[at + k] = u32::from_le_bytes(b.try_into().unwrap());
-        }
+        bytemuck::cast_slice_mut(&mut w[at..at + camera.len() / 4]).copy_from_slice(camera);
         w[h::WIDTH] = size[0];
         w[h::HEIGHT] = size[1];
         write_background(

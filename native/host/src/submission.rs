@@ -83,6 +83,24 @@ impl GpuQueue {
             readbacks: Default::default(),
         }
     }
+    // DownloadBuffer submits through the raw queue, so enter the same gate as submit.
+    pub(crate) fn read_buffer(
+        &self,
+        device: &wgpu::Device,
+        source: wgpu::BufferSlice<'_>,
+    ) -> crate::Result<Vec<u8>> {
+        #[cfg(test)]
+        self.record_readback();
+        let (send, receive) = std::sync::mpsc::channel();
+        {
+            let _submission = self.gate.as_ref().map(|gate| gate.enter());
+            wgpu::util::DownloadBuffer::read_buffer(device, &self.queue, &source, move |result| {
+                let _ = send.send(result.map(|buffer| buffer.to_vec()));
+            });
+        }
+        crate::GpuDevice::wait(device)?;
+        Ok(receive.recv_timeout(std::time::Duration::from_secs(5))??)
+    }
     #[cfg(test)]
     pub(crate) fn record_readback(&self) {
         self.readbacks
@@ -131,6 +149,50 @@ impl std::ops::Deref for GpuQueue {
 mod tests {
     use super::*;
     use std::{sync::mpsc, time::Duration};
+
+    #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn download_respects_submission_gate_slice_and_readback_count() {
+        use wgpu::util::DeviceExt;
+        let gpu = crate::GpuDevice::with_backend(0).unwrap();
+        let gate = Arc::new(SubmissionGate::default());
+        let queue = GpuQueue::new(gpu.queue.queue.clone(), Some(gate.clone()));
+        let source = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Gated readback fixture"),
+                contents: bytemuck::cast_slice(&[10u32, 20, 30, 40]),
+                usage: wgpu::BufferUsages::COPY_SRC,
+            });
+        gate.pause();
+        let worker_queue = queue.clone();
+        let (send, receive) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            send.send(
+                worker_queue
+                    .read_buffer(&gpu.device, source.slice(4..12))
+                    .map_err(|e| e.to_string()),
+            )
+            .unwrap();
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while queue.readback_count() == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(matches!(
+            receive.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        gate.resume();
+        let bytes = receive
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap()
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(bytes, bytemuck::cast_slice::<u32, u8>(&[20u32, 30]));
+        assert_eq!(queue.readback_count(), 1);
+    }
 
     #[test]
     fn pause_drains_inflight_submissions_and_resume_releases_waiters() {

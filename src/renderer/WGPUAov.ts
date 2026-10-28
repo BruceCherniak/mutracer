@@ -169,4 +169,3 @@ export class WGPUAov {
     void this.device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>{texture?.destroy();buffers.forEach(buffer=>buffer?.destroy());});
   }
 }
-export const isAovKind = (kind: string): kind is AovKind => (AOV_KINDS as readonly string[]).includes(kind);

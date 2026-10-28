@@ -6,12 +6,10 @@ pub(super) fn uniform(device: &wgpu::Device, words: &[u32]) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::UNIFORM,
         mapped_at_creation: true,
     });
-    buffer.get_mapped_range_mut(..).unwrap().copy_from_slice(
-        &words
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect::<Vec<_>>(),
-    );
+    buffer
+        .get_mapped_range_mut(..)
+        .unwrap()
+        .copy_from_slice(bytemuck::cast_slice(words));
     buffer.unmap();
     buffer
 }

@@ -116,7 +116,6 @@
   },
   "dependencies": {
     "@webgpu/types": "^0.1.40",
-    "gl-matrix": "^3.4.4",
     "oidn-webgpu": "^0.6.0"
   },
   "peerDependencies": {
@@ -138,6 +137,7 @@
     "@types/three": "^0.185.4",
     "@vitejs/plugin-react": "^4.7.0",
     "fflate": "^0.8.3",
+    "gl-matrix": "^3.4.4",
     "lucide-react": "^1.54.0",
     "react": "^18.3.1",
     "react-aria-components": "^1.22.0",

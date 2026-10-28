@@ -47,10 +47,7 @@ pub(crate) fn read(
     staging.map_async(wgpu::MapMode::Read, .., move |result| {
         let _ = send.send(result);
     });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(std::time::Duration::from_secs(30)),
-    })?;
+    crate::GpuDevice::wait(&gpu.device)?;
     receive.recv_timeout(std::time::Duration::from_secs(5))??;
     let mapped = staging.get_mapped_range(..)?;
     // Start with the same f32 per-sample averages as L0. The L1 conversion is

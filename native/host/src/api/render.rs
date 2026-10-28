@@ -4,7 +4,7 @@ use super::engine::{
     Camera, Engine, EngineEvent, ProgressStage, QUALITY_BEVEL, QUALITY_DISPERSION, State,
     Subscription,
 };
-use super::{Result, Status, error, l0, l0_blocking, l0_result};
+use super::{Result, Status, context_blocking, context_result, error};
 use crate::context::{self, CommitOutcome, CommitPath};
 use crate::display::Display as Capture;
 use crate::settings::RenderSettings as L0Settings;
@@ -524,8 +524,8 @@ struct Pending {
     result: mpsc::Receiver<Result<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
-/// The engine's prepared scene: one L0 context committed with fixed settings,
-/// whose 1×1 own target is never rendered. Renders link their targets to it.
+// The engine's scene-only context holds no frame/accumulation resources.
+// Each render's context owns a Target linked to this scene.
 #[derive(Default)]
 pub(super) struct SharedScene {
     context: Option<u64>,
@@ -546,9 +546,9 @@ impl SharedScene {
             return;
         };
         if self.pending.is_some() {
-            let _ = l0_blocking(|e, n| unsafe { context::mt_context_cancel_commit(context, e, n) });
+            let _ = context_blocking(|| context::cancel_commit(context));
         }
-        let _ = l0_blocking(|e, n| unsafe { context::mt_context_destroy(context, e, n) });
+        let _ = context_blocking(|| context::destroy(context));
         if let Some(mut pending) = self.pending.take() {
             if let Some(thread) = pending.thread.take() {
                 let _ = thread.join();
@@ -809,10 +809,10 @@ impl RenderState {
         if let Some(flight) = self.job.as_mut() {
             flight.cancelled = true;
             let job = flight.job;
-            let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+            let _ = context_blocking(|| context::cancel_job(job));
         }
         let _ = drain(&mut self);
-        let _ = l0_blocking(|e, n| unsafe { context::mt_context_destroy(context, e, n) });
+        let _ = context_blocking(|| context::destroy(context));
     }
     fn publish(&mut self, key: TargetKey, full: bool) {
         self.input_generation = self
@@ -974,12 +974,12 @@ pub(super) fn clear_scene(state: &mut State) -> Result<()> {
         cancel_denoise(render);
         if let Some(flight) = render.job.as_mut() {
             flight.cancelled = true;
-            let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(flight.job, e, n) });
+            let _ = context_blocking(|| context::cancel_job(flight.job));
         }
         drain(render)?;
-        l0_blocking(|e, n| unsafe { context::mt_context_destroy(render.context, e, n) })?;
-        render.context = context::create_with_gpu(state.gpu.clone(), state.backend.code())
-            .map_err(|e| error(Status::Unavailable, e))?;
+        context_blocking(|| context::destroy(render.context))?;
+        render.context =
+            context_blocking(|| context::create_with_gpu(state.gpu.clone(), state.backend.code()))?;
         render.published = None;
         render.failed = None;
         render.capture = None;
@@ -1073,7 +1073,7 @@ pub(super) fn scene_step(
     if let Some(pending) = shared.pending.as_mut() {
         if pending.revision != revision {
             let context = shared.context.unwrap();
-            let _ = l0(|e, n| unsafe { context::mt_context_cancel_commit(context, e, n) });
+            let _ = context_result(context::cancel_commit(context));
         }
         let received = if blocking {
             loop {
@@ -1142,28 +1142,24 @@ pub(super) fn scene_step(
     let context = match shared.context {
         Some(context) => context,
         None => {
-            let context = context::create_scene_with_gpu(state.gpu.clone(), state.backend.code())
-                .map_err(|e| error(Status::Unavailable, e))?;
+            let context = context_blocking(|| {
+                context::create_scene_with_gpu(state.gpu.clone(), state.backend.code())
+            })?;
             state.shared.context = Some(context);
             context
         }
     };
-    // The descriptor as given: its size and quality bits only shape the
-    // context's own target, which L0 keeps minimal.
+    // Scene preparation keeps the descriptor; per-render size, quality and
+    // camera are packed separately when creating each Target.
     let bytes = state.scene.clone().expect("committed scene");
     let settings = scene_settings();
-    let mut outcome = CommitOutcome::Done;
-    let mut message = [0 as std::ffi::c_char; 1024];
-    let code = context::commit_path(
+    match context_result(context::commit_path(
         context,
         &bytes,
         &settings,
         CommitPath::IncrementalOnly,
-        &mut outcome,
-        &mut message,
-    );
-    match l0_result(code, &message) {
-        Ok(()) => match outcome {
+    )) {
+        Ok(outcome) => match outcome {
             CommitOutcome::Done => {
                 state.shared.published = Some(revision);
                 state.shared.failed = None;
@@ -1193,19 +1189,10 @@ pub(super) fn scene_step(
                 if let Err(e) = loss.check() {
                     break Err(error(Status::Unavailable, e.to_string()));
                 }
-                let mut ignored = CommitOutcome::Done;
-                let mut message = [0 as std::ffi::c_char; 1024];
-                let code = crate::runtime::with_loss(&gpu, || {
-                    context::commit_path(
-                        context,
-                        &bytes,
-                        &settings,
-                        CommitPath::FullOnly,
-                        &mut ignored,
-                        &mut message,
-                    )
+                let result = crate::runtime::with_loss(&gpu, || {
+                    context::commit_path(context, &bytes, &settings, CommitPath::FullOnly)
                 });
-                match l0_result(code, &message) {
+                match context_result(result.map(|_| ())) {
                     Err(e) if e.status == Status::Busy => {
                         std::thread::sleep(Duration::from_micros(200))
                     }
@@ -1274,8 +1261,7 @@ fn target_step(
     // Retain completed samples until publication succeeds. A rejected target
     // leaves the old accumulation (including a finished cancelled batch) valid.
     let retained_events = cancel_batch(render)?;
-    let mut message = [0 as std::ffi::c_char; 1024];
-    let code = context::set_target(
+    let result = context_result(context::set_target(
         render.context,
         scene_context,
         &key.settings,
@@ -1283,9 +1269,7 @@ fn target_step(
         key.quality,
         key.alpha_blend_strategy as u32,
         &camera,
-        &mut message,
-    );
-    let result = l0_result(code, &message);
+    ));
     if result.is_err() {
         state
             .sample_events
@@ -1356,7 +1340,7 @@ fn poll_job(render: &mut RenderState) -> Result<Poll> {
     };
     let job = flight.job;
     let budget = flight.count.min(MAX_BATCH);
-    match l0(|e, n| unsafe { context::mt_job_poll(job, budget, e, n) }) {
+    match context_result(context::poll_job(job, budget)) {
         Ok(()) => {}
         Err(e) if e.status == Status::Busy => return Ok(Poll::Running),
         // A publication replaced the job.
@@ -1369,22 +1353,14 @@ fn poll_job(render: &mut RenderState) -> Result<Poll> {
             return Err(e);
         }
     }
-    let mut info = context::JobInfo {
-        struct_size: std::mem::size_of::<context::JobInfo>() as u32,
-        state: 0,
-        requested_samples: 0,
-        submitted_samples: 0,
-        completed_samples: 0,
-        base_samples: 0,
-    };
-    match l0(|e, n| unsafe { context::mt_job_info(job, &mut info, e, n) }) {
-        Ok(()) => {}
+    let info = match context_result(context::job_info(job)) {
+        Ok(info) => info,
         Err(e) if e.status == Status::Busy => return Ok(Poll::Running),
         Err(e) => {
             render.job = None;
             return Err(e);
         }
-    }
+    };
     match info.state {
         2 | 3 => {
             let flight = render.job.take().unwrap();
@@ -1410,7 +1386,7 @@ fn cancel_batch(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
     if let Some(flight) = render.job.as_mut() {
         flight.cancelled = true;
         let job = flight.job;
-        match l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) }) {
+        match context_blocking(|| context::cancel_job(job)) {
             Err(e) if e.status != Status::InvalidHandle => return Err(e),
             _ => {}
         }
@@ -1524,13 +1500,12 @@ fn capture(render: &mut RenderState) -> Result<bool> {
     }
 }
 fn submit(render: &mut RenderState, count: u32) -> Result<()> {
-    let mut job = 0;
     let context = render.context;
-    match l0(|e, n| unsafe { context::mt_context_submit(context, count, &mut job, e, n) }) {
-        Ok(()) => {}
+    let job = match context_result(context::submit(context, count)) {
+        Ok(job) => job,
         Err(e) if e.status == Status::Busy => return Ok(()),
         Err(e) => return Err(e),
-    }
+    };
     let scale = render.adaptive.scale.min(render.adaptive.configured);
     render.job = Some(Flight {
         job,
@@ -1540,7 +1515,7 @@ fn submit(render: &mut RenderState, count: u32) -> Result<()> {
         scale,
     });
     // Dispatch now; a busy registry dispatches at the next poll instead.
-    match l0(|e, n| unsafe { context::mt_job_poll(job, count.min(MAX_BATCH), e, n) }) {
+    match context_result(context::poll_job(job, count.min(MAX_BATCH))) {
         Err(e) if e.status != Status::Busy => {
             render.job = None;
             Err(e)
@@ -1596,43 +1571,9 @@ fn submit_toward(render: &mut RenderState, limit: u32) -> Result<()> {
     }
     Ok(())
 }
-fn read_l0(context: u64, kind: u32) -> Result<Vec<f32>> {
-    let mut size = 0;
-    l0_blocking(|e, n| unsafe {
-        context::mt_context_read_pixels(context, kind, std::ptr::null_mut(), 0, &mut size, e, n)
-    })?;
-    let mut bytes = vec![0u8; size];
-    l0_blocking(|e, n| unsafe {
-        context::mt_context_read_pixels(
-            context,
-            kind,
-            bytes.as_mut_ptr(),
-            bytes.len(),
-            &mut size,
-            e,
-            n,
-        )
-    })?;
-    Ok(bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-        .collect())
-}
 fn context_size(context: u64) -> Result<[u32; 2]> {
-    let info = context_info(context)?;
+    let info = context_blocking(|| context::info(context))?;
     Ok([info.width, info.height])
-}
-fn context_info(context: u64) -> Result<context::ContextInfo> {
-    let mut info = context::ContextInfo {
-        struct_size: std::mem::size_of::<context::ContextInfo>() as u32,
-        width: 0,
-        height: 0,
-        samples: 0,
-        state: 0,
-        last_commit: 0,
-    };
-    l0_blocking(|e, n| unsafe { context::mt_context_info(context, &mut info, e, n) })?;
-    Ok(info)
 }
 /// L0 images are bottom row first; L1 images are top row first.
 pub(super) fn flip_rows(data: &[f32], width: u32, height: u32) -> Vec<f32> {
@@ -1943,10 +1884,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                                 snapshot.samples,
                             )
                             .map_err(|e| e.to_string())?;
-                            Ok(bytes
-                                .chunks_exact(4)
-                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                                .collect())
+                            Ok(bytemuck::pod_collect_to_vec::<u8, f32>(&bytes))
                         };
                         (
                             read(&snapshot.buffers.color)?,
@@ -1958,12 +1896,10 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                     let buffers = if !resident_mode && custom.gpu_inputs() {
                         use wgpu::util::DeviceExt;
                         let upload = |values: &[f32]| {
-                            let bytes: Vec<u8> =
-                                values.iter().flat_map(|v| v.to_le_bytes()).collect();
                             gpu.device
                                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                                     label: Some("MuTracer custom denoiser input"),
-                                    contents: &bytes,
+                                    contents: bytemuck::cast_slice(values),
                                     usage: wgpu::BufferUsages::STORAGE
                                         | wgpu::BufferUsages::COPY_SRC,
                                 })
@@ -2017,10 +1953,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                                 1,
                             )
                             .map_err(|e| e.to_string())?;
-                            bytes
-                                .chunks_exact(4)
-                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                                .collect()
+                            bytemuck::pod_collect_to_vec::<u8, f32>(&bytes)
                         }
                     };
                     super::custom_denoise::validate(pixels, size).map(|pixels| {
@@ -2058,9 +1991,9 @@ type DenoiseInputs = ([u32; 2], Vec<f32>, Vec<f32>, Vec<f32>);
 fn denoise_inputs(context: u64) -> Result<DenoiseInputs> {
     Ok((
         context_size(context)?,
-        read_l0(context, 0)?,
-        read_l0(context, 1)?,
-        read_l0(context, 2)?,
+        context_blocking(|| context::read_pixels(context, 0))?,
+        context_blocking(|| context::read_pixels(context, 1))?,
+        context_blocking(|| context::read_pixels(context, 2))?,
     ))
 }
 fn run_oidn(
@@ -2109,9 +2042,9 @@ impl Render {
         settings.validate()?;
         let adaptive = Adaptive::new(&settings);
         let mut state = engine.live()?;
-        let context =
+        let context = context_blocking(|| {
             context::create_with_gpu(engine.inner.gpu.clone(), engine.inner.backend.code())
-                .map_err(|e| error(Status::Unavailable, e))?;
+        })?;
         let id = state.next_render;
         state.next_render += 1;
         let initial_status = if state.scene.is_some() {
@@ -2620,7 +2553,7 @@ impl Render {
                     if let Some(flight) = render.job.as_mut() {
                         flight.cancelled = true;
                         let job = flight.job;
-                        let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+                        let _ = context_blocking(|| context::cancel_job(job));
                         for event in drain(render)? {
                             state.sample_events.push((id, event));
                         }
@@ -2628,7 +2561,8 @@ impl Render {
                     // L0 keeps a cancelled batch that had already finished; the
                     // partial accumulation stays valid for the same key.
                     if render.published.is_some() {
-                        render.samples = context_info(render.context)?.samples;
+                        render.samples =
+                            context_blocking(|| context::info(render.context))?.samples;
                         render.needs_capture = render.samples > 0;
                         capture(render)?;
                     }
@@ -2689,7 +2623,7 @@ impl Render {
             let render = state.renders.get_mut(&id).unwrap();
             if was_published {
                 let context = render.context;
-                l0_blocking(|e, n| unsafe { context::mt_context_reset(context, e, n) })?;
+                context_blocking(|| context::reset(context))?;
                 render.publish(key.clone(), false);
             }
             Ok(())
@@ -2879,18 +2813,17 @@ impl Render {
                             DenoisedImage::DisplayGpu { pixels: buffer, .. }
                             | DenoisedImage::Gpu { pixels: buffer, .. }
                             | DenoisedImage::Resident(super::GpuDenoiseOutput { buffer, .. }) => {
-                                crate::read_average(
-                                    &state.gpu.device,
-                                    &state.gpu.queue,
-                                    buffer,
-                                    width,
-                                    height,
-                                    1,
+                                bytemuck::pod_collect_to_vec(
+                                    &crate::read_average(
+                                        &state.gpu.device,
+                                        &state.gpu.queue,
+                                        buffer,
+                                        width,
+                                        height,
+                                        1,
+                                    )
+                                    .map_err(|e| error(Status::Error, e.to_string()))?,
                                 )
-                                .map_err(|e| error(Status::Error, e.to_string()))?
-                                .chunks_exact(4)
-                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                                .collect()
                             }
                         };
                         return Ok(Image {
@@ -2914,11 +2847,9 @@ impl Render {
             };
             let [width, height] = context_size(render.context)?;
             let data = if code == 0 {
-                let mut data = Vec::new();
-                l0_blocking(|e, n| context::read_hdr(render.context, &mut data, e, n))?;
-                data
+                context_blocking(|| context::read_hdr(render.context))?
             } else {
-                read_l0(render.context, code)?
+                context_blocking(|| context::read_pixels(render.context, code))?
             };
             Ok(Image {
                 width,
@@ -2970,12 +2901,12 @@ impl Render {
             if let Some(flight) = render.job.as_mut() {
                 flight.cancelled = true;
                 let job = flight.job;
-                let _ = l0(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+                let _ = context_result(context::cancel_job(job));
             }
             drain(render)?;
             if render.published.is_some() {
                 let context = render.context;
-                l0_blocking(|e, n| unsafe { context::mt_context_reset(context, e, n) })?;
+                context_blocking(|| context::reset(context))?;
                 let key = render.published.clone().unwrap();
                 render.publish(key, false);
                 render.capture_key = None;
@@ -3105,29 +3036,13 @@ impl Render {
                 .shared
                 .context()
                 .ok_or_else(|| error(Status::InvalidState, "No committed scene"))?;
-            let mut active = 0;
-            let mut reason = [0 as std::ffi::c_char; 512];
-            l0_blocking(|e, n| unsafe {
-                context::mt_context_backend(
-                    context,
-                    &mut active,
-                    reason.as_mut_ptr(),
-                    reason.len(),
-                    e,
-                    n,
-                )
-            })?;
-            let bytes: Vec<u8> = reason
-                .iter()
-                .take_while(|c| **c != 0)
-                .map(|c| *c as u8)
-                .collect();
+            let (active, reason) = context_blocking(|| context::backend(context))?;
             let backend = if active == 1 {
                 super::Backend::Hardware
             } else {
                 super::Backend::Software
             };
-            Ok((backend, String::from_utf8_lossy(&bytes).into_owned()))
+            Ok((backend, reason))
         })
     }
     /// How the last successful commit reached the published scene, if any. The
@@ -3137,7 +3052,8 @@ impl Render {
             let Some(context) = state.shared.context() else {
                 return Ok(None);
             };
-            Ok(match context_info(context)?.last_commit {
+            let info = context_blocking(|| context::info(context))?;
+            Ok(match info.last_commit {
                 context::COMMIT_FULL => Some(CommitKind::Full),
                 context::COMMIT_INCREMENTAL => Some(CommitKind::Incremental),
                 _ => None,
@@ -3256,6 +3172,7 @@ fn refine_one(state: &mut State, id: u64) -> Result<()> {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+    use crate::api::test_support::l0_blocking;
     use crate::api::{Backend, PixelKind, tests::*};
 
     /// Queue without dispatch, or finish exactly `dispatched` L0 samples without
@@ -3324,7 +3241,7 @@ mod cancellation_tests {
             let retained = 1 + dispatched;
             assert_eq!(render.samples(), retained);
             assert_eq!(
-                context_info(engine.lock().renders[&render.id()].context)
+                context_blocking(|| context::info(engine.lock().renders[&render.id()].context))
                     .unwrap()
                     .samples,
                 retained
@@ -3355,7 +3272,7 @@ mod cancellation_tests {
             assert_eq!(render.samples(), 0);
             assert_eq!(events.lock().unwrap().len(), previous_events);
             assert_eq!(
-                context_info(engine.lock().renders[&render.id()].context)
+                context_blocking(|| context::info(engine.lock().renders[&render.id()].context))
                     .unwrap()
                     .samples,
                 0
@@ -3398,7 +3315,12 @@ mod cancellation_tests {
             let r = &state.renders[&render.id()];
             assert_eq!(r.samples, 1 + dispatched);
             assert_eq!(r.captured, r.samples);
-            assert_eq!(context_info(r.context).unwrap().samples, r.samples);
+            assert_eq!(
+                context_blocking(|| context::info(r.context))
+                    .unwrap()
+                    .samples,
+                r.samples
+            );
             drop(state);
             assert_eq!(
                 render.read_pixels(PixelKind::Hdr).unwrap().data.len(),

@@ -388,10 +388,7 @@ pub fn prepare_reusing(
     let drain_started = std::time::Instant::now();
     if super::profiling::gpu_enabled() {
         queue.submit([]);
-        device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
+        crate::GpuDevice::wait(device)?;
     }
     let upload_drain_ms = drain_started.elapsed().as_secs_f64() * 1000.0;
     let as_started = std::time::Instant::now();
@@ -412,10 +409,7 @@ pub fn prepare_reusing(
     queue.submit([encoder.finish()]);
     let build_submit_ms = as_started.elapsed().as_secs_f64() * 1000.0;
     let completed_wall_ms = if super::profiling::gpu_enabled() {
-        device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
+        crate::GpuDevice::wait(device)?;
         Some(as_started.elapsed().as_secs_f64() * 1000.0)
     } else {
         None
@@ -690,10 +684,7 @@ impl Resources {
         let profile = super::profiling::gpu_enabled();
         if profile {
             queue.submit([]);
-            device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(Duration::from_secs(30)),
-            })?;
+            crate::GpuDevice::wait(device)?;
         }
         let started = std::time::Instant::now();
         let completed_wall_ms = if let Some(elapsed) = metal_blas_wall_ms {
@@ -705,10 +696,7 @@ impl Resources {
                 [&tlas],
             );
             queue.submit([encoder.finish()]);
-            device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(Duration::from_secs(30)),
-            })?;
+            crate::GpuDevice::wait(device)?;
             Some(elapsed + started.elapsed().as_secs_f64() * 1000.0)
         } else {
             let mut encoder = device.create_command_encoder(&Default::default());
@@ -723,10 +711,7 @@ impl Resources {
             );
             queue.submit([encoder.finish()]);
             if profile {
-                device.poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(Duration::from_secs(30)),
-                })?;
+                crate::GpuDevice::wait(device)?;
                 Some(started.elapsed().as_secs_f64() * 1000.0)
             } else {
                 None
@@ -774,10 +759,7 @@ impl Resources {
         // Every raw input, source/destination AS and scratch stays owned here
         // until the completion fence. Each destination is a fresh allocation.
         queue.submit([]);
-        device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
+        crate::GpuDevice::wait(device)?;
         let started = std::time::Instant::now();
         let mut encoder = device.create_command_encoder(&Default::default());
         let mut scratches = Vec::new();
@@ -820,10 +802,7 @@ impl Resources {
             );
         }
         queue.submit([encoder.finish()]);
-        device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
+        crate::GpuDevice::wait(device)?;
         Ok(started.elapsed().as_secs_f64() * 1000.0)
     }
     pub fn transform_plan(
@@ -930,10 +909,7 @@ pub fn capture_from_resources(assets: &mut Assets, layout: &NativeLayout) -> Res
         if bytes.len() % 4 != 0 {
             return Err("Invalid packed HWRT input".into());
         }
-        Ok(bytes
-            .chunks_exact(4)
-            .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
-            .collect())
+        Ok(bytemuck::pod_collect_to_vec::<u8, u32>(bytes))
     };
     let blas_offset = layout.blas_offset;
     let instances = words(&AssetId::Packet(2))?;
@@ -1057,7 +1033,7 @@ pub fn capture_from_resources(assets: &mut Assets, layout: &NativeLayout) -> Res
     }
     generated.insert(
         AssetId::HardwareMap,
-        mapping.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        bytemuck::cast_slice(&mapping).to_vec(),
     );
     generated.insert(AssetId::HardwareShader, source);
     assets.extend(generated);
@@ -1190,10 +1166,7 @@ pub fn isolate_diagnostic(
         let mut mapping = vec![0u32; instance as usize + 2];
         mapping[instance as usize] = instance + 1;
         mapping[instance as usize + 1] = record;
-        assets.insert(
-            name.clone(),
-            mapping.iter().flat_map(|v| v.to_le_bytes()).collect(),
-        );
+        assets.insert(name.clone(), bytemuck::cast_slice(&mapping).to_vec());
     }
     Ok(())
 }

@@ -85,10 +85,7 @@ impl GpuTimer {
             .map_async(wgpu::MapMode::Read, move |r| {
                 let _ = sender.send(r);
             });
-        device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
+        crate::GpuDevice::wait(device)?;
         receiver.recv_timeout(Duration::from_secs(5))??;
         let result = (|| {
             let mapped = self.readback.slice(..).get_mapped_range()?;
@@ -156,7 +153,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let mut renderer = crate::GpuScene::new(
+        let (renderer, mut target) = crate::GpuScene::new(
             scene,
             &crate::RenderOptions {
                 flags: 4,
@@ -167,9 +164,9 @@ mod tests {
         )
         .unwrap();
         assert!(renderer.hardware.is_some());
-        renderer.add_samples(1, 6., 12345).unwrap();
-        assert_eq!(renderer.samples, 1);
-        assert!(!renderer.read_pixels(0).unwrap().is_empty());
+        renderer.add_samples(&mut target, 1).unwrap();
+        assert_eq!(target.samples, 1);
+        assert!(!renderer.read_target(&target, 0).unwrap().is_empty());
     }
     #[test]
     fn timestamp_payload_rejects_zero_unordered_and_overflowing_samples() {

@@ -4,7 +4,7 @@ import type Texture from '../scene/Texture.js';
 import {isTextureDataSource} from '../scene/Texture.js';
 import {textureWrapIndex} from '../scene/TextureState.js';
 import {MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS} from './materialTextureSlots.js';
-import {mergeTexturesFromMaterials} from './texturesFromMaterials.js';
+import {mergeTexturesFromMaterials} from './materialTextures.js';
 import {createMaterialBufferData, repackMaterialParams} from './materialParams.js';
 import {packMaterialBuffer} from './materialLayout.js';
 

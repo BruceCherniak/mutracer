@@ -213,10 +213,7 @@ impl Denoiser {
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("OIDN image resolve parameters"),
-                contents: &params
-                    .into_iter()
-                    .flat_map(u32::to_le_bytes)
-                    .collect::<Vec<_>>(),
+                contents: bytemuck::cast_slice(&params),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let normalize = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -279,10 +276,12 @@ impl Denoiser {
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("OIDN composed input parameters"),
-                contents: &[self.size[0], self.size[1], (samples as f32).to_bits(), 0]
-                    .into_iter()
-                    .flat_map(u32::to_le_bytes)
-                    .collect::<Vec<_>>(),
+                contents: bytemuck::cast_slice(&[
+                    self.size[0],
+                    self.size[1],
+                    (samples as f32).to_bits(),
+                    0,
+                ]),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let pipeline = self.display_prepare.as_ref().unwrap();

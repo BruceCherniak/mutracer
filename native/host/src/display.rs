@@ -304,7 +304,7 @@ impl Display {
         {
             return Err("Invalid display image".into());
         }
-        let bytes: Vec<_> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let bytes: Vec<_> = bytemuck::cast_slice(pixels).to_vec();
         let queue = self.gpu.queue.clone();
         self.retain_denoised(|_, target| queue.write_buffer(target, 0, &bytes));
         self.uploads += 1;
@@ -723,7 +723,7 @@ impl Display {
             .shown(settings)
             .map(|_| self.shown_group(target, settings));
         let group = retained_group.as_ref().unwrap_or(group);
-        let bytes: Vec<_> = [
+        let bytes: Vec<_> = bytemuck::cast_slice(&[
             self.size[0],
             self.size[1],
             (self.samples as f32).to_bits(),
@@ -736,10 +736,8 @@ impl Display {
             settings.saturation.to_bits(),
             settings.temperature.to_bits(),
             settings.tint.to_bits(),
-        ]
-        .into_iter()
-        .flat_map(u32::to_le_bytes)
-        .collect();
+        ])
+        .to_vec();
         self.gpu.queue.write_buffer(&self.params, 0, &bytes);
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         {
@@ -767,17 +765,14 @@ impl Display {
 
     /// Explicit export/diagnostic readback; presentation never calls this.
     pub fn read_linear(&self) -> Result<Vec<f32>> {
-        Ok(crate::read_average(
+        Ok(bytemuck::pod_collect_to_vec(&crate::read_average(
             &self.gpu.device,
             &self.gpu.queue,
             &self.linear,
             self.size[0],
             self.size[1],
             self.samples,
-        )?
-        .chunks_exact(4)
-        .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
-        .collect())
+        )?))
     }
 }
 
@@ -1143,10 +1138,7 @@ pub(crate) fn read_image(gpu: &GpuDevice, texture: &wgpu::Texture) -> Result<Vec
     buffer.map_async(wgpu::MapMode::Read, .., move |r| {
         let _ = tx.send(r);
     });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(std::time::Duration::from_secs(30)),
-    })?;
+    crate::GpuDevice::wait(&gpu.device)?;
     rx.recv_timeout(std::time::Duration::from_secs(5))??;
     let mapped = buffer.get_mapped_range(..)?;
     Ok(mapped
