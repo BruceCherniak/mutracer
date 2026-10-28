@@ -9,31 +9,36 @@ Faster WebGPU rendering, surface AOVs and procedural skies.
 
 ### Performance
 
-Compared with v0.1.5, WebGPU shader compilation time drops 53.8% and render time drops 25.6% on Apple M4 Max (geometric means over 10 glTF scenes):
+Compared with v0.1.5, WebGPU shader compilation and rendering are faster across a 10-scene glTF benchmark (geometric means across scenes):
 
 | GPU | Shader compilation | Render time |
 | --- | ---: | ---: |
 | Apple M4 Max | -53.8% | -25.6% |
+| NVIDIA RTX 4060 Laptop GPU (Windows 11) | -74.5% | -40.9% |
 
 Results vary by scene, hardware, GPU load and shader cache.
 
 <details>
 <summary>Per-scene results</summary>
 
-Chrome 156, WebGPU, 1280×720, full-frame rendering without tiling, 3 bounces, denoising off. Render time is 32 samples after warmup, excluding loading, preparation and shader compilation. Each run uses the median of three measurements; results are medians of three runs. Shader compilation times are from the previous measurements. Values are v0.1.5 → v0.2.0 in seconds.
+Chrome 156, WebGPU, 1280×720, full-frame rendering without tiling, 3 bounces, denoising off. Render time is 32 samples after warmup, excluding loading, preparation and shader compilation, and waits for GPU completion. Each run uses the median of three measurements; results are medians of three runs. M4 Max shader compilation times are from the previous measurements. Values are v0.1.5 → v0.2.0 in seconds.
 
-| Scene | M4 Max compile | M4 Max render |
-| --- | ---: | ---: |
-| Classroom 2 | 2.32 → 1.15 | 3.49 → 2.52 |
-| Bathroom | 2.34 → 1.01 | 3.20 → 2.49 |
-| BMW M6 | 2.13 → 0.88 | 1.55 → 0.97 |
-| House | 2.15 → 0.93 | 1.63 → 1.30 |
-| Kitchen | 2.12 → 0.92 | 2.69 → 1.98 |
-| Blender Cover Remix | 2.35 → 1.15 | 1.34 → 0.91 |
-| LEGO Technic Bugatti Chiron | 2.13 → 1.01 | 1.46 → 1.15 |
-| 2025 Yamaha MT-09 SP V4 | 2.34 → 1.16 | 1.97 → 1.62 |
-| Gelatinous Cube | 2.31 → 1.15 | 2.60 → 2.02 |
-| Dragon | 2.16 → 1.03 | 1.76 → 1.32 |
+Windows uses driver 617.42, comparing `a646620` → `08d6c63`, with `maxTiles=1`, Sobol sampling, atlas textures and 8 samples per batch. Each process warms up for 8 samples before three 32-sample renders; timings include scheduling and post-processing but exclude pixel readback. Fresh profiles, disabled shader disk caching and unique shader function names do not guarantee an empty driver cache. Across the three Windows rounds, compilation reductions ranged from 74.5% to 74.7%, and render-time reductions from 40.6% to 40.9%.
+
+| Scene | M4 Max compile | M4 Max render | RTX 4060 compile | RTX 4060 render |
+| --- | ---: | ---: | ---: | ---: |
+| Classroom 2 | 2.32 → 1.15 | 3.49 → 2.52 | 8.082 → 2.154 | 7.181 → 5.153 |
+| Bathroom | 2.34 → 1.01 | 3.20 → 2.49 | 8.043 → 1.913 | 5.343 → 3.801 |
+| BMW M6 | 2.13 → 0.88 | 1.55 → 0.97 | 7.210 → 1.490 | 2.870 → 1.524 |
+| House | 2.15 → 0.93 | 1.63 → 1.30 | 7.238 → 1.603 | 4.468 → 2.167 |
+| Kitchen | 2.12 → 0.92 | 2.69 → 1.98 | 7.247 → 1.750 | 5.832 → 3.065 |
+| Blender Cover Remix | 2.35 → 1.15 | 1.34 → 0.91 | 8.193 → 2.422 | 2.078 → 1.437 |
+| LEGO Technic Bugatti Chiron | 2.13 → 1.01 | 1.46 → 1.15 | 7.109 → 1.807 | 4.142 → 2.026 |
+| 2025 Yamaha MT-09 SP V4 | 2.34 → 1.16 | 1.97 → 1.62 | 8.176 → 2.401 | 4.446 → 3.005 |
+| Gelatinous Cube | 2.31 → 1.15 | 2.60 → 2.02 | 8.104 → 2.403 | 5.025 → 3.390 |
+| Dragon | 2.16 → 1.03 | 1.76 → 1.32 | 7.574 → 1.886 | 3.896 → 1.904 |
+
+Earlier Windows 360p timings included excessive tile submissions in Classroom 2 and Kitchen. This rerun disables tiling in both versions to exclude that scheduling issue from the comparison.
 
 </details>
 
