@@ -147,6 +147,11 @@ The adapted files under `src/renderer/` include:
 - WGSL ports: `wgsl/chunks/{intersect,envMap,materialBuffer,sampleShadowCatcher}.wgsl.ts`
   and `wgsl/rayTrace.compute.ts`.
 
+## Classroom background
+
+The homepage background is a MuTracer render of the [Classroom scene](https://www.blender.org/download/demo-files/) by Christophe Seux, released under CC0 1.0
+([`LICENSES/Classroom-CC0.txt`](./LICENSES/Classroom-CC0.txt)).
+
 ## Bundled dependencies (dist/ only)
 
 The standalone `dist/mutracer.{es,umd}.js` builds and their chunks bundle these

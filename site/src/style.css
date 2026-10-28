@@ -71,10 +71,18 @@ a { color: inherit; }
 /* ---------- Drop zone ---------- */
 .main { flex: 1; padding-block: 32px 56px; }
 .drop {
+  position: relative; isolation: isolate; overflow: hidden;
   display: grid; justify-items: center; align-content: center; gap: 6px;
   min-height: 360px; padding: 40px 24px; border: 1.5px dashed var(--border-strong); border-radius: 16px;
   background: var(--panel); text-align: center;
   transition: border-color 0.15s, background-color 0.15s;
+}
+.drop::before, .drop::after { content: ''; position: absolute; inset: 0; pointer-events: none; }
+/* Classroom by Christophe Seux (CC0), rendered in MuTracer at 128 spp with OIDN. */
+.drop::before { z-index: -2; background: url('./assets/classroom2-background.webp') center / cover no-repeat; }
+.drop::after {
+  z-index: -1;
+  background: linear-gradient(90deg, var(--panel) 0%, rgb(24 25 27 / 0.98) 32%, rgb(24 25 27 / 0.92) 50%, rgb(24 25 27 / 0.6) 67%, rgb(24 25 27 / 0.2) 100%);
 }
 .drop[data-dragging] { border-style: solid; border-color: var(--accent); background: #1d1b1a; }
 .drop[data-busy] { opacity: 0.6; pointer-events: none; }
@@ -118,6 +126,10 @@ a { color: inherit; }
 }
 .collection-tabs button:hover { color: var(--text); }
 .collection-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); }
+.collection-tabs__research { display: flex; align-items: baseline; gap: 6px; }
+.collection-tabs__source { color: var(--text-3); text-decoration: none; }
+.collection-tabs__source svg { display: inline-block; vertical-align: -2px; }
+.collection-tabs__source:hover { color: var(--accent-hover); }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
 /* Allow modest enlargement of the 160px thumbnails, up to 192px plus 18px of card padding and borders. */
 .cards.cards--research { --card-min: 170px; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--card-min)), 1fr)); }
