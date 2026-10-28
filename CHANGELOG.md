@@ -18,7 +18,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - SDR display and denoising use sRGB encoding on all backends, replacing the browser's gamma 2.2 approximation. Dark and midtone pixels can change.
 - Intermediate progressive denoising updates are at least 500 ms apart.
-- Faster WebGPU shader compilation, especially on Windows.
+- Faster WebGPU shader compilation and rendering. Compared with v0.1.5, a 10-scene glTF benchmark on Apple M4 Max (640×360, 3 bounces) measured 54% lower cold shader preparation/compilation time and 21% lower GPU path-tracing time (geometric means across scenes). Results vary by hardware and scene.
+
+Benchmark values below are v0.1.5 → Unreleased, using Chrome 156 and medians of three independent runs. GPU times are per sample, measured using 32-sample renders after warmup with denoising disabled.
+
+| Scene | Cold shader preparation/compilation (s) | Change | GPU path tracing (ms/sample) | Change |
+| --- | ---: | ---: | ---: | ---: |
+| Classroom 2 | 2.32 → 1.15 | -50.6% | 19.61 → 15.05 | -23.2% |
+| Bathroom | 2.34 → 1.01 | -57.0% | 18.64 → 14.86 | -20.3% |
+| BMW M6 | 2.13 → 0.88 | -58.9% | 10.66 → 8.30 | -22.2% |
+| House | 2.15 → 0.93 | -56.9% | 12.66 → 9.89 | -21.8% |
+| Kitchen | 2.12 → 0.92 | -56.6% | 15.15 → 12.10 | -20.1% |
+| Blender Cover Remix | 2.35 → 1.15 | -51.0% | 9.28 → 7.53 | -18.8% |
+| LEGO Technic Bugatti Chiron | 2.13 → 1.01 | -52.5% | 16.10 → 13.11 | -18.6% |
+| 2025 Yamaha MT-09 SP V4 | 2.34 → 1.16 | -50.4% | 16.28 → 12.95 | -20.5% |
+| Gelatinous Cube | 2.31 → 1.15 | -50.3% | 17.52 → 14.11 | -19.5% |
+| Dragon | 2.16 → 1.02 | -52.5% | 14.17 → 11.34 | -19.9% |
 
 ### Deprecated
 
