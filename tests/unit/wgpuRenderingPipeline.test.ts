@@ -605,3 +605,29 @@ it('keeps flat background and catcher composition on the ordinary display path f
   expect(compose.setUniform).toHaveBeenCalledWith('shadowCatcherAlpha', .4);
   pipeline.manager.dispose();
 });
+
+
+it.each(['normal', 'albedo', 'shadowCatcher', 'depth'] as const)('keeps %s diagnostic output free of color inference', async output => {
+  const pipeline = createPipeline(false);
+  if (output === 'depth') pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 2048, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, batchSamples: false, aovs: ['depth']});
+  pipeline.trace(new Camera({projection: 'perspective'}), 1);
+  pipeline.setOutput(output);
+  const denoiser = completedDenoiser(), execute = vi.spyOn(denoiser, 'tileExecute');
+  expect(await pipeline.performDenoise!({kind:'oidn',denoiser},undefined)).toBe(true);
+  expect(execute).not.toHaveBeenCalled();
+  pipeline.dispose();
+});
+
+it.each([false,true])('records actual composition after bloom (%s)', async bloom => {
+  const pipeline=createPipeline(false);
+  pipeline.setOfflineRenderOptions({samplesPerBatch:32,deferPostProcess:false,sampleSequenceOffset:19});
+  pipeline.setBloomParams({intensity:bloom?.2:0,threshold:1,radius:.6});
+  const events:string[]=[];
+  vi.spyOn(WGPUBloomPass.prototype,'createPass').mockImplementation(()=>{events.push('Bloom:SceneLinear');});
+  const compose=mocks.Pass.instances.get('compose')!;
+  compose.createPass.mockImplementation(()=>{events.push('Compose:DisplayEncoded');});
+  pipeline.trace(new Camera({projection:'perspective'}),32);
+  const table=JSON.parse((await import('node:fs')).readFileSync(new URL('../fixtures/display-order.json',import.meta.url),'utf8'));
+  expect(events).toEqual(table.cases.find((row:{name:string})=>row.name===(bloom?'sdr-bloom':'sdr-raw')).trace);
+  pipeline.dispose();
+});

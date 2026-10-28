@@ -3631,3 +3631,6 @@ mod batching_tests {
 #[cfg(test)]
 #[path = "display_oidn_tests.rs"]
 mod display_oidn_tests;
+
+#[cfg(test)]
+include!("display_schedule_tests.rs");

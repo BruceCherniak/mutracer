@@ -236,6 +236,8 @@ impl Effects {
                 let bloom = self
                     .bloom
                     .get_or_insert_with(|| Bloom::new(device, display.size));
+                #[cfg(test)]
+                super::effects_tests::record_order("Bloom:SceneLinear");
                 bloom.run(gpu, &mut encoder, normalized, settings);
                 self.key = Some(key);
                 self.revision = display.shown_revision(settings);
@@ -261,6 +263,21 @@ impl Effects {
         } else {
             &self.pipeline
         };
+        #[cfg(test)]
+        if !guide {
+            if settings.output != 0 && settings.output != 3 {
+                super::effects_tests::record_order("AOV:Raw");
+            } else {
+                if display.using_denoised && display.shown_metadata(settings).has_catcher {
+                    super::effects_tests::record_order("CorrectLayers:SceneLinear");
+                }
+                super::effects_tests::record_order(if linear || hdr {
+                    "Compose:DisplayLinear"
+                } else {
+                    "Compose:DisplayEncoded"
+                });
+            }
+        }
         let bloom_view = bloom.create_view(&Default::default());
         let output_view = target.create_view(&Default::default());
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {

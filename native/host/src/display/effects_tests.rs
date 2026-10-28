@@ -743,3 +743,5 @@ fn retained_denoising_freezes_composition_inputs_but_not_raw_capture() {
         assert_ne!(display.read_rgba(&settings[0]).unwrap(), before[0].0);
     }
 }
+
+include!("parity_tests.rs");

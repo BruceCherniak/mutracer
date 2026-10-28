@@ -103,6 +103,11 @@ sample count) on a real GPU before and after, and compare
   decision. Keep the implementation and the A/B evidence, report regressions,
   and leave the decision to the maintainer.
 
+- Display composition, denoising order and scheduling changes must update
+  `tests/fixtures/display-order.json` or `display-schedule.json`, both independent
+  implementations and their execution/event tests. Run the real-GPU cross-backend
+  image comparison. Do not introduce a shared runtime frame plan or decision layer.
+
 ## Documentation
 
 - `README.md` is the overview, `docs/` holds the guides and `llms.txt` is the

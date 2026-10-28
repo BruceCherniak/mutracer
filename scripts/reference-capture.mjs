@@ -38,7 +38,7 @@ export function buildLibrary(source, directory) {
 export async function serve(source, directory, fixture) {
   const server = await createServer({root: source, configFile: false,
     optimizeDeps: {entries: [], noDiscovery: true}, server: {host: '127.0.0.1', port: 0, hmr: false,
-      fs: {allow: [source, root]}}, plugins: [{name: 'reference-fixture', configureServer(server) {
+      fs: {allow: [source, root, ...(process.env.MUTRACER_OIDN_DISPLAY_INPUT ? [process.env.MUTRACER_OIDN_DISPLAY_INPUT] : [])]}}, plugins: [{name: 'reference-fixture', configureServer(server) {
       server.middlewares.use(async (request, response, next) => {
         const url = new URL(request.url, 'http://localhost');
         if (request.method === 'POST' && url.pathname.startsWith('/evidence/')) {

@@ -693,6 +693,12 @@ impl Display {
             effects.compose(self, settings, premultiply, target);
             return;
         }
+        #[cfg(test)]
+        effects_tests::record_order(if settings.output == 0 || settings.output == 3 {
+            "Compose:DisplayEncoded"
+        } else {
+            "AOV:Raw"
+        });
         let retained_group = self
             .shown(settings)
             .map(|_| self.shown_group(target, settings));

@@ -257,6 +257,8 @@ impl Jnlm {
                     b(&self.albedo),
                 ],
             );
+            #[cfg(test)]
+            super::effects_tests::record_order("Denoise:DisplayLinear");
             for i in 0..self.options.iterations {
                 let params = params(i);
                 let index = i as usize % 2;
@@ -283,6 +285,8 @@ impl Jnlm {
                     .collect::<Vec<_>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
+            #[cfg(test)]
+            super::effects_tests::record_order("Encode:DisplayEncoded");
             let view = self.output.create_view(&Default::default());
             dispatch(
                 &mut encoder,

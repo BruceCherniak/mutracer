@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "sdr-transfer",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "tone": 4,
+      "exposure": 0.01,
+      "trace": [
+        "Compose:DisplayEncoded"
+      ]
+    },
+    {
+      "name": "sdr-raw",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "trace": [
+        "Compose:DisplayEncoded"
+      ]
+    },
+    {
+      "name": "sdr-bloom",
+      "hdr": false,
+      "bloom": true,
+      "filter": "none",
+      "output": 0,
+      "trace": [
+        "Bloom:SceneLinear",
+        "Compose:DisplayEncoded"
+      ]
+    },
+    {
+      "name": "sdr-jnlm",
+      "hdr": false,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 0,
+      "trace": [
+        "Compose:DisplayLinear",
+        "Denoise:DisplayLinear",
+        "Encode:DisplayEncoded"
+      ],
+      "webglTrace": [
+        "Compose:DisplayEncoded",
+        "Decode:DisplayLinear",
+        "Denoise:DisplayLinear",
+        "Encode:DisplayEncoded"
+      ]
+    },
+    {
+      "name": "sdr-bloom-jnlm",
+      "hdr": false,
+      "bloom": true,
+      "filter": "jnlm",
+      "output": 0,
+      "trace": [
+        "Bloom:SceneLinear",
+        "Compose:DisplayLinear",
+        "Denoise:DisplayLinear",
+        "Encode:DisplayEncoded"
+      ],
+      "webglTrace": [
+        "Bloom:SceneLinear",
+        "Compose:DisplayEncoded",
+        "Decode:DisplayLinear",
+        "Denoise:DisplayLinear",
+        "Encode:DisplayEncoded"
+      ]
+    },
+    {
+      "name": "hdr-raw",
+      "hdr": true,
+      "bloom": false,
+      "filter": "none",
+      "output": 0,
+      "trace": [
+        "Compose:DisplayLinear"
+      ],
+      "webgpuTrace": [
+        "Compose:DisplayEncoded",
+        "Decode:DisplayLinear"
+      ]
+    },
+    {
+      "name": "hdr-bloom",
+      "hdr": true,
+      "bloom": true,
+      "filter": "none",
+      "output": 0,
+      "trace": [
+        "Bloom:SceneLinear",
+        "Compose:DisplayLinear"
+      ],
+      "webgpuTrace": [
+        "Bloom:SceneLinear",
+        "Compose:DisplayEncoded",
+        "Decode:DisplayLinear"
+      ]
+    },
+    {
+      "name": "hdr-jnlm",
+      "hdr": true,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 0,
+      "trace": [
+        "Compose:DisplayLinear",
+        "Denoise:DisplayLinear"
+      ],
+      "webgpuTrace": [
+        "Compose:DisplayLinear",
+        "Denoise:DisplayLinear",
+        "Encode:DisplayEncoded",
+        "Decode:DisplayLinear"
+      ]
+    },
+    {
+      "name": "hdr-bloom-jnlm",
+      "hdr": true,
+      "bloom": true,
+      "filter": "jnlm",
+      "output": 0,
+      "trace": [
+        "Bloom:SceneLinear",
+        "Compose:DisplayLinear",
+        "Denoise:DisplayLinear"
+      ],
+      "webgpuTrace": [
+        "Bloom:SceneLinear",
+        "Compose:DisplayLinear",
+        "Denoise:DisplayLinear",
+        "Encode:DisplayEncoded",
+        "Decode:DisplayLinear"
+      ]
+    },
+    {
+      "name": "normal",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 1,
+      "trace": [
+        "AOV:Raw"
+      ]
+    },
+    {
+      "name": "albedo",
+      "hdr": false,
+      "bloom": false,
+      "filter": "none",
+      "output": 2,
+      "trace": [
+        "AOV:Raw"
+      ]
+    },
+    {
+      "name": "normal-jnlm",
+      "hdr": false,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 1,
+      "trace": [
+        "AOV:Raw"
+      ]
+    },
+    {
+      "name": "albedo-jnlm",
+      "hdr": false,
+      "bloom": false,
+      "filter": "jnlm",
+      "output": 2,
+      "trace": [
+        "AOV:Raw"
+      ]
+    }
+  ],
+  "exceptions": {
+    "LinearHDRSurface": "Browser HDR is sRGB encoded; native HDR surfaces are linear scRGB. Decode browser RGB before comparing.",
+    "WebGLSDROnly": "WebGL 2 exposes SDR presentation only; HDR rows are tested on WebGPU and native.",
+    "WebGLJNLM": "WebGL JNLM composes in 8-bit display encoding, decodes for filtering and re-encodes; allow 2 codes for this smooth fixture."
+  }
+}
