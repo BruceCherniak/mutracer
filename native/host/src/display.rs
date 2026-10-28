@@ -572,7 +572,27 @@ impl Display {
         let target = self.composed_hdr.as_ref().unwrap();
         let mut slot = self.effects.lock().unwrap_or_else(|e| e.into_inner());
         let effects = slot.get_or_insert_with(|| effects::Effects::new(&self.gpu.device));
-        effects.compose(self, settings, false, target);
+        if !self
+            .oidn
+            .as_ref()
+            .is_some_and(|o| o.present(self, settings, false, target))
+        {
+            if let Some(options) = self
+                .jnlm_options
+                .filter(|_| matches!(settings.output, 0 | 3) && self.shadow.is_some())
+            {
+                let mut slot = self.jnlm.lock().unwrap_or_else(|e| e.into_inner());
+                if slot.as_ref().is_none_or(|j| !j.matches(self.size, options)) {
+                    *slot = Some(jnlm::Jnlm::new(&self.gpu, self.size, options));
+                }
+                slot.as_mut()
+                    .unwrap()
+                    .compose(self, settings, false, effects, target)
+                    .expect("HDR JNLM guide capture");
+            } else {
+                effects.compose(self, settings, false, target);
+            }
+        }
         target.clone()
     }
     fn shown(&self, settings: &Settings) -> Option<&Denoised> {
@@ -1133,4 +1153,20 @@ pub(crate) fn read_image(gpu: &GpuDevice, texture: &wgpu::Texture) -> Result<Vec
         .chunks_exact(stride as usize)
         .flat_map(|row| row[..size[0] as usize * 4].iter().copied())
         .collect())
+}
+
+// HDR surfaces consume display-linear pixels directly, preserving values above one.
+fn hdr_transfer(device: &wgpu::Device) -> wgpu::ComputePipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Display-linear HDR transfer"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("display-linear-hdr.wgsl").into()),
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Display-linear HDR transfer"),
+        layout: None,
+        module: &shader,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    })
 }

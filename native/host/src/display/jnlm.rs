@@ -54,6 +54,10 @@ struct ShaderSources {
     encode: String,
     composed: String,
     albedo: String,
+    #[serde(rename = "composedHDR")]
+    composed_hdr: String,
+    #[serde(rename = "albedoHDR")]
+    albedo_hdr: String,
     workgroup_size: u32,
     parameters: Vec<[u32; 4]>,
 }
@@ -104,6 +108,9 @@ pub(super) struct Jnlm {
     parameters: Vec<[u32; 4]>,
     workgroup_size: u32,
     composition: [String; 2],
+    composition_hdr: [String; 2],
+    hdr_output: Option<wgpu::Texture>,
+    hdr_encode: std::sync::OnceLock<wgpu::ComputePipeline>,
     composed: wgpu::Texture,
     albedo_texture: wgpu::Texture,
     output: wgpu::Texture,
@@ -117,7 +124,7 @@ pub(super) struct Jnlm {
     load: wgpu::ComputePipeline,
     filter: wgpu::ComputePipeline,
     encode: wgpu::ComputePipeline,
-    key: Option<(u64, Settings, bool)>,
+    key: Option<(u64, Settings, bool, bool)>,
 }
 fn b(buffer: &wgpu::Buffer) -> wgpu::BindingResource<'_> {
     buffer.as_entire_binding()
@@ -154,6 +161,9 @@ impl Jnlm {
             parameters: sources.parameters,
             workgroup_size: sources.workgroup_size,
             composition: [sources.composed, sources.albedo],
+            composition_hdr: [sources.composed_hdr, sources.albedo_hdr],
+            hdr_output: None,
+            hdr_encode: Default::default(),
             composed: image(device, size, wgpu::TextureFormat::Rgba32Float),
             albedo_texture: image(device, size, wgpu::TextureFormat::Rgba32Float),
             output: image(device, size, wgpu::TextureFormat::Rgba8Unorm),
@@ -183,11 +193,23 @@ impl Jnlm {
     ) -> Result<()> {
         let gpu = &display.gpu;
         let device = &gpu.device;
-        let key = (display.image_revision, *settings, premultiply);
+        let hdr = target.format() == wgpu::TextureFormat::Rgba16Float;
+        if hdr && self.hdr_output.is_none() {
+            self.hdr_output = Some(image(device, self.size, wgpu::TextureFormat::Rgba16Float));
+        }
+        let key = (display.image_revision, *settings, premultiply, hdr);
         if self.key != Some(key) {
-            effects.prepare_composition(device, &self.composition);
-            effects.compose(display, settings, false, &self.composed);
-            effects.compose_guide(display, settings, &self.albedo_texture);
+            effects.prepare_composition(
+                device,
+                if hdr {
+                    &self.composition_hdr
+                } else {
+                    &self.composition
+                },
+                hdr,
+            );
+            effects.compose_filter(display, settings, &self.composed, false, hdr);
+            effects.compose_filter(display, settings, &self.albedo_texture, true, hdr);
             let params = |pass: u32| {
                 let words = self.parameters[pass as usize];
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -279,18 +301,34 @@ impl Jnlm {
             }
             let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("JNLM output parameters"),
-                contents: &[self.size[0], self.size[1], u32::from(premultiply), 0]
-                    .into_iter()
-                    .flat_map(u32::to_le_bytes)
-                    .collect::<Vec<_>>(),
+                contents: &[
+                    self.size[0],
+                    self.size[1],
+                    u32::from(premultiply),
+                    u32::from(settings.preserve_alpha),
+                ]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
             #[cfg(test)]
-            super::effects_tests::record_order("Encode:DisplayEncoded");
-            let view = self.output.create_view(&Default::default());
+            if !hdr {
+                super::effects_tests::record_order("Encode:DisplayEncoded");
+            }
+            let output = if hdr {
+                self.hdr_output.as_ref().unwrap()
+            } else {
+                &self.output
+            };
+            let view = output.create_view(&Default::default());
             dispatch(
                 &mut encoder,
-                &self.encode,
+                if hdr {
+                    self.hdr_encode.get_or_init(|| super::hdr_transfer(device))
+                } else {
+                    &self.encode
+                },
                 vec![
                     b(&params),
                     b(&self.colors[self.options.iterations as usize % 2]),
@@ -302,7 +340,12 @@ impl Jnlm {
         }
         let mut encoder = device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_texture(
-            self.output.as_image_copy(),
+            if hdr {
+                self.hdr_output.as_ref().unwrap()
+            } else {
+                &self.output
+            }
+            .as_image_copy(),
             target.as_image_copy(),
             target.size(),
         );
@@ -383,6 +426,8 @@ mod tests {
                 sources.encode,
                 sources.composed,
                 sources.albedo,
+                sources.composed_hdr,
+                sources.albedo_hdr,
             ]
             .into_iter()
             {

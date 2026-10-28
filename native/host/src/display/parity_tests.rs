@@ -85,3 +85,16 @@ fn display_parity_scene_denoise_corrects_catcher_layers() {
     let equivalent=display.read_rgba(&settings).unwrap();
     assert_eq!(filtered,equivalent,"Denoised foreground must compose like the same corrected raw layer");
 }
+
+#[test]
+#[ignore="real GPU HDR retained display-linear result"]
+fn display_parity_hdr_retains_completed_display_linear_result() {
+    let gpu=GpuDevice::with_backend(0).unwrap();
+    let mut display=snapshot(&gpu,[8,8],32,&[[6.,3.,1.5,0.6];64]);
+    let filtered=gpu.device.create_buffer(&wgpu::BufferDescriptor{label:None,size:64*16,
+        usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+    put(&gpu,&filtered,&[0.25,0.125,0.0625,0.6].repeat(64));
+    let settings=Settings::default();display.upload_display_oidn(&filtered,settings).unwrap();
+    let hdr=read_half(&gpu,&display.compose_hdr(&settings));
+    for p in hdr {for (a,b) in p.into_iter().zip([0.25,0.125,0.0625,0.6]){assert!((a-b).abs()<0.001,"{a} != {b}");}}
+}

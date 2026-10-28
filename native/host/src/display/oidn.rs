@@ -6,6 +6,7 @@ pub(super) struct Filter {
     composed: wgpu::Texture,
     albedo: wgpu::Texture,
     encode: wgpu::ComputePipeline,
+    hdr_encode: std::sync::OnceLock<wgpu::ComputePipeline>,
     pub(super) result: Option<(wgpu::Buffer, Settings)>,
 }
 impl Filter {
@@ -27,6 +28,7 @@ impl Filter {
                 compilation_options: Default::default(),
                 cache: None,
             }),
+            hdr_encode: Default::default(),
             result: None,
         })
     }
@@ -49,25 +51,35 @@ impl Filter {
             &[
                 display.size[0],
                 display.size[1],
-                0,
+                if target.format() == wgpu::TextureFormat::Rgba16Float {
+                    u32::from(premultiply)
+                } else {
+                    0
+                },
                 u32::from(settings.preserve_alpha) | (u32::from(premultiply) << 1),
             ],
         );
+        let hdr = target.format() == wgpu::TextureFormat::Rgba16Float;
+        let pipeline = if hdr {
+            self.hdr_encode.get_or_init(|| super::hdr_transfer(device))
+        } else {
+            &self.encode
+        };
         let view = target.create_view(&Default::default());
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("OIDN display bindings"),
-            layout: &self.encode.get_bind_group_layout(0),
+            layout: &pipeline.get_bind_group_layout(0),
             entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 0,
+                    binding: if hdr { 1 } else { 0 },
                     resource: pixels.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 1,
+                    binding: if hdr { 2 } else { 1 },
                     resource: wgpu::BindingResource::TextureView(&view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 2,
+                    binding: if hdr { 0 } else { 2 },
                     resource: params.as_entire_binding(),
                 },
             ],
@@ -75,7 +87,7 @@ impl Filter {
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.encode);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(display.size[0].div_ceil(8), display.size[1].div_ceil(8), 1);
         }
@@ -97,7 +109,7 @@ impl Display {
         self.using_denoised = false;
         let mut effects = self.effects.lock().unwrap_or_else(|e| e.into_inner());
         let effects = effects.get_or_insert_with(|| Effects::new(&self.gpu.device));
-        effects.prepare_composition(&self.gpu.device, sources);
+        effects.prepare_composition(&self.gpu.device, sources, false);
         let filter = self.oidn.as_ref().unwrap();
         effects.compose(self, settings, false, &filter.composed);
         effects.compose_guide(self, settings, &filter.albedo);

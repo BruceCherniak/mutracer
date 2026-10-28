@@ -9,6 +9,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - SDR display and denoising use sRGB encoding on all backends, replacing the browser's gamma 2.2 approximation. Dark and midtone pixels can change.
 
+### Fixed
+
+- Native HDR presentation applies JNLM to extended-range composition and can show completed display-linear denoising results.
+
 ## 0.1.5 - 2026-10-22
 
 ### Fixed

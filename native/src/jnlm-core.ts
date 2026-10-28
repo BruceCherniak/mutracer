@@ -22,6 +22,8 @@ export function jnlmParameters(width: number, height: number, strength: number,
     encode: jnlmEncodeWGSL,
     composed: nativeDisplayEffectsShader(false, 'linear'),
     albedo: nativeDisplayEffectsShader(false, 'albedo'),
+    composedHDR: nativeDisplayEffectsShader(true, 'linear'),
+    albedoHDR: nativeDisplayEffectsShader(true, 'albedo'),
     workgroupSize: JNLM_WORKGROUP_SIZE,
     parameters
   }));

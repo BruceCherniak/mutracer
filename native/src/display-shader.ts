@@ -138,7 +138,7 @@ ${main}
     output.color = vec4f(linearToSrgb(a.rgb), clamp(a.a, 0.0, 1.0));
   } else if (params.outputKind == 4u) { output.color = load_shadowCatcherTex(uv, 0); }
 ${output === 'albedo' ? createCompositeDenoiseAlbedoMain('output.color') : ''}
-${hdr || output === 'linear' ? createCompositeDenoiseColorMain('output.color', 'output.color', 'srgb') : ''}
+${(hdr && output === 'display') || output === 'linear' ? createCompositeDenoiseColorMain('output.color', 'output.color', 'srgb') : ''}
   if ((params.flags & 1u) == 0u) { output.color.a = 1.0; }
   if ((params.flags & 2u) != 0u) { output.color = vec4f(output.color.rgb * output.color.a, output.color.a); }
   textureStore(outputImage, id.xy, output.color);

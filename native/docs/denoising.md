@@ -60,12 +60,16 @@ After device loss, create a new engine.
 
 Use `Render::set_jnlm_display_filter` / `mt_render_set_jnlm_display_filter`
 with `JnlmOptions` / `mt_jnlm_options`. Disable an OIDN or custom denoiser
-first to use JNLM alone. Presents and PNG exports filter the composed SDR image,
+first to use JNLM alone. Presents and PNG exports filter the composed image,
 including its color settings, effects and background. Changing these controls
 recomputes the filter without tracing more samples.
 
-JNLM leaves raw HDR, `Denoised` readback and HDR window output unchanged. Its
-scratch images and retained guide moments increase GPU memory use. Larger
+HDR windows filter the extended-range composition without clamping radiance to
+one. Completed display-linear OIDN results can also be presented on HDR windows;
+this does not rerun OIDN on an HDR input or recover radiance from an SDR result.
+JNLM leaves raw HDR and `Denoised` readback unchanged. Its scratch images and
+retained guide moments increase GPU memory use; HDR presentation retains another
+8 bytes per pixel. Larger
 search windows, patches and more passes cost more GPU work.
 
 ## Custom denoisers

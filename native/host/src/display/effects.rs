@@ -21,6 +21,8 @@ pub(super) struct Effects {
     hdr_pipeline: Option<wgpu::ComputePipeline>,
     linear_pipeline: Option<wgpu::ComputePipeline>,
     guide_pipeline: Option<wgpu::ComputePipeline>,
+    linear_hdr_pipeline: Option<wgpu::ComputePipeline>,
+    guide_hdr_pipeline: Option<wgpu::ComputePipeline>,
     dummy: wgpu::Texture,
     zero: wgpu::Buffer,
     normalized: Option<wgpu::Texture>,
@@ -52,6 +54,8 @@ impl Effects {
             hdr_pipeline: None,
             linear_pipeline: None,
             guide_pipeline: None,
+            linear_hdr_pipeline: None,
+            guide_hdr_pipeline: None,
             dummy: image(device, [1, 1], wgpu::TextureFormat::Rgba16Float),
             zero: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Empty catcher"),
@@ -67,11 +71,18 @@ impl Effects {
             bloom_runs: 0,
         }
     }
-    pub(super) fn prepare_composition(&mut self, device: &wgpu::Device, sources: &[String; 2]) {
-        for (slot, source) in [&mut self.linear_pipeline, &mut self.guide_pipeline]
-            .into_iter()
-            .zip(sources)
-        {
+    pub(super) fn prepare_composition(
+        &mut self,
+        device: &wgpu::Device,
+        sources: &[String; 2],
+        hdr: bool,
+    ) {
+        let slots = if hdr {
+            [&mut self.linear_hdr_pipeline, &mut self.guide_hdr_pipeline]
+        } else {
+            [&mut self.linear_pipeline, &mut self.guide_pipeline]
+        };
+        for (slot, source) in slots.into_iter().zip(sources) {
             if slot.is_none() {
                 let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Shared TS JNLM composition"),
@@ -100,7 +111,7 @@ impl Effects {
         premultiply: bool,
         target: &wgpu::Texture,
     ) {
-        self.compose_inner(display, settings, premultiply, target, false);
+        self.compose_inner(display, settings, premultiply, target, false, false);
     }
     pub(super) fn compose_guide(
         &mut self,
@@ -108,7 +119,17 @@ impl Effects {
         settings: &Settings,
         target: &wgpu::Texture,
     ) {
-        self.compose_inner(display, settings, false, target, true);
+        self.compose_inner(display, settings, false, target, true, false);
+    }
+    pub(super) fn compose_filter(
+        &mut self,
+        display: &Display,
+        settings: &Settings,
+        target: &wgpu::Texture,
+        guide: bool,
+        hdr: bool,
+    ) {
+        self.compose_inner(display, settings, false, target, guide, hdr);
     }
     fn compose_inner(
         &mut self,
@@ -117,6 +138,7 @@ impl Effects {
         premultiply: bool,
         target: &wgpu::Texture,
         guide: bool,
+        filter_hdr: bool,
     ) {
         let gpu = &display.gpu;
         let device = &gpu.device;
@@ -253,10 +275,11 @@ impl Effects {
             &self.dummy
         };
         let pipeline = if linear {
-            if guide {
-                self.guide_pipeline.as_ref().unwrap()
-            } else {
-                self.linear_pipeline.as_ref().unwrap()
+            match (guide, filter_hdr) {
+                (true, true) => self.guide_hdr_pipeline.as_ref().unwrap(),
+                (true, false) => self.guide_pipeline.as_ref().unwrap(),
+                (false, true) => self.linear_hdr_pipeline.as_ref().unwrap(),
+                (false, false) => self.linear_pipeline.as_ref().unwrap(),
             }
         } else if hdr {
             self.hdr_pipeline.as_ref().unwrap()
