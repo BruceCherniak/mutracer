@@ -9,3 +9,10 @@
 
 /oidn/weights/*
   Content-Type: application/octet-stream
+
+# Keep the dev deployment and workers.dev previews out of search results.
+https://mutracer-dev.meimu-studio.com/*
+  X-Robots-Tag: noindex
+
+https://:subdomain.workers.dev/*
+  X-Robots-Tag: noindex
